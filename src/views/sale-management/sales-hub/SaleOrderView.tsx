@@ -3,6 +3,7 @@ import { attachStockQty } from "../../../utils/stockDisplay";
 import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
 import { CommonTableHead } from "../../../components/common/CommonTableHead";
 import { CustomerSearchableSelect } from "../../../components/common/paginated-select";
+import { getNextSaleOrderNumber } from "../../../utils/documentNumbering";
 import React, {
   useState,
   useMemo,
@@ -106,7 +107,10 @@ import {
   initializeWorkflowIntegrity,
 } from "../../../utils/salesDocumentWorkflow";
 import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
-import { getConversionState, resolveConvertedTarget } from "../../../utils/salesDocumentWorkflow";
+import {
+  getConversionState,
+  resolveConvertedTarget,
+} from "../../../utils/salesDocumentWorkflow";
 import {
   FormLabel,
   FORM_INPUT_CLS,
@@ -273,7 +277,11 @@ const validateSaleOrderForm = (
     }),
   );
   form.items.forEach((it, i) => {
-    if (isReal(it) && !errors[`items.${i}.product`] && !ctx.resolveProductId(it)) {
+    if (
+      isReal(it) &&
+      !errors[`items.${i}.product`] &&
+      !ctx.resolveProductId(it)
+    ) {
       errors[`items.${i}.product`] = PRODUCT_PICK_MSG;
     }
   });
@@ -480,6 +488,7 @@ export interface SaleOrderTabItem {
     customerCompany: string;
     billingAddress: string;
     orderNo: string;
+    saleOrderManualNo: string;
     referenceNo: string;
     orderDate: string;
     dueDate: string;
@@ -506,10 +515,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const dispatch = useAppDispatch();
-  const {
-    setCustomersList,
-    setStocksList,
-  } = useSalesManagementStore();
+  const { setCustomersList, setStocksList } = useSalesManagementStore();
 
   useEffect(() => {
     initializeWorkflowIntegrity();
@@ -517,6 +523,32 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
   // Live API States
   const [saleOrders, setSaleOrders] = useState<SaleOrderRecord[]>([]);
+
+  // Computed next preview number based on currently loaded sale orders
+  const computedPreviewNo = useMemo(() => {
+    return getNextSaleOrderNumber(saleOrders);
+  }, [saleOrders]);
+
+  // Sync preview number to newly opened initial form tab if empty
+  useEffect(() => {
+    if (computedPreviewNo) {
+      setTabs((prevTabs) =>
+        prevTabs.map((t) => {
+          if (!t.editingOrder && !t.formData.orderNo) {
+            return {
+              ...t,
+              formData: {
+                ...t.formData,
+                orderNo: computedPreviewNo,
+              },
+            };
+          }
+          return t;
+        }),
+      );
+    }
+  }, [computedPreviewNo]);
+
   const [isApiLoading, setIsApiLoading] = useState(false);
   const [isApiConnected, setIsApiConnected] = useState(true);
   const [isActionLoading, setIsActionLoading] = useState(false);
@@ -535,9 +567,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     lines: string[];
   } | null>(null);
   const [totalApiRecords, setTotalApiRecords] = useState(0);
-  const [apiSummary, setApiSummary] = useState<
-    NonNullable<Awaited<ReturnType<typeof commerceSaleOrderApi.getOrders>>["summary"]> | null
-  >(null);
+  const [apiSummary, setApiSummary] = useState<NonNullable<
+    Awaited<ReturnType<typeof commerceSaleOrderApi.getOrders>>["summary"]
+  > | null>(null);
   const [totalApiPages, setTotalApiPages] = useState(1);
 
   // Live Masters for Form Selection
@@ -881,68 +913,71 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
   // Fetch Sales Orders from Live API merged with local converted orders
   const isFetchingOrdersRef = useRef(false);
-  const fetchSaleOrders = useCallback(async (overrides?: {
-    page?: number;
-    search?: string;
-    status?: string;
-    period?: string;
-  }) => {
-    if (isFetchingOrdersRef.current) return;
-    isFetchingOrdersRef.current = true;
-    setIsApiLoading(true);
-    try {
-      const targetPage = overrides?.page ?? page;
-      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
-      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedStatus;
-      const targetPeriod = overrides?.period !== undefined ? overrides.period : appliedPeriod;
+  const fetchSaleOrders = useCallback(
+    async (overrides?: {
+      page?: number;
+      search?: string;
+      status?: string;
+      period?: string;
+    }) => {
+      if (isFetchingOrdersRef.current) return;
+      isFetchingOrdersRef.current = true;
+      setIsApiLoading(true);
+      try {
+        const targetPage = overrides?.page ?? page;
+        const targetSearch =
+          overrides?.search !== undefined ? overrides.search : appliedSearch;
+        const targetStatus =
+          overrides?.status !== undefined ? overrides.status : appliedStatus;
+        const targetPeriod =
+          overrides?.period !== undefined ? overrides.period : appliedPeriod;
 
-      const apiPeriod = mapPeriodToApiPeriod(targetPeriod);
-      const apiStatus = targetStatus === "ALL" ? undefined : targetStatus;
-      const res = await commerceSaleOrderApi.getOrders({
-        page_no: targetPage,
-        page_size: pageSize,
-        pagination_required: true,
-        search: targetSearch.trim() || undefined,
-        status: apiStatus,
-        period: apiPeriod,
-        sortOrder: "desc",
-      });
+        const apiPeriod = mapPeriodToApiPeriod(targetPeriod);
+        const apiStatus = targetStatus === "ALL" ? undefined : targetStatus;
+        const res = await commerceSaleOrderApi.getOrders({
+          page_no: targetPage,
+          page_size: pageSize,
+          pagination_required: true,
+          search: targetSearch.trim() || undefined,
+          status: apiStatus,
+          period: apiPeriod,
+          sortOrder: "desc",
+        });
 
-      if (res && Array.isArray(res.data)) {
-        const records = res.data.map((item) =>
-          mapApiSaleOrderToSaleOrderRecord(item),
-        );
+        if (res && Array.isArray(res.data)) {
+          const records = res.data.map((item) =>
+            mapApiSaleOrderToSaleOrderRecord(item),
+          );
 
-        const merged = records;
+          const merged = records;
 
-        persistSaleOrders(merged);
-        setApiSummary(res.summary ?? null);
-        setTotalApiRecords(res.pagination?.totalRecords ?? merged.length);
-        setTotalApiPages(
-          Math.max(
-            1,
-            Math.ceil(
-              (res.pagination?.totalRecords ?? merged.length) / pageSize,
+          persistSaleOrders(merged);
+          setApiSummary(res.summary ?? null);
+          setTotalApiRecords(res.pagination?.totalRecords ?? merged.length);
+          setTotalApiPages(
+            Math.max(
+              1,
+              Math.ceil(
+                (res.pagination?.totalRecords ?? merged.length) / pageSize,
+              ),
             ),
-          ),
-        );
-        setIsApiConnected(true);
+          );
+          setIsApiConnected(true);
+        }
+      } catch (err: any) {
+        console.warn("Could not reach Commerce Orders API:", err);
+        persistSaleOrders([]);
+        setApiSummary(null);
+        setTotalApiRecords(0);
+        setTotalApiPages(1);
+        setIsApiConnected(false);
+      } finally {
+        setIsApiLoading(false);
+        isFetchingOrdersRef.current = false;
       }
-    } catch (err: any) {
-      console.warn(
-        "Could not reach Commerce Orders API:",
-        err,
-      );
-      persistSaleOrders([]);
-      setApiSummary(null);
-      setTotalApiRecords(0);
-      setTotalApiPages(1);
-      setIsApiConnected(false);
-    } finally {
-      setIsApiLoading(false);
-      isFetchingOrdersRef.current = false;
-    }
-  }, [page, pageSize, appliedSearch, appliedStatus, appliedPeriod]);
+    },
+    [page, pageSize, appliedSearch, appliedStatus, appliedPeriod],
+  );
 
   useEffect(() => {
     fetchSaleOrders();
@@ -1100,13 +1135,15 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       }
     });
 
-    return attachStockQty(Array.from(map.values()), liveStocks).filter((s: any) => {
-      const pid = String(s.productId || s.id || "").trim();
-      const name = String(s.productName || "").trim();
-      if (!pid && !name) return false;
-      if (pid.startsWith("mock_")) return false;
-      return true;
-    });
+    return attachStockQty(Array.from(map.values()), liveStocks).filter(
+      (s: any) => {
+        const pid = String(s.productId || s.id || "").trim();
+        const name = String(s.productName || "").trim();
+        if (!pid && !name) return false;
+        if (pid.startsWith("mock_")) return false;
+        return true;
+      },
+    );
   }, [liveProducts, liveStocks, getBatchesForProduct]);
 
   const productOptions = useMemo(() => {
@@ -1124,14 +1161,16 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   // The quantity shown in each product row is read live: refresh the stock whenever a product dropdown opens, so it
   // reflects what the last saved document changed (the stock endpoint is never cached).
   useEffect(() => {
-    if (openProductDropdownRow === null || openProductDropdownRow === undefined) return;
+    if (openProductDropdownRow === null || openProductDropdownRow === undefined)
+      return;
     let cancelled = false;
     stockApi
       .getStocks({ pagination_required: false, page_size: 100 })
       .then((res) => {
         if (cancelled) return;
         const raw = unpackProducts(res);
-        if (raw.length > 0) setLiveStocks(raw.map(mapApiStockToInventoryStockItem));
+        if (raw.length > 0)
+          setLiveStocks(raw.map(mapApiStockToInventoryStockItem));
       })
       .catch(() => {
         /* keep the quantities already shown */
@@ -1181,7 +1220,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   };
 
   // Initial Form Data State
-  const createEmptyFormData = (customNum = 1) => {
+  const createEmptyFormData = (customNum = 1, defaultNo = "") => {
     return {
       customerId: "",
       partyName: "",
@@ -1189,7 +1228,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       customerEmail: "",
       customerCompany: "",
       billingAddress: "",
-      orderNo: "", // Server-assigned on save
+      orderNo: defaultNo, // Preview only; server-assigned on save
+      saleOrderManualNo: "",
       referenceNo: "",
       orderDate: new Date().toISOString().split("T")[0],
       dueDate: new Date(Date.now() + 14 * 86400000).toISOString().split("T")[0],
@@ -1259,12 +1299,13 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   // Add Tab
   const handleAddNewTab = () => {
     const nextNum = tabs.length + 1;
+    const nextPreviewNo = computedPreviewNo;
     const newTabId = `tab-${Date.now()}`;
     const newTab: SaleOrderTabItem = {
       id: newTabId,
       title: `Sale Order #${nextNum}`,
       num: nextNum,
-      formData: createEmptyFormData(nextNum),
+      formData: createEmptyFormData(nextNum, nextPreviewNo),
       editingOrder: null,
       enableRoundOff: true,
       manualRoundOff: null,
@@ -1291,7 +1332,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   const handleOpenCreateForm = () => {
     loadMasterData();
     const nextNum = tabs.length;
-    const newForm = createEmptyFormData(nextNum);
+    const nextPreviewNo = computedPreviewNo;
+    const newForm = createEmptyFormData(nextNum, nextPreviewNo);
     setTabs([
       {
         id: `tab-${Date.now()}`,
@@ -1315,7 +1357,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         const res = await commerceSaleOrderApi.getOrderById(order.id);
         if (res?.success && res.data) {
           const fresh = mapApiSaleOrderToSaleOrderRecord(res.data);
-          setHistoryOrder((prev) => (prev && prev.id === order.id ? { ...prev, ...fresh } : prev));
+          setHistoryOrder((prev) =>
+            prev && prev.id === order.id ? { ...prev, ...fresh } : prev,
+          );
         }
       }
     } catch (err) {
@@ -1327,7 +1371,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     let order = listOrder;
     try {
       const res = await commerceSaleOrderApi.getOrderById(listOrder.id);
-      if (res?.success && res.data) order = mapApiSaleOrderToSaleOrderRecord(res.data);
+      if (res?.success && res.data)
+        order = mapApiSaleOrderToSaleOrderRecord(res.data);
     } catch (err) {
       console.warn("Could not fetch sale order details:", err);
     }
@@ -1345,6 +1390,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         customerCompany: order.customerCompany || "",
         billingAddress: order.billingAddress || "",
         orderNo: order.orderNo,
+        saleOrderManualNo: order.saleOrderManualNo || "",
         referenceNo: order.referenceNo || "1",
         orderDate: order.orderDate,
         dueDate: order.dueDate,
@@ -1520,7 +1566,12 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       const known: any = allStockItems.find(
         (p: any) => p.productId === it.productId || p.id === it.productId,
       );
-      if (!known || !nameKey || !known.productName || known.productName.toLowerCase() === nameKey) {
+      if (
+        !known ||
+        !nameKey ||
+        !known.productName ||
+        known.productName.toLowerCase() === nameKey
+      ) {
         return it.productId;
       }
     }
@@ -1551,7 +1602,12 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       roundOff: currentCalculations.roundOff,
     });
   // After the first submit attempt, keep errors in sync with the current values.
-  useRevalidateAfterSubmit(fe, computeSaleOrderErrors, [activeTab.formData, currentCalculations, allStockItems, getBatchAvailable]);
+  useRevalidateAfterSubmit(fe, computeSaleOrderErrors, [
+    activeTab.formData,
+    currentCalculations,
+    allStockItems,
+    getBatchAvailable,
+  ]);
 
   // LIVE stock errors (explicit exception to submit-first): shown under the Qty cell as soon as
   // quantity / product / batch changes, without waiting for a save attempt. Never a toast.
@@ -1580,188 +1636,201 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
   const handleSaveSaleOrder = (andConvert = false) =>
     runOnce(async () => {
-    const form = activeTab.formData;
-    // Re-read stock for every distinct product so changes since the form was opened are checked.
-    const stockProductIds = Array.from(
-      new Set(
-        form.items
-          .map((it) => resolveProductIdForItem(it))
-          .filter((id): id is string => !!id),
-      ),
-    );
-    await refreshBatchStock(stockProductIds);
-    const valid = fe.validateAll(computeSaleOrderErrors());
-    if (!valid) return;
-    const validItems = form.items.filter(
-      (i) => i.productName.trim() || Number(i.unitPrice) > 0,
-    );
-
-    setIsActionLoading(true);
-    try {
-      // 1. Resolve customerId if valid UUID exists
-      let resolvedCustomerId = form.customerId;
-      if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
-        const matchedCust = liveCustomers.find(
-          (c) => c.name.toLowerCase() === form.partyName.trim().toLowerCase(),
-        );
-        if (matchedCust && UUID_REGEX.test(matchedCust.id)) {
-          resolvedCustomerId = matchedCust.id;
-        } else {
-          resolvedCustomerId = undefined;
-        }
-      }
-
-      // 2. Every row was validated above to resolve to a real product id.
-      const resolvedItems: ExtendedSaleOrderItem[] = validItems.map((it) => ({
-        ...it,
-        productId: resolveProductIdForItem(it) || "",
-      }));
-
-      const isEdit = !!(
-        activeTab.editingOrder && UUID_REGEX.test(activeTab.editingOrder.id)
+      const form = activeTab.formData;
+      // Re-read stock for every distinct product so changes since the form was opened are checked.
+      const stockProductIds = Array.from(
+        new Set(
+          form.items
+            .map((it) => resolveProductIdForItem(it))
+            .filter((id): id is string => !!id),
+        ),
+      );
+      await refreshBatchStock(stockProductIds);
+      const valid = fe.validateAll(computeSaleOrderErrors());
+      if (!valid) return;
+      const validItems = form.items.filter(
+        (i) => i.productName.trim() || Number(i.unitPrice) > 0,
       );
 
-      const orderPayloadRecord = {
-        orderNo: form.orderNo,
-        referenceNo: form.referenceNo,
-        orderDate: form.orderDate,
-        dueDate: form.dueDate,
-        customerId: resolvedCustomerId,
-        partyName: form.partyName,
-        customerPhone: form.customerPhone,
-        customerEmail: form.customerEmail,
-        customerCompany: form.customerCompany,
-        billingAddress: form.billingAddress,
-        stateOfSupply: form.stateOfSupply,
-        paymentType: form.paymentType,
-        items: resolvedItems,
-        withGst: currentCalculations.totalTax > 0,
-        gstType: form.stateOfSupply?.includes("Tamil Nadu")
-          ? ("intra_state" as const)
-          : ("inter_state" as const),
-        roundOff: currentCalculations.roundOff,
-        notes: form.notes,
-        terms: form.terms,
-        attachedImageName: attachedImageName || undefined,
-        attachedDocName: attachedDocName || undefined,
-      };
-
-      const apiPayload = mapSaleOrderRecordToPayload(
-        orderPayloadRecord,
-        !isEdit,
-      );
-
-      let savedOrderId = activeTab.editingOrder?.id;
-      let finalOrderNo = form.orderNo;
-
-      if (isEdit && activeTab.editingOrder) {
-        // Edit / Update existing order via PUT /commerce/orders/{id}
-        const updateRes = await commerceSaleOrderApi.updateOrder(
-          activeTab.editingOrder.id,
-          apiPayload,
-        );
-        if (updateRes?.data) {
-          finalOrderNo = updateRes.data.orderNo || finalOrderNo;
-          savedOrderId = updateRes.data.id;
-        }
-        toast.success(`Sales Order ${finalOrderNo} updated successfully!`);
-      } else {
-        // Create new order via POST /commerce/orders
-        const createRes = await commerceSaleOrderApi.createOrder(apiPayload);
-        if (createRes?.data) {
-          finalOrderNo = createRes.data.orderNo || finalOrderNo;
-          savedOrderId = createRes.data.id;
-        }
-        toast.success(`Sales Order ${finalOrderNo} created successfully!`);
-      }
-
-      // Refresh batch stock so the next form shows current figures (no stock adjustment is made here).
-      void refreshBatchStock(stockProductIds);
-
-      // If "Save & Convert to Sale" clicked
-      if (andConvert) {
-        navigate("/sale-management/sales/sale", {
-          state: {
-            convertFrom: {
-              sourceType: "Order",
-              sourceId: savedOrderId,
-              sourceNo: finalOrderNo,
-              customerId: form.customerId,
-              customerName: form.partyName,
-              customerCompany: form.customerCompany,
-              customerPhone: form.customerPhone,
-              customerEmail: form.customerEmail,
-              billingAddress: form.billingAddress,
-              shippingAddress: form.billingAddress,
-              items: form.items,
-              subtotal: currentCalculations.subtotalGross,
-              withGst: currentCalculations.totalTax > 0,
-              gstType: form.stateOfSupply?.includes("Tamil Nadu")
-                ? ("intra_state" as const)
-                : ("inter_state" as const),
-              cgst:
-                currentCalculations.totalTax > 0 &&
-                form.stateOfSupply?.includes("Tamil Nadu")
-                  ? currentCalculations.totalTax / 2
-                  : 0,
-              sgst:
-                currentCalculations.totalTax > 0 &&
-                form.stateOfSupply?.includes("Tamil Nadu")
-                  ? currentCalculations.totalTax / 2
-                  : 0,
-              igst:
-                currentCalculations.totalTax > 0 &&
-                !form.stateOfSupply?.includes("Tamil Nadu")
-                  ? currentCalculations.totalTax
-                  : 0,
-              discount: currentCalculations.totalDiscount || 0,
-              totalDiscount: currentCalculations.totalDiscount || 0,
-              taxAmount: currentCalculations.totalTax || 0,
-              grandTotal: currentCalculations.finalAmount,
-              paidAmount: 0,
-              paymentMethod: (form.paymentType as any) || "Bank Transfer",
-              paymentTerms: "15 Days",
-              dueDate: form.dueDate,
-              notes: `Converted from Sale Order ${finalOrderNo}`,
-            },
-          },
-        });
-        return;
-      }
-
-      // Refresh list from live API
-      await fetchSaleOrders();
-      setViewMode("list");
-    } catch (err: any) {
-      console.error("Save sale order failed:", err);
-      const rowIdx = form.items
-        .map((it, i) => (it.productName.trim() || Number(it.unitPrice) > 0 ? i : -1))
-        .filter((i) => i >= 0);
-      const apiFieldErrors = mapApiFieldsToForm(extractApiFieldErrors(err), rowIdx);
-      const apiMessage = String(
-        err?.response?.data?.error?.message ?? err?.data?.error?.message ?? err?.message ?? "",
-      );
-      const stockRejected = /(insufficient|not enough|out of)\s+stock|stock.*(insufficient|not enough|exceed)/i.test(
-        apiMessage,
-      );
-      if (stockRejected) {
-        // Stock changed on the server: show fresh figures and flag the quantity inline.
-        void refreshBatchStock(stockProductIds);
-        if (!Object.keys(apiFieldErrors).some((k) => k.endsWith(".quantity"))) {
-          const target = rowIdx.find((i) => form.items[i]?.batch) ?? rowIdx[0];
-          if (target !== undefined) {
-            apiFieldErrors[`items.${target}.quantity`] = STOCK_REJECTED_MSG;
+      setIsActionLoading(true);
+      try {
+        // 1. Resolve customerId if valid UUID exists
+        let resolvedCustomerId = form.customerId;
+        if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
+          const matchedCust = liveCustomers.find(
+            (c) => c.name.toLowerCase() === form.partyName.trim().toLowerCase(),
+          );
+          if (matchedCust && UUID_REGEX.test(matchedCust.id)) {
+            resolvedCustomerId = matchedCust.id;
+          } else {
+            resolvedCustomerId = undefined;
           }
         }
+
+        // 2. Every row was validated above to resolve to a real product id.
+        const resolvedItems: ExtendedSaleOrderItem[] = validItems.map((it) => ({
+          ...it,
+          productId: resolveProductIdForItem(it) || "",
+        }));
+
+        const isEdit = !!(
+          activeTab.editingOrder && UUID_REGEX.test(activeTab.editingOrder.id)
+        );
+
+        const orderPayloadRecord = {
+          orderNo: form.orderNo,
+          saleOrderManualNo: form.saleOrderManualNo,
+          referenceNo: form.referenceNo,
+          orderDate: form.orderDate,
+          dueDate: form.dueDate,
+          customerId: resolvedCustomerId,
+          partyName: form.partyName,
+          customerPhone: form.customerPhone,
+          customerEmail: form.customerEmail,
+          customerCompany: form.customerCompany,
+          billingAddress: form.billingAddress,
+          stateOfSupply: form.stateOfSupply,
+          paymentType: form.paymentType,
+          items: resolvedItems,
+          withGst: currentCalculations.totalTax > 0,
+          gstType: form.stateOfSupply?.includes("Tamil Nadu")
+            ? ("intra_state" as const)
+            : ("inter_state" as const),
+          roundOff: currentCalculations.roundOff,
+          notes: form.notes,
+          terms: form.terms,
+          attachedImageName: attachedImageName || undefined,
+          attachedDocName: attachedDocName || undefined,
+        };
+
+        const apiPayload = mapSaleOrderRecordToPayload(
+          orderPayloadRecord,
+          !isEdit,
+        );
+
+        let savedOrderId = activeTab.editingOrder?.id;
+        let finalOrderNo = form.orderNo;
+
+        if (isEdit && activeTab.editingOrder) {
+          // Edit / Update existing order via PUT /commerce/orders/{id}
+          const updateRes = await commerceSaleOrderApi.updateOrder(
+            activeTab.editingOrder.id,
+            apiPayload,
+          );
+          if (updateRes?.data) {
+            finalOrderNo = updateRes.data.orderNo || finalOrderNo;
+            savedOrderId = updateRes.data.id;
+          }
+          toast.success(`Sales Order ${finalOrderNo} updated successfully!`);
+        } else {
+          // Create new order via POST /commerce/orders
+          const createRes = await commerceSaleOrderApi.createOrder(apiPayload);
+          if (createRes?.data) {
+            finalOrderNo = createRes.data.orderNo || finalOrderNo;
+            savedOrderId = createRes.data.id;
+          }
+          toast.success(`Sales Order ${finalOrderNo} created successfully!`);
+        }
+
+        // Refresh batch stock so the next form shows current figures (no stock adjustment is made here).
+        void refreshBatchStock(stockProductIds);
+
+        // If "Save & Convert to Sale" clicked
+        if (andConvert) {
+          navigate("/sale-management/sales/sale", {
+            state: {
+              convertFrom: {
+                sourceType: "Order",
+                sourceId: savedOrderId,
+                sourceNo: finalOrderNo,
+                customerId: form.customerId,
+                customerName: form.partyName,
+                customerCompany: form.customerCompany,
+                customerPhone: form.customerPhone,
+                customerEmail: form.customerEmail,
+                billingAddress: form.billingAddress,
+                shippingAddress: form.billingAddress,
+                items: form.items,
+                subtotal: currentCalculations.subtotalGross,
+                withGst: currentCalculations.totalTax > 0,
+                gstType: form.stateOfSupply?.includes("Tamil Nadu")
+                  ? ("intra_state" as const)
+                  : ("inter_state" as const),
+                cgst:
+                  currentCalculations.totalTax > 0 &&
+                  form.stateOfSupply?.includes("Tamil Nadu")
+                    ? currentCalculations.totalTax / 2
+                    : 0,
+                sgst:
+                  currentCalculations.totalTax > 0 &&
+                  form.stateOfSupply?.includes("Tamil Nadu")
+                    ? currentCalculations.totalTax / 2
+                    : 0,
+                igst:
+                  currentCalculations.totalTax > 0 &&
+                  !form.stateOfSupply?.includes("Tamil Nadu")
+                    ? currentCalculations.totalTax
+                    : 0,
+                discount: currentCalculations.totalDiscount || 0,
+                totalDiscount: currentCalculations.totalDiscount || 0,
+                taxAmount: currentCalculations.totalTax || 0,
+                grandTotal: currentCalculations.finalAmount,
+                paidAmount: 0,
+                paymentMethod: (form.paymentType as any) || "Bank Transfer",
+                paymentTerms: "15 Days",
+                dueDate: form.dueDate,
+                notes: `Converted from Sale Order ${finalOrderNo}`,
+              },
+            },
+          });
+          return;
+        }
+
+        // Refresh list from live API
+        await fetchSaleOrders();
+        setViewMode("list");
+      } catch (err: any) {
+        console.error("Save sale order failed:", err);
+        const rowIdx = form.items
+          .map((it, i) =>
+            it.productName.trim() || Number(it.unitPrice) > 0 ? i : -1,
+          )
+          .filter((i) => i >= 0);
+        const apiFieldErrors = mapApiFieldsToForm(
+          extractApiFieldErrors(err),
+          rowIdx,
+        );
+        const apiMessage = String(
+          err?.response?.data?.error?.message ??
+            err?.data?.error?.message ??
+            err?.message ??
+            "",
+        );
+        const stockRejected =
+          /(insufficient|not enough|out of)\s+stock|stock.*(insufficient|not enough|exceed)/i.test(
+            apiMessage,
+          );
+        if (stockRejected) {
+          // Stock changed on the server: show fresh figures and flag the quantity inline.
+          void refreshBatchStock(stockProductIds);
+          if (
+            !Object.keys(apiFieldErrors).some((k) => k.endsWith(".quantity"))
+          ) {
+            const target =
+              rowIdx.find((i) => form.items[i]?.batch) ?? rowIdx[0];
+            if (target !== undefined) {
+              apiFieldErrors[`items.${target}.quantity`] = STOCK_REJECTED_MSG;
+            }
+          }
+        }
+        if (Object.keys(apiFieldErrors).length > 0) {
+          fe.merge(apiFieldErrors);
+        } else {
+          toast.error(getApiErrorMessage(err, "Failed to save sales order"));
+        }
+      } finally {
+        setIsActionLoading(false);
       }
-      if (Object.keys(apiFieldErrors).length > 0) {
-        fe.merge(apiFieldErrors);
-      } else {
-        toast.error(getApiErrorMessage(err, "Failed to save sales order"));
-      }
-    } finally {
-      setIsActionLoading(false);
-    }
     });
 
   // Determine conversion status across all next stages
@@ -1795,7 +1864,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
     // A document converts once. When the server reports it converted, no further conversion is offered: every Convert
     // button, menu item, dialog and guard on this page reads these flags.
-    const isFullyConverted = getConversionState(order).isFullyConverted || isInvoiceConverted;
+    const isFullyConverted =
+      getConversionState(order).isFullyConverted || isInvoiceConverted;
     const remainingStages = isFullyConverted ? [] : availableStages;
 
     return {
@@ -1810,7 +1880,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   // Convert to Sale Invoice from Table -> Opens New Sale Invoice page with calculations
   // Preconditions shared by every conversion action. Returns a friendly message or null.
   const getConvertBlocker = (order: SaleOrderRecord): string | null => {
-    if (!order?.id) return "This sale order could not be found. Please refresh the list.";
+    if (!order?.id)
+      return "This sale order could not be found. Please refresh the list.";
     if (order.status === "Cancelled") {
       return `Sale order ${order.orderNo} is cancelled and cannot be converted.`;
     }
@@ -1899,160 +1970,173 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   // Convert to Delivery Challan from Table
   const handleConvertExistingToChallan = (order: SaleOrderRecord) =>
     runOnce(async () => {
-    const blocker = getConvertBlocker(order);
-    if (blocker) {
-      toast.error(blocker);
-      return;
-    }
-    const orderStagesNow = getOrderStages(order);
-    if (orderStagesNow.isFullyConverted || orderStagesNow.isChallanConverted) {
-      toast.info(`Sale order ${order.orderNo} is already converted.`);
-      return;
-    }
-    const shortages = await findConversionStockShortages([order]);
-    if (shortages.length > 0) {
-      setStockConvertIssue({
-        title: `Cannot convert ${order.orderNo} to a Delivery Challan`,
-        lines: shortages,
-      });
-      return;
-    }
-    try {
-      setIsActionLoading(true);
-      let challanNo = "";
+      const blocker = getConvertBlocker(order);
+      if (blocker) {
+        toast.error(blocker);
+        return;
+      }
+      const orderStagesNow = getOrderStages(order);
+      if (
+        orderStagesNow.isFullyConverted ||
+        orderStagesNow.isChallanConverted
+      ) {
+        toast.info(`Sale order ${order.orderNo} is already converted.`);
+        return;
+      }
+      const shortages = await findConversionStockShortages([order]);
+      if (shortages.length > 0) {
+        setStockConvertIssue({
+          title: `Cannot convert ${order.orderNo} to a Delivery Challan`,
+          lines: shortages,
+        });
+        return;
+      }
+      try {
+        setIsActionLoading(true);
+        let challanNo = "";
 
-      let didBackendConvertCreateChallan = false;
-      let apiChallanId = "";
-      if (UUID_REGEX.test(order.id)) {
-        try {
-          const res = await commerceSaleOrderApi.convertOrder(order.id, {
-            targetType: "DeliveryChallan",
-            dueDate: order.dueDate,
-          });
-          const apiChallanNo =
-            res?.data?.convertedTo?.documentNo ||
-            res?.data?.document?.challanNo;
-          apiChallanId =
-            res?.data?.convertedTo?.id ||
-            res?.data?.document?.id ||
-            "";
-          if (apiChallanNo) challanNo = apiChallanNo;
-          if (apiChallanNo || apiChallanId || res?.success) {
-            didBackendConvertCreateChallan = true;
+        let didBackendConvertCreateChallan = false;
+        let apiChallanId = "";
+        if (UUID_REGEX.test(order.id)) {
+          try {
+            const res = await commerceSaleOrderApi.convertOrder(order.id, {
+              targetType: "DeliveryChallan",
+              dueDate: order.dueDate,
+            });
+            const apiChallanNo =
+              res?.data?.convertedTo?.documentNo ||
+              res?.data?.document?.challanNo;
+            apiChallanId =
+              res?.data?.convertedTo?.id || res?.data?.document?.id || "";
+            if (apiChallanNo) challanNo = apiChallanNo;
+            if (apiChallanNo || apiChallanId || res?.success) {
+              didBackendConvertCreateChallan = true;
+            }
+          } catch (apiErr) {
+            // Nothing was converted: stop here instead of creating a separate challan by hand.
+            toast.error(
+              getApiErrorMessage(
+                apiErr,
+                "Failed to convert to delivery challan. Nothing was converted.",
+              ),
+            );
+            return;
           }
-        } catch (apiErr) {
-          // Nothing was converted: stop here instead of creating a separate challan by hand.
-          toast.error(getApiErrorMessage(apiErr, "Failed to convert to delivery challan. Nothing was converted."));
+        }
+
+        if (!didBackendConvertCreateChallan) {
+          toast.error(
+            "The server did not confirm the conversion, so the sale order was left as it was.",
+          );
           return;
         }
-      }
 
-      if (!didBackendConvertCreateChallan) {
-        toast.error("The server did not confirm the conversion, so the sale order was left as it was.");
-        return;
-      }
-
-      let resolvedCustomerId = order.customerId;
-      if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
-        const found = liveCustomers.find(
-          (c) =>
-            c.id === order.customerId ||
-            c.name.toLowerCase() === order.partyName.trim().toLowerCase(),
-        );
-        if (found && UUID_REGEX.test(found.id)) {
-          resolvedCustomerId = found.id;
+        let resolvedCustomerId = order.customerId;
+        if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
+          const found = liveCustomers.find(
+            (c) =>
+              c.id === order.customerId ||
+              c.name.toLowerCase() === order.partyName.trim().toLowerCase(),
+          );
+          if (found && UUID_REGEX.test(found.id)) {
+            resolvedCustomerId = found.id;
+          }
         }
-      }
-      // Never attach a different customer: block when the order's customer cannot be resolved.
-      if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
+        // Never attach a different customer: block when the order's customer cannot be resolved.
+        if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
+          toast.error(
+            "Please choose the customer from the list. Edit the order and select a customer before converting.",
+          );
+          return;
+        }
+
+        const newChallan: DeliveryChallanRecord = {
+          id: apiChallanId || `dc_${Date.now()}`,
+          challanNo,
+          referenceNo: order.orderNo,
+          invoiceDate: new Date().toISOString().split("T")[0],
+          dueDate: order.dueDate,
+          customerId: resolvedCustomerId || order.customerId,
+          partyName: order.partyName,
+          customerPhone: order.customerPhone,
+          customerEmail: order.customerEmail,
+          customerCompany: order.customerCompany,
+          billingAddress: order.billingAddress,
+          shippingAddress: order.shippingAddress || order.billingAddress,
+          items: order.items,
+          subtotal: order.subtotal,
+          withGst: order.withGst,
+          gstType: order.gstType,
+          cgst: order.cgst,
+          sgst: order.sgst,
+          igst: order.igst,
+          discount: order.discount || 0,
+          taxAmount: order.taxAmount || 0,
+          amount: order.amount,
+          balance: order.balance,
+          status: "Open",
+          notes: `Converted from Sale Order ${order.orderNo}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        // Only call createChallan if convertOrder did NOT already create the Delivery Challan on the backend
+        if (
+          !didBackendConvertCreateChallan &&
+          resolvedCustomerId &&
+          newChallan.items &&
+          newChallan.items.length > 0
+        ) {
+          try {
+            const payload = mapDeliveryChallanRecordToPayload(newChallan, true);
+            payload.customerId = resolvedCustomerId;
+            const createRes =
+              await commerceDeliveryChallanApi.createChallan(payload);
+            if (createRes?.data?.id) {
+              newChallan.id = createRes.data.id;
+            }
+            if (createRes?.data?.challanNo) {
+              newChallan.challanNo = createRes.data.challanNo;
+              challanNo = createRes.data.challanNo;
+            }
+          } catch (createErr) {
+            console.warn(
+              "API createChallan notice, saving locally:",
+              createErr,
+            );
+          }
+        }
+
+        syncConvertedChallanToStorage(newChallan);
+
+        recordDocumentConversion({
+          fromType: "Order",
+          fromNo: order.orderNo,
+          toType: "Challan",
+          toNo: challanNo,
+        });
+
+        dispatch(
+          baseApi.util.invalidateTags([
+            { type: "SaleOrder", id: order.id },
+            { type: "SaleOrder", id: "LIST" },
+            { type: "DeliveryChallan", id: "LIST" },
+          ]),
+        );
+
+        void refreshBatchStock((order.items || []).map((it) => it.productId));
+        toast.success(
+          `Sale Order ${order.orderNo} converted to Delivery Challan${challanNo ? ` ${challanNo}` : ""}!`,
+        );
+        await fetchSaleOrders();
+      } catch (err: any) {
+        console.error("Convert to challan error:", err);
         toast.error(
-          "Please choose the customer from the list. Edit the order and select a customer before converting.",
+          getApiErrorMessage(err, "Failed to convert to delivery challan"),
         );
-        return;
+      } finally {
+        setIsActionLoading(false);
       }
-
-      const newChallan: DeliveryChallanRecord = {
-        id: apiChallanId || `dc_${Date.now()}`,
-        challanNo,
-        referenceNo: order.orderNo,
-        invoiceDate: new Date().toISOString().split("T")[0],
-        dueDate: order.dueDate,
-        customerId: resolvedCustomerId || order.customerId,
-        partyName: order.partyName,
-        customerPhone: order.customerPhone,
-        customerEmail: order.customerEmail,
-        customerCompany: order.customerCompany,
-        billingAddress: order.billingAddress,
-        shippingAddress: order.shippingAddress || order.billingAddress,
-        items: order.items,
-        subtotal: order.subtotal,
-        withGst: order.withGst,
-        gstType: order.gstType,
-        cgst: order.cgst,
-        sgst: order.sgst,
-        igst: order.igst,
-        discount: order.discount || 0,
-        taxAmount: order.taxAmount || 0,
-        amount: order.amount,
-        balance: order.balance,
-        status: "Open",
-        notes: `Converted from Sale Order ${order.orderNo}`,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      // Only call createChallan if convertOrder did NOT already create the Delivery Challan on the backend
-      if (
-        !didBackendConvertCreateChallan &&
-        resolvedCustomerId &&
-        newChallan.items &&
-        newChallan.items.length > 0
-      ) {
-        try {
-          const payload = mapDeliveryChallanRecordToPayload(newChallan, true);
-          payload.customerId = resolvedCustomerId;
-          const createRes =
-            await commerceDeliveryChallanApi.createChallan(payload);
-          if (createRes?.data?.id) {
-            newChallan.id = createRes.data.id;
-          }
-          if (createRes?.data?.challanNo) {
-            newChallan.challanNo = createRes.data.challanNo;
-            challanNo = createRes.data.challanNo;
-          }
-        } catch (createErr) {
-          console.warn("API createChallan notice, saving locally:", createErr);
-        }
-      }
-
-      syncConvertedChallanToStorage(newChallan);
-
-      recordDocumentConversion({
-        fromType: "Order",
-        fromNo: order.orderNo,
-        toType: "Challan",
-        toNo: challanNo,
-      });
-
-      dispatch(
-        baseApi.util.invalidateTags([
-          { type: "SaleOrder", id: order.id },
-          { type: "SaleOrder", id: "LIST" },
-          { type: "DeliveryChallan", id: "LIST" },
-        ]),
-      );
-
-      void refreshBatchStock((order.items || []).map((it) => it.productId));
-      toast.success(
-        `Sale Order ${order.orderNo} converted to Delivery Challan${challanNo ? ` ${challanNo}` : ''}!`,
-      );
-      await fetchSaleOrders();
-    } catch (err: any) {
-      console.error("Convert to challan error:", err);
-      toast.error(getApiErrorMessage(err, "Failed to convert to delivery challan"));
-    } finally {
-      setIsActionLoading(false);
-    }
     });
 
   // Duplicate Sale Order
@@ -2070,6 +2154,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         customerCompany: item.customerCompany || "",
         billingAddress: item.billingAddress || "",
         orderNo: "",
+        saleOrderManualNo: "",
         referenceNo: "",
         orderDate: new Date().toISOString().split("T")[0],
         dueDate: new Date(Date.now() + 14 * 86400000)
@@ -2094,169 +2179,176 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   // Bulk Convert Handler (POST /commerce/orders/bulk-convert)
   const handleBulkConvertToSale = () =>
     runOnce(async () => {
-    const openOrdersToConvert = saleOrders.filter(
-      (o) => selectedBulkOrderIds.includes(o.id) && o.status === "Open",
-    );
-    if (openOrdersToConvert.length === 0) {
-      toast.error("Please select at least one open sale order to convert");
-      return;
-    }
-    const blocked = openOrdersToConvert
-      .map((o) => ({ o, msg: getConvertBlocker(o) }))
-      .find((x) => x.msg);
-    if (blocked) {
-      toast.error(blocked.msg as string);
-      return;
-    }
-    const shortages = await findConversionStockShortages(openOrdersToConvert);
-    if (shortages.length > 0) {
-      setStockConvertIssue({
-        title: "Cannot convert the selected sale orders",
-        lines: shortages,
-      });
-      return;
-    }
-
-    try {
-      setIsActionLoading(true);
-      const uuidOrders = openOrdersToConvert
-        .filter((o) => UUID_REGEX.test(o.id))
-        .map((o) => o.id);
-
-      if (uuidOrders.length > 0) {
-        try {
-          const res = await commerceSaleOrderApi.bulkConvertOrders({
-            orderIds: uuidOrders,
-          });
-          const convertedCount =
-            res?.data?.converted?.length || uuidOrders.length;
-          toast.success(
-            `Successfully converted ${convertedCount} Sale Orders to Sale Invoices!`,
-          );
-        } catch (apiErr) {
-          // Let the outer handler show the error and keep the dialog open (the list is refetched below only on success).
-          throw apiErr;
-        }
-      } else {
-        toast.success(
-          `Converted ${openOrdersToConvert.length} Sale Orders to Sale Invoices!`,
-        );
+      const openOrdersToConvert = saleOrders.filter(
+        (o) => selectedBulkOrderIds.includes(o.id) && o.status === "Open",
+      );
+      if (openOrdersToConvert.length === 0) {
+        toast.error("Please select at least one open sale order to convert");
+        return;
+      }
+      const blocked = openOrdersToConvert
+        .map((o) => ({ o, msg: getConvertBlocker(o) }))
+        .find((x) => x.msg);
+      if (blocked) {
+        toast.error(blocked.msg as string);
+        return;
+      }
+      const shortages = await findConversionStockShortages(openOrdersToConvert);
+      if (shortages.length > 0) {
+        setStockConvertIssue({
+          title: "Cannot convert the selected sale orders",
+          lines: shortages,
+        });
+        return;
       }
 
-      const convertedOrderMap = new Map<string, string>();
+      try {
+        setIsActionLoading(true);
+        const uuidOrders = openOrdersToConvert
+          .filter((o) => UUID_REGEX.test(o.id))
+          .map((o) => o.id);
 
-      openOrdersToConvert.forEach((order) => {
-        const invNo = "";
+        if (uuidOrders.length > 0) {
+          try {
+            const res = await commerceSaleOrderApi.bulkConvertOrders({
+              orderIds: uuidOrders,
+            });
+            const convertedCount =
+              res?.data?.converted?.length || uuidOrders.length;
+            toast.success(
+              `Successfully converted ${convertedCount} Sale Orders to Sale Invoices!`,
+            );
+          } catch (apiErr) {
+            // Let the outer handler show the error and keep the dialog open (the list is refetched below only on success).
+            throw apiErr;
+          }
+        } else {
+          toast.success(
+            `Converted ${openOrdersToConvert.length} Sale Orders to Sale Invoices!`,
+          );
+        }
 
-        convertedOrderMap.set(order.id, invNo);
-        convertedOrderMap.set(order.orderNo, invNo);
+        const convertedOrderMap = new Map<string, string>();
 
-        recordDocumentConversion({
-          fromType: "Order",
-          fromNo: order.orderNo,
-          toType: "Invoice",
-          toNo: invNo,
+        openOrdersToConvert.forEach((order) => {
+          const invNo = "";
+
+          convertedOrderMap.set(order.id, invNo);
+          convertedOrderMap.set(order.orderNo, invNo);
+
+          recordDocumentConversion({
+            fromType: "Order",
+            fromNo: order.orderNo,
+            toType: "Invoice",
+            toNo: invNo,
+          });
+
+          syncOrderStatusInStorage(order.orderNo, "Converted", invNo);
         });
 
-        syncOrderStatusInStorage(order.orderNo, "Converted", invNo);
-      });
+        const updated = saleOrders.map((o) => {
+          const invNo =
+            convertedOrderMap.get(o.id) || convertedOrderMap.get(o.orderNo);
+          if (invNo) {
+            return {
+              ...o,
+              status: "Converted" as const,
+              convertedToInvoiceNo: invNo,
+              convertedAt: new Date().toISOString(),
+            };
+          }
+          return o;
+        });
+        persistSaleOrders(updated);
 
-      const updated = saleOrders.map((o) => {
-        const invNo =
-          convertedOrderMap.get(o.id) || convertedOrderMap.get(o.orderNo);
-        if (invNo) {
-          return {
-            ...o,
-            status: "Converted" as const,
-            convertedToInvoiceNo: invNo,
-            convertedAt: new Date().toISOString(),
-          };
-        }
-        return o;
-      });
-      persistSaleOrders(updated);
+        dispatch(
+          baseApi.util.invalidateTags([
+            { type: "SaleOrder", id: "LIST" },
+            { type: "SalesInvoice", id: "LIST" },
+          ]),
+        );
 
-      dispatch(
-        baseApi.util.invalidateTags([
-          { type: "SaleOrder", id: "LIST" },
-          { type: "SalesInvoice", id: "LIST" },
-        ]),
-      );
-
-      void refreshBatchStock(
-        openOrdersToConvert.flatMap((o) => (o.items || []).map((it) => it.productId)),
-      );
-      setIsBulkConvertModalOpen(false);
-      setSelectedBulkOrderIds([]);
-      await fetchSaleOrders();
-    } catch (err: any) {
-      console.error("Bulk convert failed:", err);
-      toast.error(getApiErrorMessage(err, "Bulk convert failed"));
-    } finally {
-      setIsActionLoading(false);
-    }
+        void refreshBatchStock(
+          openOrdersToConvert.flatMap((o) =>
+            (o.items || []).map((it) => it.productId),
+          ),
+        );
+        setIsBulkConvertModalOpen(false);
+        setSelectedBulkOrderIds([]);
+        await fetchSaleOrders();
+      } catch (err: any) {
+        console.error("Bulk convert failed:", err);
+        toast.error(getApiErrorMessage(err, "Bulk convert failed"));
+      } finally {
+        setIsActionLoading(false);
+      }
     });
 
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
   const mapSaleOrderToDocumentPrintOptions = (
     order: SaleOrderRecord,
-  ): DocumentPrintOptions => ({
-    docTypeTitle: "SALE ORDER",
-    docNo: order.orderNo,
-    docDate: isoToDdmmyyyy(order.orderDate),
-    dueDate: order.dueDate ? isoToDdmmyyyy(order.dueDate) : undefined,
-    status: order.status,
-    statusColor:
-      order.status === "Converted" || order.status === "Completed"
-        ? "emerald"
-        : order.status === "Open"
-          ? "amber"
-          : order.status === "Cancelled"
-            ? "rose"
-            : "purple",
-    referenceNo: order.referenceNo,
-    companyName: companyProfile.companyName,
-    companySubtitle:
-      companyProfile.companySubtitle,
-    companyAddress:
-      companyProfile.companyAddress,
-    companyGstin: companyProfile.companyGstin,
-    companyPhone: companyProfile.companyPhone,
-    companyEmail: companyProfile.companyEmail,
-    partyTitle: "Bill To (Customer Details)",
-    partyName: order.partyName,
-    partyCompany: order.customerCompany,
-    partyPhone: order.customerPhone,
-    partyAddress: order.billingAddress,
-    extraMeta: [
-      { label: "Payment Type", value: order.paymentType || "Credit" },
-      { label: "State of Supply", value: order.stateOfSupply || "Tamil Nadu" },
-      ...(order.convertedToInvoiceNo
-        ? [{ label: "Converted Invoice", value: order.convertedToInvoiceNo }]
-        : []),
-    ],
-    items: (order.items || []).map((it) => ({
-      name: it.productName,
-      sku: it.sku,
-      batch: it.batch,
-      unit: it.unit,
-      quantity: it.quantity,
-      unitPrice: it.unitPrice,
-      taxPercent: it.taxPercent,
-      total: it.total,
-    })),
-    subtotal: order.subtotal,
-    discount: order.discount,
-    tax: {
-      withGst: true,
-      taxAmount: order.taxAmount,
-    },
-    roundOff: order.roundOff,
-    grandTotal: order.amount,
-    terms: order.terms,
-    primarySignatoryLabel: "Authorized Signatory",
-  });
+  ): DocumentPrintOptions => {
+    const isGstActive =
+      order.withGst !== false && Number(order.taxAmount || 0) > 0;
+    return {
+      docTypeTitle: "SALE ORDER",
+      docNo: order.orderNo,
+      docDate: isoToDdmmyyyy(order.orderDate),
+      dueDate: order.dueDate ? isoToDdmmyyyy(order.dueDate) : undefined,
+      status: order.status,
+      statusColor:
+        order.status === "Converted" || order.status === "Completed"
+          ? "emerald"
+          : order.status === "Open"
+            ? "amber"
+            : order.status === "Cancelled"
+              ? "rose"
+              : "purple",
+      referenceNo: order.referenceNo,
+      companyName: companyProfile.companyName,
+      companySubtitle: companyProfile.companySubtitle,
+      companyAddress: companyProfile.companyAddress,
+      companyGstin: companyProfile.companyGstin,
+      companyPhone: companyProfile.companyPhone,
+      companyEmail: companyProfile.companyEmail,
+      partyTitle: "Bill To (Customer Details)",
+      partyName: order.partyName,
+      partyCompany: order.customerCompany,
+      partyPhone: order.customerPhone,
+      partyAddress: order.billingAddress,
+      extraMeta: [
+        { label: "Payment Type", value: order.paymentType || "Credit" },
+        {
+          label: "State of Supply",
+          value: order.stateOfSupply || "Tamil Nadu",
+        },
+        ...(order.convertedToInvoiceNo
+          ? [{ label: "Converted Invoice", value: order.convertedToInvoiceNo }]
+          : []),
+      ],
+      items: (order.items || []).map((it) => ({
+        name: it.productName,
+        sku: it.sku,
+        batch: it.batch,
+        unit: it.unit,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        taxPercent: isGstActive ? it.taxPercent || 0 : 0,
+        total: it.total,
+      })),
+      subtotal: order.subtotal,
+      discount: order.discount,
+      tax: {
+        withGst: isGstActive,
+        taxAmount: order.taxAmount,
+      },
+      roundOff: order.roundOff,
+      grandTotal: order.amount,
+      terms: order.terms,
+      primarySignatoryLabel: "Authorized Signatory",
+    };
+  };
 
   const handleDownloadSaleOrder = async (order: SaleOrderRecord) => {
     if (isDownloadingPdf) return;
@@ -2289,6 +2381,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       toast.error("Unable to open print preview. Please allow popups.");
       return;
     }
+
+    const isGstActive =
+      order.withGst !== false && Number(order.taxAmount || 0) > 0;
 
     printWindow.document.write(`
       <!DOCTYPE html>
@@ -2379,7 +2474,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                 <th class="text-center" style="width: 100px;">Batch No</th>
                 <th class="text-center" style="width: 70px;">Qty</th>
                 <th class="text-right" style="width: 100px;">Rate (₹)</th>
-                <th class="text-right" style="width: 80px;">GST %</th>
+                ${isGstActive ? '<th class="text-right" style="width: 80px;">GST %</th>' : ""}
                 <th class="text-right" style="width: 110px;">Amount (₹)</th>
               </tr>
             </thead>
@@ -2396,7 +2491,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                   <td class="text-center" style="font-family: monospace; font-weight: 700; color: #33077C;">${item.batch || "—"}</td>
                   <td class="text-center">${item.quantity} ${item.unit || ""}</td>
                   <td class="text-right">₹${Number(item.unitPrice).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-                  <td class="text-right">${item.taxPercent || 0}%</td>
+                  ${isGstActive ? `<td class="text-right">${item.taxPercent || 0}%</td>` : ""}
                   <td class="text-right font-bold">₹${Number(item.total).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
                 </tr>
               `,
@@ -2459,73 +2554,80 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
   const handleConfirmDeleteOrder = () =>
     runOnce(async () => {
-    if (!deleteTargetOrder || !deleteTargetOrder.id) {
-      toast.error("Please select a sale order to delete.");
-      return;
-    }
-    if (deleteTargetOrder.status === "Converted" || deleteTargetOrder.status === "Completed") {
-      const msg = `Sale order ${deleteTargetOrder.orderNo} is already ${deleteTargetOrder.status.toLowerCase()} and cannot be deleted.`;
-      setDeleteOrderError(msg);
-      toast.error(msg);
-      return;
-    }
-    setIsDeletingOrder(true);
-    setDeleteOrderError(null);
-    try {
-      if (UUID_REGEX.test(deleteTargetOrder.id)) {
-        await commerceSaleOrderApi.deleteOrder(deleteTargetOrder.id);
+      if (!deleteTargetOrder || !deleteTargetOrder.id) {
+        toast.error("Please select a sale order to delete.");
+        return;
       }
-      const updated = saleOrders.filter((o) => o.id !== deleteTargetOrder.id);
-      persistSaleOrders(updated);
-      toast.success(
-        `Sale order "${deleteTargetOrder.orderNo}" removed successfully.`,
-      );
-      setIsDeleteModalOpen(false);
-      setDeleteTargetOrder(null);
-      await fetchSaleOrders();
-    } catch (err: any) {
-      console.error("Delete order failed:", err);
-      const errMsg = getApiErrorMessage(err, "Failed to delete sale order");
-      setDeleteOrderError(errMsg);
-      toast.error(errMsg);
-    } finally {
-      setIsDeletingOrder(false);
-    }
+      if (
+        deleteTargetOrder.status === "Converted" ||
+        deleteTargetOrder.status === "Completed"
+      ) {
+        const msg = `Sale order ${deleteTargetOrder.orderNo} is already ${deleteTargetOrder.status.toLowerCase()} and cannot be deleted.`;
+        setDeleteOrderError(msg);
+        toast.error(msg);
+        return;
+      }
+      setIsDeletingOrder(true);
+      setDeleteOrderError(null);
+      try {
+        if (UUID_REGEX.test(deleteTargetOrder.id)) {
+          await commerceSaleOrderApi.deleteOrder(deleteTargetOrder.id);
+        }
+        const updated = saleOrders.filter((o) => o.id !== deleteTargetOrder.id);
+        persistSaleOrders(updated);
+        toast.success(
+          `Sale order "${deleteTargetOrder.orderNo}" removed successfully.`,
+        );
+        setIsDeleteModalOpen(false);
+        setDeleteTargetOrder(null);
+        await fetchSaleOrders();
+      } catch (err: any) {
+        console.error("Delete order failed:", err);
+        const errMsg = getApiErrorMessage(err, "Failed to delete sale order");
+        setDeleteOrderError(errMsg);
+        toast.error(errMsg);
+      } finally {
+        setIsDeletingOrder(false);
+      }
     });
 
   // Cancel Sale Order Status (PATCH /commerce/orders/{id}/status)
   const handleCancelOrder = (order: SaleOrderRecord) =>
     runOnce(async () => {
-    if (!order?.id) {
-      toast.error("This sale order could not be found. Please refresh the list.");
-      return;
-    }
-    if (order.status === "Cancelled") {
-      toast.info(`Sale order ${order.orderNo} is already cancelled.`);
-      return;
-    }
-    if (order.status === "Converted" || order.status === "Completed") {
-      toast.error(`Sale order ${order.orderNo} is already ${order.status.toLowerCase()} and cannot be cancelled.`);
-      return;
-    }
-    try {
-      setIsActionLoading(true);
-      if (UUID_REGEX.test(order.id)) {
-        await commerceSaleOrderApi.updateStatus(order.id, "Cancelled");
-      } else {
-        const updated = saleOrders.map((o) =>
-          o.id === order.id ? { ...o, status: "Cancelled" as const } : o,
+      if (!order?.id) {
+        toast.error(
+          "This sale order could not be found. Please refresh the list.",
         );
-        persistSaleOrders(updated);
+        return;
       }
-      toast.success(`Sale Order ${order.orderNo} marked as Cancelled.`);
-      await fetchSaleOrders();
-    } catch (err: any) {
-      console.error("Cancel order failed:", err);
-      toast.error(getApiErrorMessage(err, "Failed to cancel sale order"));
-    } finally {
-      setIsActionLoading(false);
-    }
+      if (order.status === "Cancelled") {
+        toast.info(`Sale order ${order.orderNo} is already cancelled.`);
+        return;
+      }
+      if (order.status === "Converted" || order.status === "Completed") {
+        toast.error(
+          `Sale order ${order.orderNo} is already ${order.status.toLowerCase()} and cannot be cancelled.`,
+        );
+        return;
+      }
+      try {
+        setIsActionLoading(true);
+        if (UUID_REGEX.test(order.id)) {
+          await commerceSaleOrderApi.updateStatus(order.id, "Cancelled");
+        } else {
+          const updated = saleOrders.map((o) =>
+            o.id === order.id ? { ...o, status: "Cancelled" as const } : o,
+          );
+          persistSaleOrders(updated);
+        }
+        toast.success(`Sale Order ${order.orderNo} marked as Cancelled.`);
+        await fetchSaleOrders();
+      } catch (err: any) {
+        console.error("Cancel order failed:", err);
+        toast.error(getApiErrorMessage(err, "Failed to cancel sale order"));
+      } finally {
+        setIsActionLoading(false);
+      }
     });
 
   // Metrics calculation
@@ -2696,12 +2798,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                     </span>
                   </>
                 ) : (
-                  <>
-                    <span>New Sale Order</span>
-                    <span className="font-extrabold text-[#33077C] font-mono text-xs sm:text-[13px] bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200/80 shadow-2xs">
-                      {activeTab.formData.orderNo || "Auto-generated on save"}
-                    </span>
-                  </>
+                  "Create a new customer sale order"
                 )}
               </p>
             </div>
@@ -2730,51 +2827,51 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                   Customer <span className="text-rose-500">*</span>
                 </label>
                 <div {...fieldAttr("customerId")}>
-                <CustomerSearchableSelect
-                  value={activeTab.formData.customerId}
-                  allowNone
-                  size="lg"
-                  onChange={(val, cust) => {
-                    fe.clearError("customerId");
-                    updateActiveTabFormData((prev) => ({
-                      ...prev,
-                      customerId: val,
-                      partyName: cust ? cust.name : val ? prev.partyName : "",
-                      customerCompany: cust
-                        ? cust.company || ""
-                        : val
-                          ? prev.customerCompany
-                          : "",
-                      customerPhone: cust
-                        ? cust.phone || ""
-                        : val
-                          ? prev.customerPhone
-                          : "",
-                      customerEmail: cust
-                        ? cust.email || ""
-                        : val
-                          ? prev.customerEmail
-                          : "",
-                      billingAddress: cust
-                        ? cust.billingAddress || cust.address || ""
-                        : val
-                          ? prev.billingAddress
-                          : "",
-                    }));
-                  }}
-                  selectedCustomer={
-                    activeTab.formData.customerId
-                      ? {
-                          id: activeTab.formData.customerId,
-                          name: activeTab.formData.partyName,
-                          company: activeTab.formData.customerCompany,
-                          phone: activeTab.formData.customerPhone,
-                        }
-                      : null
-                  }
-                  onAddNewCustomer={() => setIsAddCustomerModalOpen(true)}
-                  placeholder="Select or search customer..."
-                />
+                  <CustomerSearchableSelect
+                    value={activeTab.formData.customerId}
+                    allowNone
+                    size="lg"
+                    onChange={(val, cust) => {
+                      fe.clearError("customerId");
+                      updateActiveTabFormData((prev) => ({
+                        ...prev,
+                        customerId: val,
+                        partyName: cust ? cust.name : val ? prev.partyName : "",
+                        customerCompany: cust
+                          ? cust.company || ""
+                          : val
+                            ? prev.customerCompany
+                            : "",
+                        customerPhone: cust
+                          ? cust.phone || ""
+                          : val
+                            ? prev.customerPhone
+                            : "",
+                        customerEmail: cust
+                          ? cust.email || ""
+                          : val
+                            ? prev.customerEmail
+                            : "",
+                        billingAddress: cust
+                          ? cust.billingAddress || cust.address || ""
+                          : val
+                            ? prev.billingAddress
+                            : "",
+                      }));
+                    }}
+                    selectedCustomer={
+                      activeTab.formData.customerId
+                        ? {
+                            id: activeTab.formData.customerId,
+                            name: activeTab.formData.partyName,
+                            company: activeTab.formData.customerCompany,
+                            phone: activeTab.formData.customerPhone,
+                          }
+                        : null
+                    }
+                    onAddNewCustomer={() => setIsAddCustomerModalOpen(true)}
+                    placeholder="Select or search customer..."
+                  />
                 </div>
                 <FormError message={fe.errors.customerId} />
 
@@ -2799,8 +2896,41 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                 )}
               </div>
 
-              {/* Right Column: Order Date, State of supply */}
+              {/* Right Column: Order No, Order Date, State of supply */}
               <div className="lg:col-span-6 xl:col-span-7 flex flex-col items-end gap-3 text-xs">
+                {/* Order No. (Bold Display) */}
+                <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
+                  <span className="font-bold text-slate-700 w-24 sm:w-auto text-right">
+                    Sale Order S.No.
+                  </span>
+                  <div className="w-40 sm:w-48 h-9 px-3 bg-purple-50/70 border border-purple-200/90 rounded-lg flex items-center justify-between text-xs sm:text-[13px] font-extrabold text-[#33077C] font-mono shadow-2xs">
+                    <span>
+                      {activeTab.editingOrder?.orderNo ||
+                        activeTab.formData.orderNo ||
+                        computedPreviewNo}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Sale Order No (manual entry) */}
+                <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
+                  <span className="font-medium text-slate-600 w-24 sm:w-auto text-right">
+                    Sale Order No
+                  </span>
+                  <input
+                    type="text"
+                    value={activeTab.formData.saleOrderManualNo || ""}
+                    onChange={(e) =>
+                      updateActiveTabFormData((prev) => ({
+                        ...prev,
+                        saleOrderManualNo: e.target.value,
+                      }))
+                    }
+                    placeholder="Enter Sale Order No"
+                    className="w-40 sm:w-48 h-9 px-3 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors"
+                  />
+                </div>
+
                 {/* Order Date */}
                 <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
                   <span className="font-medium text-slate-600 w-24 sm:w-auto text-right">
@@ -2824,7 +2954,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                   </div>
                 </div>
                 {(fe.errors.orderDate || fe.errors.dueDate) && (
-                  <FormError message={fe.errors.orderDate || fe.errors.dueDate} />
+                  <FormError
+                    message={fe.errors.orderDate || fe.errors.dueDate}
+                  />
                 )}
 
                 {/* State of Supply */}
@@ -3327,7 +3459,10 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                                                   p.productCode ||
                                                   "PRD"}
                                               </span>
-                                              <ProductStockLabel qty={p.stockQty} unit={p.unit} />
+                                              <ProductStockLabel
+                                                qty={p.stockQty}
+                                                unit={p.unit}
+                                              />
                                               {p.hsnCode && (
                                                 <span className="text-slate-400 font-mono text-[10px]">
                                                   • HSN: {p.hsnCode}
@@ -3356,7 +3491,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                             </div>
                           )}
                         </div>
-                        <FormError message={fe.errors[`items.${idx}.product`]} />
+                        <FormError
+                          message={fe.errors[`items.${idx}.product`]}
+                        />
                       </td>
                       {/* Batch No */}
                       <td className="py-2.5 px-2">
@@ -3372,39 +3509,43 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                           if (rowItem.productId) {
                             return (
                               <div>
-                              <select
-                                value={rowItem.batch || ""}
-                                onChange={(e) =>
-                                  handleItemChange(idx, "batch", e.target.value)
-                                }
-                                className="w-full h-9 px-2 bg-purple-50/60 hover:bg-purple-50 text-[#33077C] border border-purple-200 rounded-lg text-xs font-bold outline-none cursor-pointer focus:border-[#4309A2]"
-                              >
-                                <option value="">Select Batch...</option>
-                                {resolvedBatches.map((b: any) => (
-                                  <option
-                                    key={b.batchNo || b.id}
-                                    value={b.batchNo}
-                                  >
-                                    {b.batchNo}{" "}
-                                    {b.quantity !== undefined
-                                      ? `(${b.quantity} in stock)`
-                                      : ""}
-                                  </option>
-                                ))}
-                                {rowItem.batch &&
-                                  !resolvedBatches.some(
-                                    (b: any) => b.batchNo === rowItem.batch,
-                                  ) && (
-                                    <option value={rowItem.batch}>
-                                      {rowItem.batch}
+                                <select
+                                  value={rowItem.batch || ""}
+                                  onChange={(e) =>
+                                    handleItemChange(
+                                      idx,
+                                      "batch",
+                                      e.target.value,
+                                    )
+                                  }
+                                  className="w-full h-9 px-2 bg-purple-50/60 hover:bg-purple-50 text-[#33077C] border border-purple-200 rounded-lg text-xs font-bold outline-none cursor-pointer focus:border-[#4309A2]"
+                                >
+                                  <option value="">Select Batch...</option>
+                                  {resolvedBatches.map((b: any) => (
+                                    <option
+                                      key={b.batchNo || b.id}
+                                      value={b.batchNo}
+                                    >
+                                      {b.batchNo}{" "}
+                                      {b.quantity !== undefined
+                                        ? `(${b.quantity} in stock)`
+                                        : ""}
                                     </option>
-                                  )}
-                              </select>
-                              {rowAvailable !== null && (
-                                <div className="mt-1 text-[10px] font-semibold text-slate-500 text-center">
-                                  Available: {rowAvailable}
-                                </div>
-                              )}
+                                  ))}
+                                  {rowItem.batch &&
+                                    !resolvedBatches.some(
+                                      (b: any) => b.batchNo === rowItem.batch,
+                                    ) && (
+                                      <option value={rowItem.batch}>
+                                        {rowItem.batch}
+                                      </option>
+                                    )}
+                                </select>
+                                {rowAvailable !== null && (
+                                  <div className="mt-1 text-[10px] font-semibold text-slate-500 text-center">
+                                    Available: {rowAvailable}
+                                  </div>
+                                )}
                               </div>
                             );
                           }
@@ -3438,7 +3579,12 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                           }}
                           className={`w-full h-9 px-2 text-center bg-white border hover:border-slate-300 rounded-lg text-xs font-bold text-slate-800 outline-none focus:border-[#4309A2] ${fe.errors[`items.${idx}.quantity`] || liveStockErrors[`items.${idx}.quantity`] ? "border-rose-400" : "border-slate-200"}`}
                         />
-                        <FormError message={fe.errors[`items.${idx}.quantity`] || liveStockErrors[`items.${idx}.quantity`]} />
+                        <FormError
+                          message={
+                            fe.errors[`items.${idx}.quantity`] ||
+                            liveStockErrors[`items.${idx}.quantity`]
+                          }
+                        />
                       </td>
                       <td className="py-2.5 px-2">
                         <select
@@ -3453,9 +3599,12 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                               {u}
                             </option>
                           ))}
-                          {rowItem.unit && !UNIT_OPTIONS.includes(rowItem.unit) && (
-                            <option value={rowItem.unit}>{rowItem.unit}</option>
-                          )}
+                          {rowItem.unit &&
+                            !UNIT_OPTIONS.includes(rowItem.unit) && (
+                              <option value={rowItem.unit}>
+                                {rowItem.unit}
+                              </option>
+                            )}
                         </select>
                       </td>
                       <td className="py-2.5 px-2">
@@ -3503,7 +3652,12 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                               ₹{rowItem.discountAmount?.toFixed(0) || 0}
                             </span>
                           </div>
-                          <FormError message={fe.errors[`items.${idx}.discountPercent`] || fe.errors[`items.${idx}.discountAmount`]} />
+                          <FormError
+                            message={
+                              fe.errors[`items.${idx}.discountPercent`] ||
+                              fe.errors[`items.${idx}.discountAmount`]
+                            }
+                          />
                         </td>
                       )}
                       <td className="py-2.5 px-2">
@@ -3526,7 +3680,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                             </option>
                           ))}
                         </select>
-                        <FormError message={fe.errors[`items.${idx}.taxPercent`]} />
+                        <FormError
+                          message={fe.errors[`items.${idx}.taxPercent`]}
+                        />
                       </td>
                       <td className="py-2.5 px-4 text-right font-bold text-slate-900">
                         ₹
@@ -3898,24 +4054,27 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                 </div>
 
                 {/* Not offered when the order being edited is already converted (the server says so) */}
-                {!(activeTab.editingOrder && getOrderStages(activeTab.editingOrder).isFullyConverted) && (
-                <Button
-                  variant="secondary"
-                  size="md"
-                  type="button"
-                  disabled={isActionLoading}
-                  onClick={() => handleSaveSaleOrder(true)}
-                  className="border-purple-200 text-[#33077C] bg-purple-50/50 hover:bg-purple-100/50"
-                  icon={
-                    isActionLoading ? (
-                      <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
-                    ) : (
-                      <ShoppingCart className="w-4 h-4" />
-                    )
-                  }
-                >
-                  Save & Convert to Sale
-                </Button>
+                {!(
+                  activeTab.editingOrder &&
+                  getOrderStages(activeTab.editingOrder).isFullyConverted
+                ) && (
+                  <Button
+                    variant="secondary"
+                    size="md"
+                    type="button"
+                    disabled={isActionLoading}
+                    onClick={() => handleSaveSaleOrder(true)}
+                    className="border-purple-200 text-[#33077C] bg-purple-50/50 hover:bg-purple-100/50"
+                    icon={
+                      isActionLoading ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
+                      ) : (
+                        <ShoppingCart className="w-4 h-4" />
+                      )
+                    }
+                  >
+                    Save & Convert to Sale
+                  </Button>
                 )}
 
                 {/* Save Button (CRM Primary Theme #33077C) */}
@@ -3949,9 +4108,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           isOpen={isAddCustomerModalOpen}
           onClose={() => setIsAddCustomerModalOpen(false)}
           onCustomerCreated={(newCust) => {
-            dispatch(
-              baseApi.util.invalidateTags(["Customer"]),
-            );
+            dispatch(baseApi.util.invalidateTags(["Customer"]));
             setLiveCustomers((prev) => [newCust as any, ...prev]);
             updateActiveTabFormData((prev) => ({
               ...prev,
@@ -4004,7 +4161,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
     const excelRows = filteredOrders.map((o) => {
       const createdDt = formatDateTime(o.createdAt);
-      const convertedAt = ((o as any).convertedAt || null);
+      const convertedAt = (o as any).convertedAt || null;
       const convertedDt = formatDateTime(convertedAt);
       return {
         date: isoToDdmmyyyy(o.orderDate),
@@ -4024,7 +4181,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       filename: `Sale_Orders_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Sale Orders",
       title: "YAA CREATIONS CRM - SALES ORDER REPORT",
-      subtitle: `Filter: ${appliedPeriod} | Total Orders: ${filteredOrders.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
+      subtitle: `Filter: ${appliedPeriod} | Total Orders: ${filteredOrders.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
       columns: [
         {
           header: "Created Date & Time",
@@ -4080,7 +4237,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
     const printRows = filteredOrders.map((o) => {
       const createdDt = formatDateTime(o.createdAt);
-      const convertedAt = ((o as any).convertedAt || null);
+      const convertedAt = (o as any).convertedAt || null;
       const convertedDt = formatDateTime(convertedAt);
       return {
         orderNo: o.orderNo,
@@ -4247,8 +4404,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               })}
             </div>
             <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-              {cardMetrics.openCount} orders in
-              progress
+              {cardMetrics.openCount} orders in progress
             </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold shrink-0">
@@ -4269,8 +4425,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               })}
             </div>
             <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-              {cardMetrics.convertedCount} orders
-              fulfilled
+              {cardMetrics.convertedCount} orders fulfilled
             </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold shrink-0">
@@ -4331,7 +4486,12 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           setAppliedStatus("ALL");
           setPage(1);
           isFetchingOrdersRef.current = false;
-          fetchSaleOrders({ page: 1, search: "", status: "ALL", period: "This Month" });
+          fetchSaleOrders({
+            page: 1,
+            search: "",
+            status: "ALL",
+            period: "This Month",
+          });
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
@@ -4425,7 +4585,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               <CommonTableHead
                 columns={[
                   {
-                    label: "SALE ORDER NO.",
+                    label: "SALE ORDER S.NO.",
                     align: "center",
                     minWidth: "140px",
                   },
@@ -4826,7 +4986,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                   {companyProfile.companyAddress}
                 </p>
                 <p className="text-xs text-slate-500">
-                  GSTIN: {companyProfile.companyGstin} | Phone: {companyProfile.companyPhone}
+                  GSTIN: {companyProfile.companyGstin} | Phone:{" "}
+                  {companyProfile.companyPhone}
                 </p>
               </div>
               <div className="text-right">
@@ -5030,15 +5191,40 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             eyebrow="Order No"
             title={historyOrder.orderNo}
             subtitle={historyOrder.partyName}
-            amount={{ label: "Total Amount", value: `₹${Number(historyOrder.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` }}
-            badges={[{ label: historyOrder.status, tone: historyOrder.status === "Converted" ? "success" : historyOrder.status === "Cancelled" ? "danger" : "warning" }]}
+            amount={{
+              label: "Total Amount",
+              value: `₹${Number(historyOrder.amount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+            }}
+            badges={[
+              {
+                label: historyOrder.status,
+                tone:
+                  historyOrder.status === "Converted"
+                    ? "success"
+                    : historyOrder.status === "Cancelled"
+                      ? "danger"
+                      : "warning",
+              },
+            ]}
             facts={[
-              { label: "Order Date", value: isoToDdmmyyyy(historyOrder.orderDate) },
+              {
+                label: "Order Date",
+                value: isoToDdmmyyyy(historyOrder.orderDate),
+              },
               { label: "Due Date", value: isoToDdmmyyyy(historyOrder.dueDate) },
-              { label: "Items", value: String(historyOrder.items?.length || 0) },
+              {
+                label: "Items",
+                value: String(historyOrder.items?.length || 0),
+              },
               { label: "Payment Type", value: historyOrder.paymentType },
-              { label: "Advance", value: `₹${Number((historyOrder as any).advanceAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
-              { label: "Linked Invoice", value: historyOrder.convertedToInvoiceNo },
+              {
+                label: "Advance",
+                value: `₹${Number((historyOrder as any).advanceAmount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+              },
+              {
+                label: "Linked Invoice",
+                value: historyOrder.convertedToInvoiceNo,
+              },
             ]}
             events={[
               {
@@ -5047,15 +5233,34 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                 tone: "primary",
                 description: `Order booked for ${historyOrder.partyName}.`,
                 details: [
-                  { label: "Order Date", value: isoToDdmmyyyy(historyOrder.orderDate) },
-                  { label: "Due Date", value: isoToDdmmyyyy(historyOrder.dueDate) },
+                  {
+                    label: "Order Date",
+                    value: isoToDdmmyyyy(historyOrder.orderDate),
+                  },
+                  {
+                    label: "Due Date",
+                    value: isoToDdmmyyyy(historyOrder.dueDate),
+                  },
                 ],
               },
               {
-                title: historyOrder.status === "Converted" ? "Converted to Sale Invoice" : `Order Status: ${historyOrder.status}`,
-                at: historyOrder.status === "Open" ? undefined : historyOrder.updatedAt,
-                tone: historyOrder.status === "Converted" ? "success" : historyOrder.status === "Cancelled" ? "danger" : "warning",
-                description: historyOrder.convertedToInvoiceNo ? `Linked Invoice: ${historyOrder.convertedToInvoiceNo}` : "Awaiting fulfillment / shipment.",
+                title:
+                  historyOrder.status === "Converted"
+                    ? "Converted to Sale Invoice"
+                    : `Order Status: ${historyOrder.status}`,
+                at:
+                  historyOrder.status === "Open"
+                    ? undefined
+                    : historyOrder.updatedAt,
+                tone:
+                  historyOrder.status === "Converted"
+                    ? "success"
+                    : historyOrder.status === "Cancelled"
+                      ? "danger"
+                      : "warning",
+                description: historyOrder.convertedToInvoiceNo
+                  ? `Linked Invoice: ${historyOrder.convertedToInvoiceNo}`
+                  : "Awaiting fulfillment / shipment.",
               },
             ]}
             recordId={historyOrder.id}
@@ -5075,8 +5280,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         >
           <div className="p-6 space-y-3 text-xs font-sans">
             <p className="text-slate-600">
-              There is not enough stock in the selected batch to convert. Please reduce the
-              quantity on the sale order or choose another batch, then try again.
+              There is not enough stock in the selected batch to convert. Please
+              reduce the quantity on the sale order or choose another batch,
+              then try again.
             </p>
             <ul className="space-y-1.5 max-h-64 overflow-y-auto">
               {stockConvertIssue.lines.map((l, i) => (

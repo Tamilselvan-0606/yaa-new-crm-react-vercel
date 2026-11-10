@@ -1599,14 +1599,41 @@ export const SaleManagementReportsView: React.FC = () => {
       case 'gst_summary': {
         const slabMap = new Map<string, { count: number; taxable: number; cgst: number; sgst: number; totalGst: number }>();
         filteredSales.forEach((s) => {
-          const rate = s.totalTax > 0 ? '18% GST' : '0% Exempt';
-          const cur = slabMap.get(rate) || { count: 0, taxable: 0, cgst: 0, sgst: 0, totalGst: 0 };
-          cur.count += 1;
-          cur.taxable += s.subtotal;
-          cur.cgst += s.totalTax / 2;
-          cur.sgst += s.totalTax / 2;
-          cur.totalGst += s.totalTax;
-          slabMap.set(rate, cur);
+          const isGstActive = s.withGst !== false && Number(s.totalTax || 0) > 0;
+          if (!isGstActive) {
+            const rate = '0% Exempt';
+            const cur = slabMap.get(rate) || { count: 0, taxable: 0, cgst: 0, sgst: 0, totalGst: 0 };
+            cur.count += 1;
+            cur.taxable += s.subtotal || 0;
+            slabMap.set(rate, cur);
+            return;
+          }
+
+          if (s.items && s.items.length > 0) {
+            s.items.forEach((it) => {
+              const itemTaxRate = Number((it as any).taxRate ?? (it as any).taxPercent ?? 0);
+              const rate = itemTaxRate > 0 ? `${itemTaxRate}% GST` : '0% Exempt';
+              const cur = slabMap.get(rate) || { count: 0, taxable: 0, cgst: 0, sgst: 0, totalGst: 0 };
+              cur.count += 1;
+              const itemTaxable = (Number(it.unitPrice || 0) * Number(it.quantity || 1)) - Number(it.discountAmount || 0);
+              const itemTax = Number(it.taxAmount || 0);
+              cur.taxable += itemTaxable;
+              cur.cgst += itemTax / 2;
+              cur.sgst += itemTax / 2;
+              cur.totalGst += itemTax;
+              slabMap.set(rate, cur);
+            });
+          } else {
+            const effectiveRate = s.subtotal > 0 ? Math.round((s.totalTax / s.subtotal) * 100) : 0;
+            const rate = effectiveRate > 0 ? `${effectiveRate}% GST` : '0% Exempt';
+            const cur = slabMap.get(rate) || { count: 0, taxable: 0, cgst: 0, sgst: 0, totalGst: 0 };
+            cur.count += 1;
+            cur.taxable += s.subtotal;
+            cur.cgst += s.totalTax / 2;
+            cur.sgst += s.totalTax / 2;
+            cur.totalGst += s.totalTax;
+            slabMap.set(rate, cur);
+          }
         });
         const rows = Array.from(slabMap.entries()).map(([rate, val]) => ({
           id: rate,

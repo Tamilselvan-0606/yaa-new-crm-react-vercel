@@ -1,9 +1,13 @@
 import { ProductStockLabel } from "../../../components/common/ProductStockLabel";
 import { attachStockQty } from "../../../utils/stockDisplay";
-import { CommonTableHead } from '../../../components/common/CommonTableHead';
-import { CustomerSearchableSelect } from '../../../components/common/paginated-select';
+import { CommonTableHead } from "../../../components/common/CommonTableHead";
+import { CustomerSearchableSelect } from "../../../components/common/paginated-select";
 import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
-import { getConversionState, resolveConvertedTarget } from "../../../utils/salesDocumentWorkflow";
+import {
+  getConversionState,
+  resolveConvertedTarget,
+} from "../../../utils/salesDocumentWorkflow";
+import { getNextEstimationNumber } from "../../../utils/documentNumbering";
 import React, {
   useState,
   useMemo,
@@ -73,7 +77,7 @@ import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { toast } from "../../../utils/toast";
 import { useNavigate } from "react-router-dom";
-import { useCompanyDocumentProfile } from '../../../hooks/useCompanyDocumentProfile';
+import { useCompanyDocumentProfile } from "../../../hooks/useCompanyDocumentProfile";
 import { exportTableToExcel } from "../../../utils/excelExport";
 import {
   printTableReport,
@@ -82,7 +86,10 @@ import {
   DocumentPrintOptions,
 } from "../../../utils/printUtils";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
-import { DocumentSharePopover, formatEstimateQuotationShare } from "../../../utils/shareUtils";
+import {
+  DocumentSharePopover,
+  formatEstimateQuotationShare,
+} from "../../../utils/shareUtils";
 import {
   quotationApi,
   mapApiQuotationToSaleQuotation,
@@ -272,13 +279,19 @@ const validateEstimateForm = (
   form.items.forEach((it, i) => {
     if (!isReal(it) || errors[`items.${i}.product`]) return;
     if (!it.productName?.trim()) {
-      errors[`items.${i}.product`] = checkRequiredSelection("", "product") as string;
+      errors[`items.${i}.product`] = checkRequiredSelection(
+        "",
+        "product",
+      ) as string;
       return;
     }
     // Text edited after picking a product: the old id would point at a different product.
     if (it.productId && isUuid(it.productId)) {
       const known = ctx.knownProductName(it.productId);
-      if (known && known.trim().toLowerCase() !== it.productName.trim().toLowerCase()) {
+      if (
+        known &&
+        known.trim().toLowerCase() !== it.productName.trim().toLowerCase()
+      ) {
         errors[`items.${i}.product`] = PRODUCT_PICK_MSG;
       }
     }
@@ -507,6 +520,7 @@ export interface EstimateTabItem {
     customerCompany: string;
     billingAddress: string;
     quotationNo: string;
+    estimationManualNo: string;
     referenceNo: string;
     date: string;
     validUntil: string;
@@ -525,6 +539,7 @@ export const EstimateQuotationView: React.FC = () => {
   const companyProfile = useCompanyDocumentProfile();
   const navigate = useNavigate();
   const {
+    quotations,
     saveQuotation,
     setQuotationsList,
     deleteQuotation,
@@ -562,9 +577,9 @@ export const EstimateQuotationView: React.FC = () => {
   const [isApiConnected, setIsApiConnected] = useState<boolean | null>(null);
   const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
   const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
-  const [apiSummary, setApiSummary] = useState<
-    NonNullable<Awaited<ReturnType<typeof quotationApi.getQuotations>>["summary"]> | null
-  >(null);
+  const [apiSummary, setApiSummary] = useState<NonNullable<
+    Awaited<ReturnType<typeof quotationApi.getQuotations>>["summary"]
+  > | null>(null);
   const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const fe = useFieldErrors();
@@ -655,8 +670,12 @@ export const EstimateQuotationView: React.FC = () => {
 
   // Add Item / Product Modal & Searchable Product Dropdown
   const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
-  const [activeItemRowIndex, setActiveItemRowIndex] = useState<number | null>(null);
-  const [openProductDropdownRow, setOpenProductDropdownRow] = useState<number | null>(null);
+  const [activeItemRowIndex, setActiveItemRowIndex] = useState<number | null>(
+    null,
+  );
+  const [openProductDropdownRow, setOpenProductDropdownRow] = useState<
+    number | null
+  >(null);
   const [productSearchQuery, setProductSearchQuery] = useState("");
   const productDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -670,6 +689,41 @@ export const EstimateQuotationView: React.FC = () => {
   const [partySearchQuery, setPartySearchQuery] = useState("");
   const partySelectRef = useRef<HTMLDivElement>(null);
 
+  // Computed next preview number based on currently loaded estimations in the table
+  const computedPreviewNo = useMemo(() => {
+    const allKnown = liveQuotations.length > 0 ? liveQuotations : quotations;
+    return getNextEstimationNumber(allKnown);
+  }, [liveQuotations, quotations]);
+
+  // Sync preview number to newly opened initial form tab if empty
+  useEffect(() => {
+    if (!editingQuotation && computedPreviewNo) {
+      setFormData((prev) => {
+        if (!prev.quotationNo) {
+          return {
+            ...prev,
+            quotationNo: computedPreviewNo,
+          };
+        }
+        return prev;
+      });
+      setTabs((prevTabs) =>
+        prevTabs.map((t) => {
+          if (!t.editingQuotation && !t.formData.quotationNo) {
+            return {
+              ...t,
+              formData: {
+                ...t.formData,
+                quotationNo: computedPreviewNo,
+              },
+            };
+          }
+          return t;
+        }),
+      );
+    }
+  }, [computedPreviewNo, editingQuotation]);
+
   // Initial Form Data (No mock content, no default reference number)
   const [formData, setFormData] = useState({
     customerId: "",
@@ -679,6 +733,7 @@ export const EstimateQuotationView: React.FC = () => {
     customerCompany: "",
     billingAddress: "",
     quotationNo: "",
+    estimationManualNo: "",
     referenceNo: "",
     date: new Date().toISOString().split("T")[0],
     validUntil: new Date(Date.now() + 30 * 86400000)
@@ -719,6 +774,7 @@ export const EstimateQuotationView: React.FC = () => {
         customerCompany: "",
         billingAddress: "",
         quotationNo: "",
+        estimationManualNo: "",
         referenceNo: "",
         date: new Date().toISOString().split("T")[0],
         validUntil: new Date(Date.now() + 30 * 86400000)
@@ -862,8 +918,6 @@ export const EstimateQuotationView: React.FC = () => {
     [appliedSearch, appliedStatus, appliedPeriod, page, pageSize],
   );
 
-
-
   // Trigger API fetch on filter/page change
   useEffect(() => {
     fetchQuotations(
@@ -960,7 +1014,10 @@ export const EstimateQuotationView: React.FC = () => {
           prods = raw;
         }
       } catch (err) {
-        console.warn("Product load pagination_required:false error, falling back:", err);
+        console.warn(
+          "Product load pagination_required:false error, falling back:",
+          err,
+        );
       }
 
       // 2. Second attempt if empty: pagination_required: true, page_no: 1, page_size: 100
@@ -1207,7 +1264,11 @@ export const EstimateQuotationView: React.FC = () => {
             (p as any).taxRate ?? (p as any).taxPercent,
           ),
           hsnCode: p.hsnCode || "",
-          imageUrl: (p as any).images?.[0] || (p as any).image || (p as any).imageUrl || "",
+          imageUrl:
+            (p as any).images?.[0] ||
+            (p as any).image ||
+            (p as any).imageUrl ||
+            "",
           batches,
         });
       }
@@ -1233,7 +1294,11 @@ export const EstimateQuotationView: React.FC = () => {
             (s as any).taxRate ?? (s as any).taxPercent,
           ),
           hsnCode: (s as any).hsnCode || "",
-          imageUrl: (s as any).images?.[0] || (s as any).image || (s as any).imageUrl || "",
+          imageUrl:
+            (s as any).images?.[0] ||
+            (s as any).image ||
+            (s as any).imageUrl ||
+            "",
           batches,
         });
       }
@@ -1261,7 +1326,8 @@ export const EstimateQuotationView: React.FC = () => {
   // The quantity shown in each product row is read live: refresh the stock whenever a product dropdown opens, so it
   // reflects what the last saved document changed (the stock endpoint is never cached).
   useEffect(() => {
-    if (openProductDropdownRow === null || openProductDropdownRow === undefined) return;
+    if (openProductDropdownRow === null || openProductDropdownRow === undefined)
+      return;
     let cancelled = false;
     stockApi
       .getStocks({ pagination_required: false, page_size: 100 })
@@ -1335,12 +1401,7 @@ export const EstimateQuotationView: React.FC = () => {
 
       return matchesSearch && matchesStatus && matchesPeriod;
     });
-  }, [
-    liveQuotations,
-    appliedSearch,
-    appliedStatus,
-    appliedPeriod,
-  ]);
+  }, [liveQuotations, appliedSearch, appliedStatus, appliedPeriod]);
 
   // Summary Metrics (List view)
   const metrics = useMemo(() => {
@@ -1389,7 +1450,7 @@ export const EstimateQuotationView: React.FC = () => {
   }, [displayQuotations, safePage, pageSize]);
 
   // Helper to build fresh estimate formData (NO MOCK DATA)
-  const createDefaultFormData = () => {
+  const createDefaultFormData = (defaultNo: string = "") => {
     const initialRows: ExtendedEstimateItem[] = [
       {
         id: `row_${Date.now()}_1`,
@@ -1413,7 +1474,8 @@ export const EstimateQuotationView: React.FC = () => {
       customerEmail: "",
       customerCompany: "",
       billingAddress: "",
-      quotationNo: "",
+      quotationNo: defaultNo,
+      estimationManualNo: "",
       referenceNo: "",
       date: new Date().toISOString().split("T")[0],
       validUntil: new Date(Date.now() + 30 * 86400000)
@@ -1428,7 +1490,8 @@ export const EstimateQuotationView: React.FC = () => {
 
   // Form Initializer (Opens Estimate #...)
   const handleOpenCreateForm = () => {
-    const initialData = createDefaultFormData();
+    const nextPreviewNo = computedPreviewNo;
+    const initialData = createDefaultFormData(nextPreviewNo);
     setValidUptoDays("30");
     const firstTab: EstimateTabItem = {
       id: "tab_1",
@@ -1457,9 +1520,9 @@ export const EstimateQuotationView: React.FC = () => {
 
   // Add New Estimate Tab (clicks + button in tab bar)
   const handleAddNewTab = () => {
-
+    const nextPreviewNo = computedPreviewNo;
     const newTabId = `tab_${Date.now()}`;
-    const newFormData = createDefaultFormData();
+    const newFormData = createDefaultFormData(nextPreviewNo);
     const newTab: EstimateTabItem = {
       id: newTabId,
       title: `New Estimate ${tabs.length + 1}`,
@@ -1584,6 +1647,7 @@ export const EstimateQuotationView: React.FC = () => {
       customerCompany: targetQuot.customerCompany || "",
       billingAddress: targetQuot.billingAddress || "",
       quotationNo: targetQuot.quotationNo || "",
+      estimationManualNo: targetQuot.estimationManualNo || "",
       referenceNo: targetQuot.referenceNo || "",
       date: targetQuot.date || "",
       validUntil: targetQuot.validUntil || "",
@@ -2011,7 +2075,12 @@ export const EstimateQuotationView: React.FC = () => {
   }, [docProductKey]);
 
   const computeStockErrors = (
-    items: Array<{ productId?: string; productName?: string; batch?: string; quantity?: unknown }>,
+    items: Array<{
+      productId?: string;
+      productName?: string;
+      batch?: string;
+      quantity?: unknown;
+    }>,
   ): FieldErrors =>
     validateBatchStock(
       items.map((it) => ({
@@ -2047,7 +2116,12 @@ export const EstimateQuotationView: React.FC = () => {
   const computeConvertErrors = (): FieldErrors => {
     const errs: FieldErrors = {};
     const msg = convertTargetQuotation
-      ? checkDateNotBefore(convertDueDate, convertTargetQuotation.date, "due date", "estimate date")
+      ? checkDateNotBefore(
+          convertDueDate,
+          convertTargetQuotation.date,
+          "due date",
+          "estimate date",
+        )
       : null;
     if (msg) errs.convertDueDate = msg;
     if (convertTargetQuotation) {
@@ -2065,143 +2139,164 @@ export const EstimateQuotationView: React.FC = () => {
   // After the first submit attempt, keep errors in sync with the values (form or convert modal).
   useRevalidateAfterSubmit(
     fe,
-    () => (isConvertModalOpen ? computeConvertErrors() : computeEstimateErrors()),
-    [formData, priceTaxMode, formCalculations, availableProducts, isConvertModalOpen, convertDueDate, convertTargetQuotation, batchStock.version],
+    () =>
+      isConvertModalOpen ? computeConvertErrors() : computeEstimateErrors(),
+    [
+      formData,
+      priceTaxMode,
+      formCalculations,
+      availableProducts,
+      isConvertModalOpen,
+      convertDueDate,
+      convertTargetQuotation,
+      batchStock.version,
+    ],
   );
 
   // Save Estimate via Commerce API
   const handleSaveEstimate = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     return runOnce(async () => {
-    // Re-read batch stock for every distinct product so stock changed elsewhere is checked.
-    await batchStock.refresh(docProductIds);
-    if (!fe.validateAll(computeEstimateErrors())) return;
-    const validItems = formData.items.filter(
-      (it) => it.productName.trim() || Number(it.unitPrice) > 0,
-    );
-    const { rawSubtotal, totalTax, totalDiscount, grandTotal } =
-      formCalculations;
-    const isEditing = Boolean(editingQuotation && editingQuotation.id);
-    const calculatedGstType = determineGstType(formData.stateOfSupply);
+      // Re-read batch stock for every distinct product so stock changed elsewhere is checked.
+      await batchStock.refresh(docProductIds);
+      if (!fe.validateAll(computeEstimateErrors())) return;
+      const validItems = formData.items.filter(
+        (it) => it.productName.trim() || Number(it.unitPrice) > 0,
+      );
+      const { rawSubtotal, totalTax, totalDiscount, grandTotal } =
+        formCalculations;
+      const isEditing = Boolean(editingQuotation && editingQuotation.id);
+      const calculatedGstType = determineGstType(formData.stateOfSupply);
 
-    const payload = mapSaleQuotationToPayload(
-      {
-        quotationNo:
-          isEditing && formData.quotationNo
-            ? formData.quotationNo.trim()
+      const payload = mapSaleQuotationToPayload(
+        {
+          quotationNo:
+            isEditing && formData.quotationNo
+              ? formData.quotationNo.trim()
+              : undefined,
+          estimationManualNo:
+            formData.estimationManualNo && formData.estimationManualNo.trim()
+              ? formData.estimationManualNo.trim()
+              : undefined,
+          referenceNo:
+            formData.referenceNo && formData.referenceNo.trim()
+              ? formData.referenceNo.trim()
+              : undefined,
+          date: formData.date || undefined,
+          validUntil: formData.validUntil || undefined,
+          customerId: formData.customerId || undefined,
+          partyName: formData.partyName.trim(),
+          customerPhone: formData.customerPhone
+            ? formData.customerPhone.trim()
             : undefined,
-        referenceNo:
-          formData.referenceNo && formData.referenceNo.trim()
-            ? formData.referenceNo.trim()
+          customerEmail: formData.customerEmail
+            ? formData.customerEmail.trim()
             : undefined,
-        date: formData.date || undefined,
-        validUntil: formData.validUntil || undefined,
-        customerId: formData.customerId || undefined,
-        partyName: formData.partyName.trim(),
-        customerPhone: formData.customerPhone
-          ? formData.customerPhone.trim()
-          : undefined,
-        customerEmail: formData.customerEmail
-          ? formData.customerEmail.trim()
-          : undefined,
-        customerCompany: formData.customerCompany
-          ? formData.customerCompany.trim()
-          : undefined,
-        billingAddress: formData.billingAddress
-          ? formData.billingAddress.trim()
-          : undefined,
-        items: validItems as any,
-        withGst: validItems.some((it) => Number(it.taxPercent) > 0),
-        gstType: calculatedGstType,
-        notes:
-          formData.notes && formData.notes.trim()
-            ? formData.notes.trim()
+          customerCompany: formData.customerCompany
+            ? formData.customerCompany.trim()
             : undefined,
-        terms:
-          formData.terms && formData.terms.trim()
-            ? formData.terms.trim()
+          billingAddress: formData.billingAddress
+            ? formData.billingAddress.trim()
             : undefined,
-        stateOfSupply:
-          formData.stateOfSupply && formData.stateOfSupply.trim()
-            ? formData.stateOfSupply.trim()
-            : undefined,
-      },
-      !isEditing,
-    );
-
-    setIsSubmitting(true);
-    try {
-      if (editingQuotation && editingQuotation.id) {
-        const res = await quotationApi.updateQuotation(
-          editingQuotation.id,
-          payload,
-        );
-        const mapped = mapApiQuotationToSaleQuotation(res.data);
-        saveQuotation(mapped);
-        toast.success(`Estimate ${mapped.quotationNo} updated successfully!`);
-      } else {
-        const res = await quotationApi.createQuotation(payload);
-        const mapped = mapApiQuotationToSaleQuotation(res.data);
-        // Explicitly guarantee newly created estimate is Open and clean from any conversion state
-        mapped.status = "Open";
-        mapped.convertedToInvoiceNo = undefined;
-        mapped.convertedToId = undefined;
-        mapped.convertedToType = undefined;
-        mapped.convertedAt = undefined;
-        saveQuotation(mapped);
-        toast.success(`Estimate ${mapped.quotationNo} created successfully!`);
-      }
-      // Fresh batch stock for the next form (the estimate itself never changes stock).
-      void batchStock.refresh(docProductIds);
-
-      await fetchQuotations(
-        1,
-        pageSize,
-        appliedSearch,
-        appliedStatus,
-        appliedPeriod,
+          items: validItems as any,
+          withGst: validItems.some((it) => Number(it.taxPercent) > 0),
+          gstType: calculatedGstType,
+          notes:
+            formData.notes && formData.notes.trim()
+              ? formData.notes.trim()
+              : undefined,
+          terms:
+            formData.terms && formData.terms.trim()
+              ? formData.terms.trim()
+              : undefined,
+          stateOfSupply:
+            formData.stateOfSupply && formData.stateOfSupply.trim()
+              ? formData.stateOfSupply.trim()
+              : undefined,
+        },
+        !isEditing,
       );
 
-      if (tabs.length > 1) {
-        const remainingTabs = tabs.filter((t) => t.id !== activeTabId);
-        setTabs(remainingTabs);
-        const nextActive = remainingTabs[remainingTabs.length - 1];
-        setActiveTabId(nextActive.id);
-        setFormData(nextActive.formData);
-        setEditingQuotation(nextActive.editingQuotation || null);
-        if (nextActive.enableRoundOff !== undefined)
-          setEnableRoundOff(nextActive.enableRoundOff);
-        if (nextActive.manualRoundOff !== undefined)
-          setManualRoundOff(nextActive.manualRoundOff);
-        if (nextActive.columnSettings !== undefined)
-          setColumnSettings(nextActive.columnSettings);
-      } else {
-        setViewMode("list");
-      }
-    } catch (err: any) {
-      console.error("Save estimate error:", err);
-      const rowIdx = formData.items
-        .map((it, i) => (it.productName.trim() || Number(it.unitPrice) > 0 ? i : -1))
-        .filter((i) => i >= 0);
-      const apiFieldErrors = mapApiFieldsToForm(extractApiFieldErrors(err), rowIdx);
-      if (Object.keys(apiFieldErrors).length > 0) {
-        fe.merge(apiFieldErrors);
-      } else {
-        toast.error(getApiErrorMessage(err, "Failed to save estimate"));
-      }
-      // The server rejected the data (4xx): keep the form open with the entered values,
-      // do not fall back to a local-only save.
-      const httpStatus = err?.response?.status ?? err?.status;
-      if (
-        Object.keys(apiFieldErrors).length > 0 ||
-        (typeof httpStatus === "number" && httpStatus >= 400 && httpStatus < 500)
-      ) {
+      setIsSubmitting(true);
+      try {
+        if (editingQuotation && editingQuotation.id) {
+          const res = await quotationApi.updateQuotation(
+            editingQuotation.id,
+            payload,
+          );
+          const mapped = mapApiQuotationToSaleQuotation(res.data);
+          saveQuotation(mapped);
+          toast.success(`Estimate ${mapped.quotationNo} updated successfully!`);
+        } else {
+          const res = await quotationApi.createQuotation(payload);
+          const mapped = mapApiQuotationToSaleQuotation(res.data);
+          // Explicitly guarantee newly created estimate is Open and clean from any conversion state
+          mapped.status = "Open";
+          mapped.convertedToInvoiceNo = undefined;
+          mapped.convertedToId = undefined;
+          mapped.convertedToType = undefined;
+          mapped.convertedAt = undefined;
+          saveQuotation(mapped);
+          toast.success(`Estimate ${mapped.quotationNo} created successfully!`);
+        }
+        // Fresh batch stock for the next form (the estimate itself never changes stock).
+        void batchStock.refresh(docProductIds);
+
+        await fetchQuotations(
+          1,
+          pageSize,
+          appliedSearch,
+          appliedStatus,
+          appliedPeriod,
+        );
+
+        if (tabs.length > 1) {
+          const remainingTabs = tabs.filter((t) => t.id !== activeTabId);
+          setTabs(remainingTabs);
+          const nextActive = remainingTabs[remainingTabs.length - 1];
+          setActiveTabId(nextActive.id);
+          setFormData(nextActive.formData);
+          setEditingQuotation(nextActive.editingQuotation || null);
+          if (nextActive.enableRoundOff !== undefined)
+            setEnableRoundOff(nextActive.enableRoundOff);
+          if (nextActive.manualRoundOff !== undefined)
+            setManualRoundOff(nextActive.manualRoundOff);
+          if (nextActive.columnSettings !== undefined)
+            setColumnSettings(nextActive.columnSettings);
+        } else {
+          setViewMode("list");
+        }
+      } catch (err: any) {
+        console.error("Save estimate error:", err);
+        const rowIdx = formData.items
+          .map((it, i) =>
+            it.productName.trim() || Number(it.unitPrice) > 0 ? i : -1,
+          )
+          .filter((i) => i >= 0);
+        const apiFieldErrors = mapApiFieldsToForm(
+          extractApiFieldErrors(err),
+          rowIdx,
+        );
+        if (Object.keys(apiFieldErrors).length > 0) {
+          fe.merge(apiFieldErrors);
+        } else {
+          toast.error(getApiErrorMessage(err, "Failed to save estimate"));
+        }
+        // The server rejected the data (4xx): keep the form open with the entered values,
+        // do not fall back to a local-only save.
+        const httpStatus = err?.response?.status ?? err?.status;
+        if (
+          Object.keys(apiFieldErrors).length > 0 ||
+          (typeof httpStatus === "number" &&
+            httpStatus >= 400 &&
+            httpStatus < 500)
+        ) {
+          return;
+        }
         return;
+      } finally {
+        setIsSubmitting(false);
       }
-      return;
-    } finally {
-      setIsSubmitting(false);
-    }
     });
   };
 
@@ -2289,7 +2384,8 @@ export const EstimateQuotationView: React.FC = () => {
 
   // Preconditions shared by every conversion action. Returns a friendly message or null.
   const getConvertBlocker = (quot: SaleQuotation): string | null => {
-    if (!quot?.id) return "This estimate could not be found. Please refresh the list.";
+    if (!quot?.id)
+      return "This estimate could not be found. Please refresh the list.";
     if (quot.status === "Cancelled") {
       return `Estimate ${quot.quotationNo} is cancelled and cannot be converted.`;
     }
@@ -2351,521 +2447,548 @@ export const EstimateQuotationView: React.FC = () => {
 
   const handleExecuteConvert = () =>
     runOnce(async () => {
-    if (!convertTargetQuotation) return;
-    const quot = convertTargetQuotation;
-    const blocker = getConvertBlocker(quot);
-    if (blocker) {
-      toast.error(blocker);
-      return;
-    }
-    if (!getQuotationStages(quot).availableStages.some((st) => st.type === convertType)) {
-      toast.info(`Estimate ${quot.quotationNo} has already been converted to this document type.`);
-      return;
-    }
-    // Converted lines keep productId / batch / quantity: check them against fresh batch stock first.
-    await batchStock.refresh(
-      (quot.items || []).map((it) => it.productId).filter((id): id is string => !!id),
-    );
-    if (!fe.validateAll(computeConvertErrors())) return;
-    setIsConverting(true);
+      if (!convertTargetQuotation) return;
+      const quot = convertTargetQuotation;
+      const blocker = getConvertBlocker(quot);
+      if (blocker) {
+        toast.error(blocker);
+        return;
+      }
+      if (
+        !getQuotationStages(quot).availableStages.some(
+          (st) => st.type === convertType,
+        )
+      ) {
+        toast.info(
+          `Estimate ${quot.quotationNo} has already been converted to this document type.`,
+        );
+        return;
+      }
+      // Converted lines keep productId / batch / quantity: check them against fresh batch stock first.
+      await batchStock.refresh(
+        (quot.items || [])
+          .map((it) => it.productId)
+          .filter((id): id is string => !!id),
+      );
+      if (!fe.validateAll(computeConvertErrors())) return;
+      setIsConverting(true);
 
-    try {
-      if (convertType === "Invoice") {
+      try {
+        if (convertType === "Invoice") {
+          setIsConvertModalOpen(false);
+          setConvertTargetQuotation(null);
+          navigate("/sale-management/sales/sale", {
+            state: {
+              convertFrom: {
+                sourceType: "Estimate",
+                sourceId: quot.id,
+                sourceNo: quot.quotationNo,
+                customerId: quot.customerId,
+                customerCode:
+                  quot.customerCode ||
+                  customers.find((c) => c.id === quot.customerId)
+                    ?.customerCode ||
+                  undefined,
+                customerName: quot.partyName,
+                customerCompany: quot.customerCompany,
+                customerPhone: quot.customerPhone,
+                customerEmail: quot.customerEmail,
+                billingAddress: quot.billingAddress,
+                shippingAddress: quot.shippingAddress || quot.billingAddress,
+                items: (quot.items || []).map((it) => ({
+                  id: it.id,
+                  productId: it.productId,
+                  productName: it.productName,
+                  sku: it.sku,
+                  batch: it.batch,
+                  quantity: Number(it.quantity) || 1,
+                  unitPrice: Number(it.unitPrice) || 0,
+                  purchasePrice: Number(
+                    (it as any).purchasePrice ?? (it as any).cost ?? 0,
+                  ),
+                  salesPrice: Number(it.unitPrice) || 0,
+                  discountPercent: Number(it.discountPercent) || 0,
+                  taxPercent: Number(it.taxPercent) || 0,
+                  total: Number(it.total) || 0,
+                })),
+                subtotal: quot.subtotal,
+                withGst: quot.withGst !== false,
+                gstType: quot.gstType || "intra_state",
+                cgst: quot.cgst || 0,
+                sgst: quot.sgst || 0,
+                igst: quot.igst || 0,
+                discount: quot.discount || 0,
+                overallDiscount: quot.discount || 0,
+                totalDiscount: quot.discount || 0,
+                taxAmount: quot.taxAmount || 0,
+                grandTotal: quot.amount,
+                paidAmount: 0,
+                roundMode: (quot as any).roundMode || "none",
+                paymentMethod: "Bank Transfer",
+                paymentTerms: "Net 15 Days",
+                dueDate: convertDueDate || quot.validUntil,
+                notes: `Converted from Estimate ${quot.quotationNo}. ${quot.notes || ""}`,
+              },
+            },
+          });
+          return;
+        }
+
+        let apiConvertedDocNo = "";
+        let apiConvertedDocId = "";
+        let didBackendConvertCreateDoc = false;
+        try {
+          const res = await quotationApi.convertQuotation(quot.id, {
+            targetType:
+              convertType === "Challan"
+                ? ("DeliveryChallan" as any)
+                : convertType,
+            dueDate: convertDueDate || undefined,
+          });
+          apiConvertedDocNo =
+            res.data?.convertedTo?.documentNo ||
+            (res.data as any)?.convertedTo?.proformaNo ||
+            (res.data as any)?.convertedTo?.orderNo ||
+            (res.data as any)?.convertedTo?.challanNo ||
+            (res.data as any)?.document?.proformaNo ||
+            (res.data as any)?.document?.orderNo ||
+            (res.data as any)?.document?.challanNo ||
+            (res.data as any)?.document?.documentNo ||
+            (res.data as any)?.proforma?.proformaNo ||
+            (res.data as any)?.order?.orderNo ||
+            (res.data as any)?.challan?.challanNo ||
+            (res.data as any)?.source?.convertedToInvoiceNo ||
+            (res.data as any)?.proformaNo ||
+            (res.data as any)?.orderNo ||
+            (res.data as any)?.challanNo ||
+            (res.data as any)?.documentNo ||
+            "";
+          apiConvertedDocId =
+            res.data?.convertedTo?.id ||
+            (res.data as any)?.document?.id ||
+            (res.data as any)?.proforma?.id ||
+            (res.data as any)?.order?.id ||
+            (res.data as any)?.challan?.id ||
+            (res.data as any)?.source?.convertedToId ||
+            (res.data as any)?.id ||
+            "";
+          if (apiConvertedDocNo || apiConvertedDocId || res?.success) {
+            didBackendConvertCreateDoc = true;
+          }
+        } catch (apiErr) {
+          console.warn("Backend convertQuotation returned notice:", apiErr);
+          if (/stock|insufficient/i.test(getApiErrorMessage(apiErr, ""))) {
+            // Backend rejected for stock: show it inline in the modal and do not create anything locally.
+            fe.merge({
+              convertStock:
+                "Not enough stock is available in one of the batches. Please reduce the quantity on the estimate first.",
+            });
+            void batchStock.refresh(
+              (quot.items || [])
+                .map((it) => it.productId)
+                .filter((id): id is string => !!id),
+            );
+            return;
+          }
+          // Any other failure: nothing was converted. Say so and stop. (It used to carry on, create a separate document
+          // through the normal create API and mark the estimate Converted on screen only.)
+          toast.error(
+            getApiErrorMessage(
+              apiErr,
+              `Failed to convert quotation to ${convertType}. Nothing was converted.`,
+            ),
+          );
+          return;
+        }
+
+        // Converted only when the server confirmed it.
+        if (!didBackendConvertCreateDoc) {
+          toast.error(
+            "The server did not confirm the conversion, so the estimate was left as it was.",
+          );
+          return;
+        }
+
+        if (convertType === "Proforma") {
+          if (didBackendConvertCreateDoc && !apiConvertedDocNo) {
+            try {
+              const latestRes = await commerceProformaApi.getProformas({
+                page_no: 1,
+                page_size: 5,
+                sortOrder: "desc",
+              });
+              const latestList = Array.isArray(latestRes?.data)
+                ? latestRes.data
+                : [];
+              const matched = latestList.find(
+                (p) =>
+                  (p.sourceId && p.sourceId === quot.id) ||
+                  (p.referenceNo && p.referenceNo === quot.quotationNo) ||
+                  ((p.customerId === quot.customerId ||
+                    p.partyName === quot.partyName) &&
+                    Math.abs(
+                      Number(p.amount ?? p.grandTotal ?? 0) - quot.amount,
+                    ) < 1),
+              );
+              if (matched) {
+                apiConvertedDocNo =
+                  matched.proformaNo || (matched as any).documentNo || "";
+                apiConvertedDocId = matched.id || apiConvertedDocId;
+              }
+            } catch (lookupErr) {
+              console.warn("Proforma lookup after convert notice:", lookupErr);
+            }
+          }
+          const finalDocNo = apiConvertedDocNo || "";
+          const newProforma: SaleProformaInvoice = {
+            id: apiConvertedDocId || `pro_conv_${Date.now()}`,
+            proformaNo: finalDocNo,
+            referenceNo: quot.quotationNo,
+            date: new Date().toISOString().split("T")[0],
+            validUntil:
+              convertDueDate ||
+              quot.validUntil ||
+              new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0],
+            customerId: quot.customerId,
+            customerCode:
+              quot.customerCode ||
+              customers.find((c) => c.id === quot.customerId)?.customerCode ||
+              undefined,
+            partyName: quot.partyName,
+            customerCompany: quot.customerCompany,
+            customerPhone: quot.customerPhone,
+            customerEmail: quot.customerEmail,
+            billingAddress: quot.billingAddress,
+            shippingAddress: quot.shippingAddress || quot.billingAddress,
+            stateOfSupply: quot.stateOfSupply || "33-Tamil Nadu",
+            items: quot.items.map((it, idx) => ({
+              id: `row_${idx}_${Date.now()}`,
+              productId: it.productId,
+              productName: it.productName,
+              sku: it.sku,
+              batch: it.batch,
+              quantity: it.quantity,
+              unitPrice: it.unitPrice,
+              taxPercent: it.taxPercent || 0,
+              discountPercent: it.discountPercent || 0,
+              total: it.total,
+              unit: (it as any).unit || "PCS",
+            })),
+            subtotal: quot.subtotal,
+            withGst: quot.withGst,
+            gstType: quot.gstType,
+            cgst: quot.cgst,
+            sgst: quot.sgst,
+            igst: quot.igst,
+            discount: quot.discount || 0,
+            taxAmount: quot.taxAmount || 0,
+            roundOff: quot.roundOff || 0,
+            amount: quot.amount,
+            balance: quot.amount,
+            status: "Open",
+            notes: `Converted from Estimate ${quot.quotationNo}. ${quot.notes || ""}`,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+
+          // Only call createProforma if convertQuotation did NOT already create the Proforma on the backend
+          if (!didBackendConvertCreateDoc) {
+            try {
+              const payload = mapSaleProformaToPayload(newProforma, true);
+              const pRes = await commerceProformaApi.createProforma(payload);
+              if (pRes?.data?.id) newProforma.id = pRes.data.id;
+              const backendNo =
+                pRes?.data?.proformaNo || (pRes?.data as any)?.documentNo;
+              if (backendNo) newProforma.proformaNo = backendNo;
+            } catch (createErr) {
+              console.warn("createProforma fallback:", createErr);
+            }
+          }
+
+          syncConvertedProformaToStorage(newProforma);
+          recordDocumentConversion({
+            fromType: "Estimate",
+            fromId: quot.id,
+            fromNo: quot.quotationNo,
+            toType: "Proforma",
+            toId: newProforma.id,
+            toNo: newProforma.proformaNo,
+            partyName: quot.partyName,
+            customerId: quot.customerId,
+            customerCode: newProforma.customerCode,
+            grandTotal: quot.amount,
+          });
+
+          syncQuotationStatusInStorage(quot.id, "Converted", {
+            type: "Proforma",
+            documentNo: newProforma.proformaNo,
+            id: newProforma.id,
+          });
+          updateQuotationStatus(quot.id, "Converted");
+          store.dispatch(
+            baseApi.util.invalidateTags([
+              { type: "Estimation", id: "LIST" },
+              { type: "ProformaInvoice", id: "LIST" },
+            ]),
+          );
+          toast.success(
+            `Quotation ${quot.quotationNo} successfully converted to Proforma Invoice${newProforma.proformaNo ? ` ${newProforma.proformaNo}` : ""}!`,
+          );
+        } else if (convertType === "Order") {
+          const finalDocNo = apiConvertedDocNo || "";
+          const newOrder: SaleOrderRecord = {
+            id: apiConvertedDocId || `order_conv_${Date.now()}`,
+            orderNo: finalDocNo,
+            referenceNo: quot.quotationNo,
+            orderDate: new Date().toISOString().split("T")[0],
+            dueDate:
+              convertDueDate ||
+              quot.validUntil ||
+              new Date(Date.now() + 15 * 86400000).toISOString().split("T")[0],
+            customerId: quot.customerId,
+            customerCode:
+              quot.customerCode ||
+              customers.find((c) => c.id === quot.customerId)?.customerCode ||
+              undefined,
+            partyName: quot.partyName,
+            customerCompany: quot.customerCompany,
+            customerPhone: quot.customerPhone,
+            customerEmail: quot.customerEmail,
+            billingAddress: quot.billingAddress,
+            shippingAddress: quot.shippingAddress || quot.billingAddress,
+            stateOfSupply: quot.stateOfSupply || "33-Tamil Nadu",
+            paymentType: "Credit",
+            items: quot.items.map((it, idx) => ({
+              id: `row_${idx}_${Date.now()}`,
+              productId: it.productId,
+              productName: it.productName,
+              sku: it.sku,
+              batch: it.batch,
+              quantity: it.quantity,
+              unitPrice: it.unitPrice,
+              taxPercent: it.taxPercent || 0,
+              discountPercent: it.discountPercent || 0,
+              total: it.total,
+              unit: (it as any).unit || "PCS",
+            })),
+            subtotal: quot.subtotal,
+            withGst: quot.withGst,
+            gstType: quot.gstType,
+            cgst: quot.cgst,
+            sgst: quot.sgst,
+            igst: quot.igst,
+            discount: quot.discount || 0,
+            taxAmount: quot.taxAmount || 0,
+            roundOff: quot.roundOff || 0,
+            amount: quot.amount,
+            balance: quot.amount,
+            advanceAmount: 0,
+            status: "Open",
+            notes: `Converted from Estimate ${quot.quotationNo}. ${quot.notes || ""}`,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+
+          // Only call createOrder if convertQuotation did NOT already create the Sale Order on the backend
+          if (!didBackendConvertCreateDoc) {
+            try {
+              const payload = mapSaleOrderRecordToPayload(newOrder, true);
+              const oRes = await commerceSaleOrderApi.createOrder(payload);
+              if (oRes?.data?.id) newOrder.id = oRes.data.id;
+              const backendNo =
+                oRes?.data?.orderNo || (oRes?.data as any)?.documentNo;
+              if (backendNo) newOrder.orderNo = backendNo;
+            } catch (createErr) {
+              console.warn("createOrder fallback:", createErr);
+            }
+          }
+
+          syncConvertedOrderToStorage(newOrder);
+          recordDocumentConversion({
+            fromType: "Estimate",
+            fromId: quot.id,
+            fromNo: quot.quotationNo,
+            toType: "Order",
+            toId: newOrder.id,
+            toNo: newOrder.orderNo,
+            partyName: quot.partyName,
+            customerId: quot.customerId,
+            customerCode: newOrder.customerCode,
+            grandTotal: quot.amount,
+          });
+
+          syncQuotationStatusInStorage(quot.id, "Converted", {
+            type: "Order",
+            documentNo: newOrder.orderNo,
+            id: newOrder.id,
+          });
+          updateQuotationStatus(quot.id, "Converted");
+          store.dispatch(
+            baseApi.util.invalidateTags([
+              { type: "Estimation", id: "LIST" },
+              { type: "SaleOrder", id: "LIST" },
+            ]),
+          );
+          toast.success(
+            `Quotation ${quot.quotationNo} successfully converted to Sale Order${newOrder.orderNo ? ` ${newOrder.orderNo}` : ""}!`,
+          );
+        } else if (convertType === "Challan") {
+          const finalDocNo = apiConvertedDocNo || "";
+
+          let resolvedCustomerId = quot.customerId;
+          if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
+            const found = customers.find(
+              (c) =>
+                c.id === quot.customerId ||
+                c.name.toLowerCase() === quot.partyName.trim().toLowerCase(),
+            );
+            if (found && UUID_REGEX.test(found.id)) {
+              resolvedCustomerId = found.id;
+            }
+          }
+          // Never attach a different customer: block when the estimate's customer cannot be resolved.
+          if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
+            fe.merge({
+              _form:
+                "Please choose the customer from the list. Edit the estimate and select a customer before converting.",
+            });
+            return;
+          }
+
+          const newChallan: DeliveryChallanRecord = {
+            id: apiConvertedDocId || `dc_conv_${Date.now()}`,
+            challanNo: finalDocNo,
+            referenceNo: quot.quotationNo,
+            invoiceDate: new Date().toISOString().split("T")[0],
+            dueDate:
+              convertDueDate ||
+              quot.validUntil ||
+              new Date(Date.now() + 15 * 86400000).toISOString().split("T")[0],
+            customerId: resolvedCustomerId || quot.customerId,
+            customerCode:
+              quot.customerCode ||
+              customers.find(
+                (c) => c.id === (resolvedCustomerId || quot.customerId),
+              )?.customerCode ||
+              undefined,
+            partyName: quot.partyName,
+            customerCompany: quot.customerCompany,
+            customerPhone: quot.customerPhone,
+            customerEmail: quot.customerEmail,
+            billingAddress: quot.billingAddress,
+            shippingAddress: quot.shippingAddress || quot.billingAddress,
+            stateOfSupply: quot.stateOfSupply || "33-Tamil Nadu",
+            items: quot.items.map((it, idx) => ({
+              id: `row_${idx}_${Date.now()}`,
+              productId: it.productId,
+              productName: it.productName,
+              sku: it.sku,
+              batch: it.batch,
+              quantity: it.quantity,
+              unitPrice: it.unitPrice,
+              taxPercent: it.taxPercent || 0,
+              discountPercent: it.discountPercent || 0,
+              total: it.total,
+              unit: (it as any).unit || "PCS",
+            })),
+            subtotal: quot.subtotal,
+            withGst: quot.withGst,
+            gstType: quot.gstType,
+            cgst: quot.cgst,
+            sgst: quot.sgst,
+            igst: quot.igst,
+            discount: quot.discount || 0,
+            taxAmount: quot.taxAmount || 0,
+            roundOff: quot.roundOff || 0,
+            amount: quot.amount,
+            balance: quot.amount,
+            status: "Open",
+            notes: `Converted from Estimate ${quot.quotationNo}. ${quot.notes || ""}`,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+
+          // Only call createChallan if convertQuotation did NOT already create the Delivery Challan on the backend
+          if (
+            !didBackendConvertCreateDoc &&
+            resolvedCustomerId &&
+            newChallan.items &&
+            newChallan.items.length > 0
+          ) {
+            try {
+              const payload = mapDeliveryChallanRecordToPayload(
+                newChallan,
+                true,
+              );
+              payload.customerId = resolvedCustomerId;
+              const cRes =
+                await commerceDeliveryChallanApi.createChallan(payload);
+              if (cRes?.data?.id) newChallan.id = cRes.data.id;
+              const backendNo =
+                cRes?.data?.challanNo || (cRes?.data as any)?.documentNo;
+              if (backendNo) newChallan.challanNo = backendNo;
+            } catch (createErr) {
+              console.warn("createChallan fallback:", createErr);
+            }
+          }
+
+          syncConvertedChallanToStorage(newChallan);
+          recordDocumentConversion({
+            fromType: "Estimate",
+            fromId: quot.id,
+            fromNo: quot.quotationNo,
+            toType: "Challan",
+            toId: newChallan.id,
+            toNo: newChallan.challanNo,
+            partyName: quot.partyName,
+            customerId: quot.customerId,
+            customerCode: newChallan.customerCode,
+            grandTotal: quot.amount,
+          });
+
+          syncQuotationStatusInStorage(quot.id, "Converted", {
+            type: "Challan",
+            documentNo: newChallan.challanNo,
+            id: newChallan.id,
+          });
+          updateQuotationStatus(quot.id, "Converted");
+          store.dispatch(
+            baseApi.util.invalidateTags([
+              { type: "Estimation", id: "LIST" },
+              { type: "DeliveryChallan", id: "LIST" },
+            ]),
+          );
+          toast.success(
+            `Quotation ${quot.quotationNo} successfully converted to Delivery Challan${newChallan.challanNo ? ` ${newChallan.challanNo}` : ""}!`,
+          );
+        }
+
+        void batchStock.refresh(
+          (quot.items || [])
+            .map((it) => it.productId)
+            .filter((id): id is string => !!id),
+        );
         setIsConvertModalOpen(false);
         setConvertTargetQuotation(null);
-        navigate("/sale-management/sales/sale", {
-          state: {
-            convertFrom: {
-              sourceType: "Estimate",
-              sourceId: quot.id,
-              sourceNo: quot.quotationNo,
-              customerId: quot.customerId,
-              customerCode:
-                quot.customerCode ||
-                customers.find((c) => c.id === quot.customerId)?.customerCode ||
-                undefined,
-              customerName: quot.partyName,
-              customerCompany: quot.customerCompany,
-              customerPhone: quot.customerPhone,
-              customerEmail: quot.customerEmail,
-              billingAddress: quot.billingAddress,
-              shippingAddress: quot.shippingAddress || quot.billingAddress,
-              items: (quot.items || []).map((it) => ({
-                id: it.id,
-                productId: it.productId,
-                productName: it.productName,
-                sku: it.sku,
-                batch: it.batch,
-                quantity: Number(it.quantity) || 1,
-                unitPrice: Number(it.unitPrice) || 0,
-                purchasePrice: Number(
-                  (it as any).purchasePrice ?? (it as any).cost ?? 0,
-                ),
-                salesPrice: Number(it.unitPrice) || 0,
-                discountPercent: Number(it.discountPercent) || 0,
-                taxPercent: Number(it.taxPercent) || 0,
-                total: Number(it.total) || 0,
-              })),
-              subtotal: quot.subtotal,
-              withGst: quot.withGst !== false,
-              gstType: quot.gstType || "intra_state",
-              cgst: quot.cgst || 0,
-              sgst: quot.sgst || 0,
-              igst: quot.igst || 0,
-              discount: quot.discount || 0,
-              overallDiscount: quot.discount || 0,
-              totalDiscount: quot.discount || 0,
-              taxAmount: quot.taxAmount || 0,
-              grandTotal: quot.amount,
-              paidAmount: 0,
-              roundMode: (quot as any).roundMode || "none",
-              paymentMethod: "Bank Transfer",
-              paymentTerms: "Net 15 Days",
-              dueDate: convertDueDate || quot.validUntil,
-              notes: `Converted from Estimate ${quot.quotationNo}. ${quot.notes || ""}`,
-            },
-          },
-        });
-        return;
+        await fetchQuotations(
+          page,
+          pageSize,
+          appliedSearch,
+          appliedStatus,
+          appliedPeriod,
+        );
+      } catch (err: any) {
+        console.error("Convert API call error:", err);
+        // Keep the modal open so the user can retry; entered values are preserved.
+        toast.error(
+          getApiErrorMessage(
+            err,
+            `Failed to convert quotation to ${convertType}`,
+          ),
+        );
+      } finally {
+        setIsConverting(false);
       }
-
-      let apiConvertedDocNo = "";
-      let apiConvertedDocId = "";
-      let didBackendConvertCreateDoc = false;
-      try {
-        const res = await quotationApi.convertQuotation(quot.id, {
-          targetType:
-            convertType === "Challan"
-              ? ("DeliveryChallan" as any)
-              : convertType,
-          dueDate: convertDueDate || undefined,
-        });
-        apiConvertedDocNo =
-          res.data?.convertedTo?.documentNo ||
-          (res.data as any)?.convertedTo?.proformaNo ||
-          (res.data as any)?.convertedTo?.orderNo ||
-          (res.data as any)?.convertedTo?.challanNo ||
-          (res.data as any)?.document?.proformaNo ||
-          (res.data as any)?.document?.orderNo ||
-          (res.data as any)?.document?.challanNo ||
-          (res.data as any)?.document?.documentNo ||
-          (res.data as any)?.proforma?.proformaNo ||
-          (res.data as any)?.order?.orderNo ||
-          (res.data as any)?.challan?.challanNo ||
-          (res.data as any)?.source?.convertedToInvoiceNo ||
-          (res.data as any)?.proformaNo ||
-          (res.data as any)?.orderNo ||
-          (res.data as any)?.challanNo ||
-          (res.data as any)?.documentNo ||
-          "";
-        apiConvertedDocId =
-          res.data?.convertedTo?.id ||
-          (res.data as any)?.document?.id ||
-          (res.data as any)?.proforma?.id ||
-          (res.data as any)?.order?.id ||
-          (res.data as any)?.challan?.id ||
-          (res.data as any)?.source?.convertedToId ||
-          (res.data as any)?.id ||
-          "";
-        if (apiConvertedDocNo || apiConvertedDocId || res?.success) {
-          didBackendConvertCreateDoc = true;
-        }
-      } catch (apiErr) {
-        console.warn("Backend convertQuotation returned notice:", apiErr);
-        if (/stock|insufficient/i.test(getApiErrorMessage(apiErr, ""))) {
-          // Backend rejected for stock: show it inline in the modal and do not create anything locally.
-          fe.merge({
-            convertStock:
-              "Not enough stock is available in one of the batches. Please reduce the quantity on the estimate first.",
-          });
-          void batchStock.refresh(
-            (quot.items || []).map((it) => it.productId).filter((id): id is string => !!id),
-          );
-          return;
-        }
-        // Any other failure: nothing was converted. Say so and stop. (It used to carry on, create a separate document
-        // through the normal create API and mark the estimate Converted on screen only.)
-        toast.error(getApiErrorMessage(apiErr, `Failed to convert quotation to ${convertType}. Nothing was converted.`));
-        return;
-      }
-
-      // Converted only when the server confirmed it.
-      if (!didBackendConvertCreateDoc) {
-        toast.error("The server did not confirm the conversion, so the estimate was left as it was.");
-        return;
-      }
-
-      if (convertType === "Proforma") {
-        if (didBackendConvertCreateDoc && !apiConvertedDocNo) {
-          try {
-            const latestRes = await commerceProformaApi.getProformas({
-              page_no: 1,
-              page_size: 5,
-              sortOrder: "desc",
-            });
-            const latestList = Array.isArray(latestRes?.data)
-              ? latestRes.data
-              : [];
-            const matched = latestList.find(
-              (p) =>
-                (p.sourceId && p.sourceId === quot.id) ||
-                (p.referenceNo && p.referenceNo === quot.quotationNo) ||
-                ((p.customerId === quot.customerId ||
-                  p.partyName === quot.partyName) &&
-                  Math.abs(Number(p.amount ?? p.grandTotal ?? 0) - quot.amount) <
-                    1),
-            );
-            if (matched) {
-              apiConvertedDocNo =
-                matched.proformaNo || (matched as any).documentNo || "";
-              apiConvertedDocId = matched.id || apiConvertedDocId;
-            }
-          } catch (lookupErr) {
-            console.warn("Proforma lookup after convert notice:", lookupErr);
-          }
-        }
-        const finalDocNo = apiConvertedDocNo || "";
-        const newProforma: SaleProformaInvoice = {
-          id: apiConvertedDocId || `pro_conv_${Date.now()}`,
-          proformaNo: finalDocNo,
-          referenceNo: quot.quotationNo,
-          date: new Date().toISOString().split("T")[0],
-          validUntil:
-            convertDueDate ||
-            quot.validUntil ||
-            new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0],
-          customerId: quot.customerId,
-          customerCode:
-            quot.customerCode ||
-            customers.find((c) => c.id === quot.customerId)?.customerCode ||
-            undefined,
-          partyName: quot.partyName,
-          customerCompany: quot.customerCompany,
-          customerPhone: quot.customerPhone,
-          customerEmail: quot.customerEmail,
-          billingAddress: quot.billingAddress,
-          shippingAddress: quot.shippingAddress || quot.billingAddress,
-          stateOfSupply: quot.stateOfSupply || "33-Tamil Nadu",
-          items: quot.items.map((it, idx) => ({
-            id: `row_${idx}_${Date.now()}`,
-            productId: it.productId,
-            productName: it.productName,
-            sku: it.sku,
-            batch: it.batch,
-            quantity: it.quantity,
-            unitPrice: it.unitPrice,
-            taxPercent: it.taxPercent || 0,
-            discountPercent: it.discountPercent || 0,
-            total: it.total,
-            unit: (it as any).unit || "PCS",
-          })),
-          subtotal: quot.subtotal,
-          withGst: quot.withGst,
-          gstType: quot.gstType,
-          cgst: quot.cgst,
-          sgst: quot.sgst,
-          igst: quot.igst,
-          discount: quot.discount || 0,
-          taxAmount: quot.taxAmount || 0,
-          roundOff: quot.roundOff || 0,
-          amount: quot.amount,
-          balance: quot.amount,
-          status: "Open",
-          notes: `Converted from Estimate ${quot.quotationNo}. ${quot.notes || ""}`,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        // Only call createProforma if convertQuotation did NOT already create the Proforma on the backend
-        if (!didBackendConvertCreateDoc) {
-          try {
-            const payload = mapSaleProformaToPayload(newProforma, true);
-            const pRes = await commerceProformaApi.createProforma(payload);
-            if (pRes?.data?.id) newProforma.id = pRes.data.id;
-            const backendNo =
-              pRes?.data?.proformaNo || (pRes?.data as any)?.documentNo;
-            if (backendNo) newProforma.proformaNo = backendNo;
-          } catch (createErr) {
-            console.warn("createProforma fallback:", createErr);
-          }
-        }
-
-        syncConvertedProformaToStorage(newProforma);
-        recordDocumentConversion({
-          fromType: "Estimate",
-          fromId: quot.id,
-          fromNo: quot.quotationNo,
-          toType: "Proforma",
-          toId: newProforma.id,
-          toNo: newProforma.proformaNo,
-          partyName: quot.partyName,
-          customerId: quot.customerId,
-          customerCode: newProforma.customerCode,
-          grandTotal: quot.amount,
-        });
-
-        syncQuotationStatusInStorage(quot.id, "Converted", {
-          type: "Proforma",
-          documentNo: newProforma.proformaNo,
-          id: newProforma.id,
-        });
-        updateQuotationStatus(quot.id, "Converted");
-        store.dispatch(
-          baseApi.util.invalidateTags([
-            { type: "Estimation", id: "LIST" },
-            { type: "ProformaInvoice", id: "LIST" },
-          ]),
-        );
-        toast.success(
-          `Quotation ${quot.quotationNo} successfully converted to Proforma Invoice${newProforma.proformaNo ? ` ${newProforma.proformaNo}` : ''}!`,
-        );
-      } else if (convertType === "Order") {
-        const finalDocNo = apiConvertedDocNo || "";
-        const newOrder: SaleOrderRecord = {
-          id: apiConvertedDocId || `order_conv_${Date.now()}`,
-          orderNo: finalDocNo,
-          referenceNo: quot.quotationNo,
-          orderDate: new Date().toISOString().split("T")[0],
-          dueDate:
-            convertDueDate ||
-            quot.validUntil ||
-            new Date(Date.now() + 15 * 86400000).toISOString().split("T")[0],
-          customerId: quot.customerId,
-          customerCode:
-            quot.customerCode ||
-            customers.find((c) => c.id === quot.customerId)?.customerCode ||
-            undefined,
-          partyName: quot.partyName,
-          customerCompany: quot.customerCompany,
-          customerPhone: quot.customerPhone,
-          customerEmail: quot.customerEmail,
-          billingAddress: quot.billingAddress,
-          shippingAddress: quot.shippingAddress || quot.billingAddress,
-          stateOfSupply: quot.stateOfSupply || "33-Tamil Nadu",
-          paymentType: "Credit",
-          items: quot.items.map((it, idx) => ({
-            id: `row_${idx}_${Date.now()}`,
-            productId: it.productId,
-            productName: it.productName,
-            sku: it.sku,
-            batch: it.batch,
-            quantity: it.quantity,
-            unitPrice: it.unitPrice,
-            taxPercent: it.taxPercent || 0,
-            discountPercent: it.discountPercent || 0,
-            total: it.total,
-            unit: (it as any).unit || "PCS",
-          })),
-          subtotal: quot.subtotal,
-          withGst: quot.withGst,
-          gstType: quot.gstType,
-          cgst: quot.cgst,
-          sgst: quot.sgst,
-          igst: quot.igst,
-          discount: quot.discount || 0,
-          taxAmount: quot.taxAmount || 0,
-          roundOff: quot.roundOff || 0,
-          amount: quot.amount,
-          balance: quot.amount,
-          advanceAmount: 0,
-          status: "Open",
-          notes: `Converted from Estimate ${quot.quotationNo}. ${quot.notes || ""}`,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        // Only call createOrder if convertQuotation did NOT already create the Sale Order on the backend
-        if (!didBackendConvertCreateDoc) {
-          try {
-            const payload = mapSaleOrderRecordToPayload(newOrder, true);
-            const oRes = await commerceSaleOrderApi.createOrder(payload);
-            if (oRes?.data?.id) newOrder.id = oRes.data.id;
-            const backendNo =
-              oRes?.data?.orderNo || (oRes?.data as any)?.documentNo;
-            if (backendNo) newOrder.orderNo = backendNo;
-          } catch (createErr) {
-            console.warn("createOrder fallback:", createErr);
-          }
-        }
-
-        syncConvertedOrderToStorage(newOrder);
-        recordDocumentConversion({
-          fromType: "Estimate",
-          fromId: quot.id,
-          fromNo: quot.quotationNo,
-          toType: "Order",
-          toId: newOrder.id,
-          toNo: newOrder.orderNo,
-          partyName: quot.partyName,
-          customerId: quot.customerId,
-          customerCode: newOrder.customerCode,
-          grandTotal: quot.amount,
-        });
-
-        syncQuotationStatusInStorage(quot.id, "Converted", {
-          type: "Order",
-          documentNo: newOrder.orderNo,
-          id: newOrder.id,
-        });
-        updateQuotationStatus(quot.id, "Converted");
-        store.dispatch(
-          baseApi.util.invalidateTags([
-            { type: "Estimation", id: "LIST" },
-            { type: "SaleOrder", id: "LIST" },
-          ]),
-        );
-        toast.success(
-          `Quotation ${quot.quotationNo} successfully converted to Sale Order${newOrder.orderNo ? ` ${newOrder.orderNo}` : ''}!`,
-        );
-      } else if (convertType === "Challan") {
-        const finalDocNo = apiConvertedDocNo || "";
-
-        let resolvedCustomerId = quot.customerId;
-        if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
-          const found = customers.find(
-            (c) =>
-              c.id === quot.customerId ||
-              c.name.toLowerCase() === quot.partyName.trim().toLowerCase(),
-          );
-          if (found && UUID_REGEX.test(found.id)) {
-            resolvedCustomerId = found.id;
-          }
-        }
-        // Never attach a different customer: block when the estimate's customer cannot be resolved.
-        if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
-          fe.merge({
-            _form:
-              "Please choose the customer from the list. Edit the estimate and select a customer before converting.",
-          });
-          return;
-        }
-
-        const newChallan: DeliveryChallanRecord = {
-          id: apiConvertedDocId || `dc_conv_${Date.now()}`,
-          challanNo: finalDocNo,
-          referenceNo: quot.quotationNo,
-          invoiceDate: new Date().toISOString().split("T")[0],
-          dueDate:
-            convertDueDate ||
-            quot.validUntil ||
-            new Date(Date.now() + 15 * 86400000).toISOString().split("T")[0],
-          customerId: resolvedCustomerId || quot.customerId,
-          customerCode:
-            quot.customerCode ||
-            customers.find(
-              (c) => c.id === (resolvedCustomerId || quot.customerId),
-            )?.customerCode ||
-            undefined,
-          partyName: quot.partyName,
-          customerCompany: quot.customerCompany,
-          customerPhone: quot.customerPhone,
-          customerEmail: quot.customerEmail,
-          billingAddress: quot.billingAddress,
-          shippingAddress: quot.shippingAddress || quot.billingAddress,
-          stateOfSupply: quot.stateOfSupply || "33-Tamil Nadu",
-          items: quot.items.map((it, idx) => ({
-            id: `row_${idx}_${Date.now()}`,
-            productId: it.productId,
-            productName: it.productName,
-            sku: it.sku,
-            batch: it.batch,
-            quantity: it.quantity,
-            unitPrice: it.unitPrice,
-            taxPercent: it.taxPercent || 0,
-            discountPercent: it.discountPercent || 0,
-            total: it.total,
-            unit: (it as any).unit || "PCS",
-          })),
-          subtotal: quot.subtotal,
-          withGst: quot.withGst,
-          gstType: quot.gstType,
-          cgst: quot.cgst,
-          sgst: quot.sgst,
-          igst: quot.igst,
-          discount: quot.discount || 0,
-          taxAmount: quot.taxAmount || 0,
-          roundOff: quot.roundOff || 0,
-          amount: quot.amount,
-          balance: quot.amount,
-          status: "Open",
-          notes: `Converted from Estimate ${quot.quotationNo}. ${quot.notes || ""}`,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        // Only call createChallan if convertQuotation did NOT already create the Delivery Challan on the backend
-        if (
-          !didBackendConvertCreateDoc &&
-          resolvedCustomerId &&
-          newChallan.items &&
-          newChallan.items.length > 0
-        ) {
-          try {
-            const payload = mapDeliveryChallanRecordToPayload(newChallan, true);
-            payload.customerId = resolvedCustomerId;
-            const cRes =
-              await commerceDeliveryChallanApi.createChallan(payload);
-            if (cRes?.data?.id) newChallan.id = cRes.data.id;
-            const backendNo =
-              cRes?.data?.challanNo || (cRes?.data as any)?.documentNo;
-            if (backendNo) newChallan.challanNo = backendNo;
-          } catch (createErr) {
-            console.warn("createChallan fallback:", createErr);
-          }
-        }
-
-        syncConvertedChallanToStorage(newChallan);
-        recordDocumentConversion({
-          fromType: "Estimate",
-          fromId: quot.id,
-          fromNo: quot.quotationNo,
-          toType: "Challan",
-          toId: newChallan.id,
-          toNo: newChallan.challanNo,
-          partyName: quot.partyName,
-          customerId: quot.customerId,
-          customerCode: newChallan.customerCode,
-          grandTotal: quot.amount,
-        });
-
-        syncQuotationStatusInStorage(quot.id, "Converted", {
-          type: "Challan",
-          documentNo: newChallan.challanNo,
-          id: newChallan.id,
-        });
-        updateQuotationStatus(quot.id, "Converted");
-        store.dispatch(
-          baseApi.util.invalidateTags([
-            { type: "Estimation", id: "LIST" },
-            { type: "DeliveryChallan", id: "LIST" },
-          ]),
-        );
-        toast.success(
-          `Quotation ${quot.quotationNo} successfully converted to Delivery Challan${newChallan.challanNo ? ` ${newChallan.challanNo}` : ''}!`,
-        );
-      }
-
-      void batchStock.refresh(
-        (quot.items || []).map((it) => it.productId).filter((id): id is string => !!id),
-      );
-      setIsConvertModalOpen(false);
-      setConvertTargetQuotation(null);
-      await fetchQuotations(
-        page,
-        pageSize,
-        appliedSearch,
-        appliedStatus,
-        appliedPeriod,
-      );
-    } catch (err: any) {
-      console.error("Convert API call error:", err);
-      // Keep the modal open so the user can retry; entered values are preserved.
-      toast.error(
-        getApiErrorMessage(err, `Failed to convert quotation to ${convertType}`),
-      );
-    } finally {
-      setIsConverting(false);
-    }
     });
 
   // Delete via Live API with confirmation modal
@@ -2878,72 +3001,77 @@ export const EstimateQuotationView: React.FC = () => {
 
   const handleConfirmDeleteQuotation = () =>
     runOnce(async () => {
-    if (!deleteTargetQuotation || !deleteTargetQuotation.id) {
-      toast.error("Please select an estimate to delete.");
-      return;
-    }
-    setIsDeletingQuotation(true);
-    setDeleteQuotationError(null);
-    try {
-      await quotationApi.deleteQuotation(deleteTargetQuotation.id);
-      toast.success(
-        `Quotation "${deleteTargetQuotation.quotationNo}" deleted successfully.`,
-      );
-      deleteQuotation(deleteTargetQuotation.id);
-      setIsDeleteModalOpen(false);
-      setDeleteTargetQuotation(null);
-      await fetchQuotations(
-        page,
-        pageSize,
-        appliedSearch,
-        appliedStatus,
-        appliedPeriod,
-      );
-    } catch (err: any) {
-      const errMsg = getApiErrorMessage(err, "Failed to delete quotation.");
-      setDeleteQuotationError(errMsg);
-      toast.error(errMsg);
-    } finally {
-      setIsDeletingQuotation(false);
-    }
+      if (!deleteTargetQuotation || !deleteTargetQuotation.id) {
+        toast.error("Please select an estimate to delete.");
+        return;
+      }
+      setIsDeletingQuotation(true);
+      setDeleteQuotationError(null);
+      try {
+        await quotationApi.deleteQuotation(deleteTargetQuotation.id);
+        toast.success(
+          `Quotation "${deleteTargetQuotation.quotationNo}" deleted successfully.`,
+        );
+        deleteQuotation(deleteTargetQuotation.id);
+        setIsDeleteModalOpen(false);
+        setDeleteTargetQuotation(null);
+        await fetchQuotations(
+          page,
+          pageSize,
+          appliedSearch,
+          appliedStatus,
+          appliedPeriod,
+        );
+      } catch (err: any) {
+        const errMsg = getApiErrorMessage(err, "Failed to delete quotation.");
+        setDeleteQuotationError(errMsg);
+        toast.error(errMsg);
+      } finally {
+        setIsDeletingQuotation(false);
+      }
     });
 
   // Duplicate via Live API
   const handleDuplicate = (item: SaleQuotation) =>
     runOnce(async () => {
-    setActiveDropdownId(null);
-    if (!item?.id || !(item.items || []).some((it) => Number(it.quantity) > 0)) {
-      toast.error("This estimate has no items to duplicate.");
-      return;
-    }
-    try {
-      const duplicatedPayload = mapSaleQuotationToPayload(
-        {
-          ...item,
-          quotationNo: undefined, // Let server auto-generate unique number
-          referenceNo: undefined, // Server auto-generates
-          date: new Date().toISOString().split("T")[0],
-          validUntil: new Date(Date.now() + 30 * 86400000)
-            .toISOString()
-            .split("T")[0],
-          status: "Open",
-        },
-        true,
-      );
-      const res = await quotationApi.createQuotation(duplicatedPayload);
-      const mapped = mapApiQuotationToSaleQuotation(res.data);
-      saveQuotation(mapped);
-      toast.success(`Duplicated as new Estimate ${mapped.quotationNo}!`);
-      await fetchQuotations(
-        1,
-        pageSize,
-        appliedSearch,
-        appliedStatus,
-        appliedPeriod,
-      );
-    } catch (err: any) {
-      toast.error(getApiErrorMessage(err, "Failed to duplicate quotation on server"));
-    }
+      setActiveDropdownId(null);
+      if (
+        !item?.id ||
+        !(item.items || []).some((it) => Number(it.quantity) > 0)
+      ) {
+        toast.error("This estimate has no items to duplicate.");
+        return;
+      }
+      try {
+        const duplicatedPayload = mapSaleQuotationToPayload(
+          {
+            ...item,
+            quotationNo: undefined, // Let server auto-generate unique number
+            referenceNo: undefined, // Server auto-generates
+            date: new Date().toISOString().split("T")[0],
+            validUntil: new Date(Date.now() + 30 * 86400000)
+              .toISOString()
+              .split("T")[0],
+            status: "Open",
+          },
+          true,
+        );
+        const res = await quotationApi.createQuotation(duplicatedPayload);
+        const mapped = mapApiQuotationToSaleQuotation(res.data);
+        saveQuotation(mapped);
+        toast.success(`Duplicated as new Estimate ${mapped.quotationNo}!`);
+        await fetchQuotations(
+          1,
+          pageSize,
+          appliedSearch,
+          appliedStatus,
+          appliedPeriod,
+        );
+      } catch (err: any) {
+        toast.error(
+          getApiErrorMessage(err, "Failed to duplicate quotation on server"),
+        );
+      }
     });
 
   // Cancel / re-open an estimate (PATCH status). Guarded against double clicks.
@@ -2953,15 +3081,21 @@ export const EstimateQuotationView: React.FC = () => {
   ) =>
     runOnce(async () => {
       if (!item?.id) {
-        toast.error("This estimate could not be found. Please refresh the list.");
+        toast.error(
+          "This estimate could not be found. Please refresh the list.",
+        );
         return;
       }
       if (status === "Cancelled" && item.status !== "Open") {
-        toast.error(`Estimate ${item.quotationNo} is not open, so it cannot be cancelled.`);
+        toast.error(
+          `Estimate ${item.quotationNo} is not open, so it cannot be cancelled.`,
+        );
         return;
       }
       if (status === "Open" && item.status !== "Cancelled") {
-        toast.error(`Estimate ${item.quotationNo} is not cancelled, so it cannot be reopened.`);
+        toast.error(
+          `Estimate ${item.quotationNo} is not cancelled, so it cannot be reopened.`,
+        );
         return;
       }
       try {
@@ -3064,7 +3198,7 @@ export const EstimateQuotationView: React.FC = () => {
       filename: `Estimates_Quotations_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Estimates & Quotations",
       title: "YAA CREATIONS CRM - ESTIMATE & QUOTATION REPORT",
-      subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${displayQuotations.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
+      subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${displayQuotations.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
       columns: [
         {
           header: "Estimate No.",
@@ -3243,56 +3377,63 @@ export const EstimateQuotationView: React.FC = () => {
 
   const mapQuotationToDocumentPrintOptions = (
     quot: SaleQuotation,
-  ): DocumentPrintOptions => ({
-    docTypeTitle: "ESTIMATE / QUOTATION",
-    docNo: quot.quotationNo,
-    docDate: isoToDdmmyyyy(quot.date),
-    dueDate: quot.validUntil ? isoToDdmmyyyy(quot.validUntil) : undefined,
-    status: quot.status,
-    statusColor:
-      (quot.status as string) === "Accepted" || quot.status === "Converted"
-        ? "emerald"
-        : quot.status === "Open"
-          ? "amber"
-          : quot.status === "Expired"
-            ? "rose"
-            : "slate",
-    referenceNo: quot.referenceNo,
-    companyName: companyProfile.companyName,
-    companySubtitle: companyProfile.companySubtitle,
-    companyAddress: companyProfile.companyAddress,
-    companyGstin: companyProfile.companyGstin,
-    companyPhone: companyProfile.companyPhone,
-    companyEmail: companyProfile.companyEmail,
-    partyTitle: "Estimate For (Party Details)",
-    partyName: quot.partyName,
-    partyCompany: quot.customerCompany,
-    partyPhone: quot.customerPhone,
-    partyEmail: quot.customerEmail,
-    partyAddress: quot.billingAddress,
-    extraMeta: [
-      ...(quot.referenceNo ? [{ label: "Ref #", value: quot.referenceNo }] : []),
-      { label: "Quotation Status", value: quot.status },
-    ],
-    items: (quot.items || []).map((it) => ({
-      name: it.productName,
-      sku: it.sku,
-      quantity: it.quantity,
-      unitPrice: it.unitPrice,
-      taxPercent: it.taxPercent,
-      total: it.total,
-    })),
-    subtotal: quot.subtotal,
-    discount: quot.discount,
-    tax: {
-      taxAmount: quot.taxAmount,
-    },
-    grandTotal: quot.amount,
-    balance: quot.balance,
-    notes: quot.notes,
-    terms: quot.terms,
-    primarySignatoryLabel: "Authorized Signatory",
-  });
+  ): DocumentPrintOptions => {
+    const isGstActive =
+      quot.withGst !== false && Number(quot.taxAmount || 0) > 0;
+    return {
+      docTypeTitle: "ESTIMATE / QUOTATION",
+      docNo: quot.quotationNo,
+      docDate: isoToDdmmyyyy(quot.date),
+      dueDate: quot.validUntil ? isoToDdmmyyyy(quot.validUntil) : undefined,
+      status: quot.status,
+      statusColor:
+        (quot.status as string) === "Accepted" || quot.status === "Converted"
+          ? "emerald"
+          : quot.status === "Open"
+            ? "amber"
+            : quot.status === "Expired"
+              ? "rose"
+              : "slate",
+      referenceNo: quot.referenceNo,
+      companyName: companyProfile.companyName,
+      companySubtitle: companyProfile.companySubtitle,
+      companyAddress: companyProfile.companyAddress,
+      companyGstin: companyProfile.companyGstin,
+      companyPhone: companyProfile.companyPhone,
+      companyEmail: companyProfile.companyEmail,
+      partyTitle: "Estimate For (Party Details)",
+      partyName: quot.partyName,
+      partyCompany: quot.customerCompany,
+      partyPhone: quot.customerPhone,
+      partyEmail: quot.customerEmail,
+      partyAddress: quot.billingAddress,
+      extraMeta: [
+        ...(quot.referenceNo
+          ? [{ label: "Ref #", value: quot.referenceNo }]
+          : []),
+        { label: "Quotation Status", value: quot.status },
+      ],
+      items: (quot.items || []).map((it) => ({
+        name: it.productName,
+        sku: it.sku,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        taxPercent: isGstActive ? it.taxPercent || 0 : 0,
+        total: it.total,
+      })),
+      subtotal: quot.subtotal,
+      discount: quot.discount,
+      tax: {
+        withGst: isGstActive,
+        taxAmount: quot.taxAmount,
+      },
+      grandTotal: quot.amount,
+      balance: quot.balance,
+      notes: quot.notes,
+      terms: quot.terms,
+      primarySignatoryLabel: "Authorized Signatory",
+    };
+  };
 
   const handleDownloadQuotation = async (quot: SaleQuotation) => {
     if (isDownloadingPdf) return;
@@ -3327,6 +3468,9 @@ export const EstimateQuotationView: React.FC = () => {
       toast.error("Unable to open print preview. Please allow popups.");
       return;
     }
+
+    const isGstActive =
+      quot.withGst !== false && Number(quot.taxAmount || 0) > 0;
 
     printWindow.document.write(`
       <!DOCTYPE html>
@@ -3413,7 +3557,7 @@ export const EstimateQuotationView: React.FC = () => {
                 <th>Item Description</th>
                 <th class="text-center" style="width: 70px;">Qty</th>
                 <th class="text-right" style="width: 100px;">Rate (₹)</th>
-                <th class="text-right" style="width: 80px;">GST %</th>
+                ${isGstActive ? '<th class="text-right" style="width: 80px;">GST %</th>' : ""}
                 <th class="text-right" style="width: 110px;">Amount (₹)</th>
               </tr>
             </thead>
@@ -3429,7 +3573,7 @@ export const EstimateQuotationView: React.FC = () => {
                   </td>
                   <td class="text-center">${item.quantity}</td>
                   <td class="text-right">₹${Number(item.unitPrice).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-                  <td class="text-right">${item.taxPercent || 0}%</td>
+                  ${isGstActive ? `<td class="text-right">${item.taxPercent || 0}%</td>` : ""}
                   <td class="text-right font-bold">₹${Number(item.total).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
                 </tr>
               `,
@@ -3583,13 +3727,6 @@ export const EstimateQuotationView: React.FC = () => {
                       {editingQuotation.quotationNo}
                     </span>
                   </>
-                ) : formData.quotationNo ? (
-                  <>
-                    <span>New Quotation</span>
-                    <span className="font-extrabold text-[#33077C] font-mono text-xs sm:text-[13px] bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200/80 shadow-2xs">
-                      {formData.quotationNo}
-                    </span>
-                  </>
                 ) : (
                   "Create a new customer estimation / quotation"
                 )}
@@ -3615,39 +3752,53 @@ export const EstimateQuotationView: React.FC = () => {
               <div className="lg:col-span-6 xl:col-span-5" ref={partySelectRef}>
                 <FormLabel required>Customer</FormLabel>
                 <div {...fieldAttr("customerId")}>
-                <CustomerSearchableSelect
-                  value={formData.customerId}
-                  allowNone
-                  size="lg"
-                  onChange={(val, cust) => {
-                    fe.clearError("customerId");
-                    setFormData((prev) => ({
-                      ...prev,
-                      customerId: val,
-                      partyName: cust ? cust.name : (val ? prev.partyName : ""),
-                      customerCompany: cust ? (cust.company || "") : (val ? prev.customerCompany : ""),
-                      customerPhone: cust ? (cust.phone || "") : (val ? prev.customerPhone : ""),
-                      customerEmail: cust ? (cust.email || "") : (val ? prev.customerEmail : ""),
-                      billingAddress: cust ? (cust.billingAddress || cust.address || "") : (val ? prev.billingAddress : ""),
-                    }));
-                  }}
-                  selectedCustomer={
-                    formData.customerId
-                      ? {
-                          id: formData.customerId,
-                          name: formData.partyName,
-                          company: formData.customerCompany,
-                          phone: formData.customerPhone,
-                        }
-                      : null
-                  }
-                  onAddNewCustomer={() => setIsAddCustomerModalOpen(true)}
-                  placeholder="Select or search customer..."
-                />
+                  <CustomerSearchableSelect
+                    value={formData.customerId}
+                    allowNone
+                    size="lg"
+                    onChange={(val, cust) => {
+                      fe.clearError("customerId");
+                      setFormData((prev) => ({
+                        ...prev,
+                        customerId: val,
+                        partyName: cust ? cust.name : val ? prev.partyName : "",
+                        customerCompany: cust
+                          ? cust.company || ""
+                          : val
+                            ? prev.customerCompany
+                            : "",
+                        customerPhone: cust
+                          ? cust.phone || ""
+                          : val
+                            ? prev.customerPhone
+                            : "",
+                        customerEmail: cust
+                          ? cust.email || ""
+                          : val
+                            ? prev.customerEmail
+                            : "",
+                        billingAddress: cust
+                          ? cust.billingAddress || cust.address || ""
+                          : val
+                            ? prev.billingAddress
+                            : "",
+                      }));
+                    }}
+                    selectedCustomer={
+                      formData.customerId
+                        ? {
+                            id: formData.customerId,
+                            name: formData.partyName,
+                            company: formData.customerCompany,
+                            phone: formData.customerPhone,
+                          }
+                        : null
+                    }
+                    onAddNewCustomer={() => setIsAddCustomerModalOpen(true)}
+                    placeholder="Select or search customer..."
+                  />
                 </div>
                 <FormError message={fe.errors.customerId} />
-
-                
 
                 {/* Party Details Preview Pill */}
                 {formData.partyName && (
@@ -3672,34 +3823,37 @@ export const EstimateQuotationView: React.FC = () => {
 
               {/* Right Column: Estimation No, Invoice Date, State of supply, Valid Upto */}
               <div className="lg:col-span-6 xl:col-span-7 flex flex-col items-end gap-3 text-xs">
-                {/* Reference No. (server-generated, read-only) */}
-                <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
-                  <span className="font-medium text-slate-600 w-24 sm:w-auto text-right">
-                    Reference No.
-                  </span>
-                  <div className="w-40 sm:w-48 h-9 px-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center text-xs sm:text-[13px] font-semibold text-slate-600 font-mono">
-                    <span>
-                      {editingQuotation?.referenceNo ||
-                        formData.referenceNo ||
-                        "Auto-generated on save"}
-                    </span>
-                  </div>
-                </div>
-
                 {/* Estimation No. (Bold Display) */}
                 <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
                   <span className="font-bold text-slate-700 w-24 sm:w-auto text-right">
-                    Estimation No.
+                    Estimation S.No.
                   </span>
                   <div className="w-40 sm:w-48 h-9 px-3 bg-purple-50/70 border border-purple-200/90 rounded-lg flex items-center justify-between text-xs sm:text-[13px] font-extrabold text-[#33077C] font-mono shadow-2xs">
                     <span>
                       {editingQuotation?.quotationNo ||
                         formData.quotationNo ||
-                        "Auto-generated on save"}
+                        computedPreviewNo}
                     </span>
                   </div>
                 </div>
-
+                {/* Estimation No (manual entry) */}
+                <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
+                  <span className="font-medium text-slate-600 w-24 sm:w-auto text-right">
+                    Estimation No
+                  </span>
+                  <input
+                    type="text"
+                    value={formData.estimationManualNo}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        estimationManualNo: e.target.value,
+                      })
+                    }
+                    placeholder="Enter Estimation No"
+                    className="w-40 sm:w-48 h-9 px-3 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors"
+                  />
+                </div>
                 {/* Estimation Date */}
                 <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
                   <span className="font-medium text-slate-600 w-24 sm:w-auto text-right">
@@ -3733,7 +3887,6 @@ export const EstimateQuotationView: React.FC = () => {
                   </div>
                 </div>
                 <FormError message={fe.errors.date} />
-
                 {/* State of Supply */}
                 <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
                   <span className="font-medium text-slate-600 w-24 sm:w-auto text-right">
@@ -3756,7 +3909,6 @@ export const EstimateQuotationView: React.FC = () => {
                     ))}
                   </select>
                 </div>
-
                 {/* Valid Upto */}
                 <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
                   <span className="font-medium text-slate-600 w-24 sm:w-auto text-right">
@@ -3768,8 +3920,7 @@ export const EstimateQuotationView: React.FC = () => {
                       const days = e.target.value;
                       setValidUptoDays(days);
                       const base =
-                        formData.date ||
-                        new Date().toISOString().split("T")[0];
+                        formData.date || new Date().toISOString().split("T")[0];
                       const d = new Date(base);
                       d.setDate(d.getDate() + Number(days));
                       const computedValidUntil = d.toISOString().split("T")[0];
@@ -4053,9 +4204,12 @@ export const EstimateQuotationView: React.FC = () => {
                                   clearTimeout(productSearchTimerRef.current);
                                 }
                                 if (val.trim().length >= 1) {
-                                  productSearchTimerRef.current = setTimeout(() => {
-                                    fetchLiveProducts(val.trim());
-                                  }, 300);
+                                  productSearchTimerRef.current = setTimeout(
+                                    () => {
+                                      fetchLiveProducts(val.trim());
+                                    },
+                                    300,
+                                  );
                                 }
                               }}
                               placeholder="Type or select product item..."
@@ -4071,7 +4225,9 @@ export const EstimateQuotationView: React.FC = () => {
                                     setOpenProductDropdownRow(null);
                                   } else {
                                     setOpenProductDropdownRow(idx);
-                                    setProductSearchQuery(row.productName || "");
+                                    setProductSearchQuery(
+                                      row.productName || "",
+                                    );
                                     if (liveProducts.length === 0) {
                                       fetchLiveProducts();
                                     }
@@ -4108,12 +4264,15 @@ export const EstimateQuotationView: React.FC = () => {
                                       const val = e.target.value;
                                       setProductSearchQuery(val);
                                       if (productSearchTimerRef.current) {
-                                        clearTimeout(productSearchTimerRef.current);
+                                        clearTimeout(
+                                          productSearchTimerRef.current,
+                                        );
                                       }
                                       if (val.trim().length >= 1) {
-                                        productSearchTimerRef.current = setTimeout(() => {
-                                          fetchLiveProducts(val.trim());
-                                        }, 300);
+                                        productSearchTimerRef.current =
+                                          setTimeout(() => {
+                                            fetchLiveProducts(val.trim());
+                                          }, 300);
                                       }
                                     }}
                                     autoFocus
@@ -4122,7 +4281,7 @@ export const EstimateQuotationView: React.FC = () => {
                                   {productSearchQuery && (
                                     <button
                                       type="button"
-                                      onClick={() => setProductSearchQuery('')}
+                                      onClick={() => setProductSearchQuery("")}
                                       className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
                                     >
                                       <X className="w-3.5 h-3.5" />
@@ -4164,14 +4323,17 @@ export const EstimateQuotationView: React.FC = () => {
                                   }`}
                                 >
                                   <div className="flex items-center gap-2">
-                                    <span className="text-slate-400 italic">None / Clear Product</span>
+                                    <span className="text-slate-400 italic">
+                                      None / Clear Product
+                                    </span>
                                   </div>
                                   {!row.productName && (
                                     <Check className="w-4 h-4 text-[#33077C]" />
                                   )}
                                 </div>
 
-                                {isLoadingProducts && matchingProducts.length === 0 ? (
+                                {isLoadingProducts &&
+                                matchingProducts.length === 0 ? (
                                   <div className="py-6 text-center text-slate-400 text-xs flex items-center justify-center gap-2">
                                     <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
                                     <span>Loading products...</span>
@@ -4182,7 +4344,8 @@ export const EstimateQuotationView: React.FC = () => {
                                       No products found
                                     </p>
                                     <p className="text-[11px] text-slate-400 mt-0.5">
-                                      Try typing a different name, category, or SKU
+                                      Try typing a different name, category, or
+                                      SKU
                                     </p>
                                     {productSearchQuery.trim() && (
                                       <button
@@ -4196,7 +4359,9 @@ export const EstimateQuotationView: React.FC = () => {
                                         className="mt-2.5 inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-[#33077C] text-white text-[11px] font-bold hover:bg-[#4309A2] transition-colors"
                                       >
                                         <Plus className="w-3 h-3" />
-                                        <span>Add "{productSearchQuery.trim()}"</span>
+                                        <span>
+                                          Add "{productSearchQuery.trim()}"
+                                        </span>
                                       </button>
                                     )}
                                   </div>
@@ -4204,12 +4369,16 @@ export const EstimateQuotationView: React.FC = () => {
                                   matchingProducts.map((p) => {
                                     const isSelected =
                                       row.productId === p.productId ||
-                                      (row.productName && row.productName === p.productName);
-                                    const imgUrl = (p as any).imageUrl || (p as any).image;
+                                      (row.productName &&
+                                        row.productName === p.productName);
+                                    const imgUrl =
+                                      (p as any).imageUrl || (p as any).image;
                                     return (
                                       <div
                                         key={p.productId || (p as any).id}
-                                        onClick={() => handleSelectProduct(idx, p)}
+                                        onClick={() =>
+                                          handleSelectProduct(idx, p)
+                                        }
                                         className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-3 text-xs transition-colors cursor-pointer text-left ${
                                           isSelected
                                             ? "bg-purple-50 text-[#33077C] font-semibold border border-purple-200/60"
@@ -4226,7 +4395,12 @@ export const EstimateQuotationView: React.FC = () => {
                                                 className="w-full h-full object-cover"
                                               />
                                             ) : (
-                                              <span>{getInitials(p.productName, "PR")}</span>
+                                              <span>
+                                                {getInitials(
+                                                  p.productName,
+                                                  "PR",
+                                                )}
+                                              </span>
                                             )}
                                           </div>
 
@@ -4246,9 +4420,15 @@ export const EstimateQuotationView: React.FC = () => {
                                             </div>
                                             <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5 flex-wrap">
                                               <span className="font-mono text-slate-600">
-                                                SKU: {p.sku || (p as any).productCode || "PRD"}
+                                                SKU:{" "}
+                                                {p.sku ||
+                                                  (p as any).productCode ||
+                                                  "PRD"}
                                               </span>
-                                              <ProductStockLabel qty={p.stockQty} unit={p.unit} />
+                                              <ProductStockLabel
+                                                qty={p.stockQty}
+                                                unit={p.unit}
+                                              />
                                               {p.hsnCode && (
                                                 <span className="text-slate-400 font-mono text-[10px]">
                                                   • HSN: {p.hsnCode}
@@ -4260,7 +4440,10 @@ export const EstimateQuotationView: React.FC = () => {
 
                                         <div className="flex items-center gap-2 shrink-0">
                                           <span className="font-bold text-[#33077C] text-xs">
-                                            ₹{Number(p.unitPrice || 0).toLocaleString("en-IN")}
+                                            ₹
+                                            {Number(
+                                              p.unitPrice || 0,
+                                            ).toLocaleString("en-IN")}
                                           </span>
                                           {isSelected && (
                                             <Check className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
@@ -4274,7 +4457,9 @@ export const EstimateQuotationView: React.FC = () => {
                             </div>
                           )}
                         </div>
-                        <FormError message={fe.errors[`items.${idx}.product`]} />
+                        <FormError
+                          message={fe.errors[`items.${idx}.product`]}
+                        />
                       </td>
 
                       {/* ITEM CATEGORY (optional column) */}
@@ -4364,10 +4549,14 @@ export const EstimateQuotationView: React.FC = () => {
                             "BAT";
                           // Option list: the selected product's own batches. The stock figure
                           // shown comes only from the backend batch-stock hook.
-                          const hookBatches = batchStock.getBatches(row.productId);
+                          const hookBatches = batchStock.getBatches(
+                            row.productId,
+                          );
                           const batches: Array<{ batchNo: string }> =
                             hookBatches.length > 0
-                              ? hookBatches.map((hb) => ({ batchNo: hb.batchNo }))
+                              ? hookBatches.map((hb) => ({
+                                  batchNo: hb.batchNo,
+                                }))
                               : matchedProduct?.batches &&
                                   matchedProduct.batches.length > 0
                                 ? matchedProduct.batches
@@ -4438,7 +4627,11 @@ export const EstimateQuotationView: React.FC = () => {
                                       "batch",
                                       e.target.value,
                                     );
-                                    handleRowChange(idx, "isCustomBatch", false);
+                                    handleRowChange(
+                                      idx,
+                                      "isCustomBatch",
+                                      false,
+                                    );
                                   }
                                 }}
                                 className="w-full h-8 px-2 bg-purple-50/70 hover:bg-purple-100/70 focus:bg-white text-[#33077C] border border-purple-200 focus:border-[#33077C] rounded-lg text-xs font-bold font-mono outline-none cursor-pointer transition-colors"
@@ -4452,7 +4645,9 @@ export const EstimateQuotationView: React.FC = () => {
                                         row.productId,
                                         b.batchNo,
                                       );
-                                      return av === null ? "" : `(${av} in stock)`;
+                                      return av === null
+                                        ? ""
+                                        : `(${av} in stock)`;
                                     })()}
                                   </option>
                                 ))}
@@ -4581,7 +4776,11 @@ export const EstimateQuotationView: React.FC = () => {
                               }}
                               className={`w-full h-8 px-1.5 text-center bg-transparent hover:bg-slate-50 focus:bg-white border ${fe.errors[`items.${idx}.discountPercent`] ? "border-rose-400" : "border-transparent"} focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none transition-colors`}
                             />
-                            <FormError message={fe.errors[`items.${idx}.discountPercent`]} />
+                            <FormError
+                              message={
+                                fe.errors[`items.${idx}.discountPercent`]
+                              }
+                            />
                           </td>
 
                           <td className="p-1.5 border-r border-slate-200 w-24">
@@ -4607,7 +4806,9 @@ export const EstimateQuotationView: React.FC = () => {
                               }}
                               className={`w-full h-8 px-2 text-right bg-transparent hover:bg-slate-50 focus:bg-white border ${fe.errors[`items.${idx}.discountAmount`] ? "border-rose-400" : "border-transparent"} focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none transition-colors`}
                             />
-                            <FormError message={fe.errors[`items.${idx}.discountAmount`]} />
+                            <FormError
+                              message={fe.errors[`items.${idx}.discountAmount`]}
+                            />
                           </td>
                         </>
                       )}
@@ -4633,7 +4834,9 @@ export const EstimateQuotationView: React.FC = () => {
                             </option>
                           ))}
                         </select>
-                        <FormError message={fe.errors[`items.${idx}.taxPercent`]} />
+                        <FormError
+                          message={fe.errors[`items.${idx}.taxPercent`]}
+                        />
                       </td>
 
                       {/* TAX AMOUNT */}
@@ -5060,8 +5263,7 @@ export const EstimateQuotationView: React.FC = () => {
                 productId: newProduct.id,
                 productName: newProduct.productName || newProduct.name,
                 sku: newProduct.productCode || newProduct.sku,
-                unitPrice:
-                  newProduct.salePrice || newProduct.unitPrice || 0,
+                unitPrice: newProduct.salePrice || newProduct.unitPrice || 0,
                 batches: newProduct.batchNo
                   ? [{ batchNo: newProduct.batchNo }]
                   : [],
@@ -5310,11 +5512,19 @@ export const EstimateQuotationView: React.FC = () => {
             {/* Table Purple Themed Header with Standard Icons */}
             <CommonTableHead
               columns={[
-                { label: "ESTIMATE NO.", align: "center", minWidth: "140px" },
+                { label: "ESTIMATE S.NO.", align: "center", minWidth: "140px" },
                 { label: "CUSTOMER NAME", align: "left", minWidth: "200px" },
                 { label: "STATUS", align: "center", minWidth: "110px" },
-                { label: "CREATED DATE & TIME", align: "left", minWidth: "140px" },
-                { label: "CONVERTED DATE & TIME", align: "left", minWidth: "140px" },
+                {
+                  label: "CREATED DATE & TIME",
+                  align: "left",
+                  minWidth: "140px",
+                },
+                {
+                  label: "CONVERTED DATE & TIME",
+                  align: "left",
+                  minWidth: "140px",
+                },
                 { label: "AMOUNT", align: "right", minWidth: "120px" },
                 { label: "BALANCE", align: "right", minWidth: "120px" },
                 { label: "ACTIONS", align: "center", minWidth: "190px" },
@@ -5507,119 +5717,129 @@ export const EstimateQuotationView: React.FC = () => {
                         <div className="flex items-center justify-center gap-1.5">
                           {/* Convert Action Button slot with fixed width */}
                           <div className="w-[104px] shrink-0 flex items-center justify-center">
-                          {itemStages.isFullyConverted ||
-                          itemStages.availableCount === 0 ? (
-                            <button
-                              type="button"
-                              disabled
-                              aria-disabled="true"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                              }}
-                              title={`Quotation has been converted (${item.convertedToInvoiceNo || "Converted"})`}
-                              className="text-xs sm:text-[13px] font-semibold text-emerald-700 bg-emerald-50/90 border border-emerald-200/90 px-2 py-1 rounded cursor-not-allowed select-none flex items-center justify-center gap-1 opacity-80"
-                            >
-                              <Check className="w-3 h-3 text-emerald-600 stroke-[2.5]" />
-                              <span>Converted</span>
-                            </button>
-                          ) : (
-                            <div className="quotation-convert-dropdown-container relative inline-block text-left">
+                            {itemStages.isFullyConverted ||
+                            itemStages.availableCount === 0 ? (
                               <button
                                 type="button"
+                                disabled
+                                aria-disabled="true"
                                 onClick={(e) => {
+                                  e.preventDefault();
                                   e.stopPropagation();
-                                  if (isConvertOpen) {
-                                    setActiveConvertDropdownId(null);
-                                    setConvertDropdownPos(null);
-                                  } else {
-                                    const rect =
-                                      e.currentTarget.getBoundingClientRect();
-                                    setConvertDropdownPos({
-                                      top: rect.bottom + 4,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                    setActiveConvertDropdownId(item.id);
-                                    setActiveDropdownId(null);
-                                  }
                                 }}
-                                className="text-xs sm:text-[13px] font-semibold text-[#2563EB] hover:text-[#1D4ED8] bg-transparent hover:bg-blue-50/60 flex items-center justify-center gap-1 px-1.5 py-1 rounded transition-colors cursor-pointer select-none"
+                                title={`Quotation has been converted (${item.convertedToInvoiceNo || "Converted"})`}
+                                className="text-xs sm:text-[13px] font-semibold text-emerald-700 bg-emerald-50/90 border border-emerald-200/90 px-2 py-1 rounded cursor-not-allowed select-none flex items-center justify-center gap-1 opacity-80"
                               >
-                                <span>Convert</span>
-                                <ChevronDown className="w-3.5 h-3.5 stroke-[2.5]" />
+                                <Check className="w-3 h-3 text-emerald-600 stroke-[2.5]" />
+                                <span>Converted</span>
                               </button>
-
-                              {/* Convert Floating Dropdown Menu - Converted stages are hidden */}
-                              {isConvertOpen && convertDropdownPos && (
-                                <div
-                                  style={{
-                                    position: "fixed",
-                                    top: `${convertDropdownPos.top}px`,
-                                    right: `${convertDropdownPos.right}px`,
-                                    zIndex: 9999,
+                            ) : (
+                              <div className="quotation-convert-dropdown-container relative inline-block text-left">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (isConvertOpen) {
+                                      setActiveConvertDropdownId(null);
+                                      setConvertDropdownPos(null);
+                                    } else {
+                                      const rect =
+                                        e.currentTarget.getBoundingClientRect();
+                                      setConvertDropdownPos({
+                                        top: rect.bottom + 4,
+                                        right: window.innerWidth - rect.right,
+                                      });
+                                      setActiveConvertDropdownId(item.id);
+                                      setActiveDropdownId(null);
+                                    }
                                   }}
-                                  className="quotation-convert-dropdown-menu w-56 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
-                                  onClick={(e) => e.stopPropagation()}
+                                  className="text-xs sm:text-[13px] font-semibold text-[#2563EB] hover:text-[#1D4ED8] bg-transparent hover:bg-blue-50/60 flex items-center justify-center gap-1 px-1.5 py-1 rounded transition-colors cursor-pointer select-none"
                                 >
-                                  {!itemStages.isInvoiceConverted && (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        handleOpenConvertModal(item, "Invoice")
-                                      }
-                                      className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-2.5"
-                                    >
-                                      <ShoppingCart className="w-3.5 h-3.5 text-slate-500" />
-                                      <span>Convert to Sale Invoice</span>
-                                    </button>
-                                  )}
-                                  {!itemStages.isChallanConverted && (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        handleOpenConvertModal(item, "Challan")
-                                      }
-                                      className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-2.5"
-                                    >
-                                      <Truck className="w-3.5 h-3.5 text-slate-500" />
-                                      <span>Convert to Delivery Challan</span>
-                                    </button>
-                                  )}
-                                  {!itemStages.isOrderConverted && (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        handleOpenConvertModal(item, "Order")
-                                      }
-                                      className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-2.5"
-                                    >
-                                      <FileCheck className="w-3.5 h-3.5 text-slate-500" />
-                                      <span>Convert to Sale Order</span>
-                                    </button>
-                                  )}
-                                  {!itemStages.isProformaConverted && (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        handleOpenConvertModal(item, "Proforma")
-                                      }
-                                      className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-2.5"
-                                    >
-                                      <FileSpreadsheet className="w-3.5 h-3.5 text-slate-500" />
-                                      <span>Convert to Proforma</span>
-                                    </button>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          )}
+                                  <span>Convert</span>
+                                  <ChevronDown className="w-3.5 h-3.5 stroke-[2.5]" />
+                                </button>
 
+                                {/* Convert Floating Dropdown Menu - Converted stages are hidden */}
+                                {isConvertOpen && convertDropdownPos && (
+                                  <div
+                                    style={{
+                                      position: "fixed",
+                                      top: `${convertDropdownPos.top}px`,
+                                      right: `${convertDropdownPos.right}px`,
+                                      zIndex: 9999,
+                                    }}
+                                    className="quotation-convert-dropdown-menu w-56 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    {!itemStages.isInvoiceConverted && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleOpenConvertModal(
+                                            item,
+                                            "Invoice",
+                                          )
+                                        }
+                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-2.5"
+                                      >
+                                        <ShoppingCart className="w-3.5 h-3.5 text-slate-500" />
+                                        <span>Convert to Sale Invoice</span>
+                                      </button>
+                                    )}
+                                    {!itemStages.isChallanConverted && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleOpenConvertModal(
+                                            item,
+                                            "Challan",
+                                          )
+                                        }
+                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-2.5"
+                                      >
+                                        <Truck className="w-3.5 h-3.5 text-slate-500" />
+                                        <span>Convert to Delivery Challan</span>
+                                      </button>
+                                    )}
+                                    {!itemStages.isOrderConverted && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleOpenConvertModal(item, "Order")
+                                        }
+                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-2.5"
+                                      >
+                                        <FileCheck className="w-3.5 h-3.5 text-slate-500" />
+                                        <span>Convert to Sale Order</span>
+                                      </button>
+                                    )}
+                                    {!itemStages.isProformaConverted && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleOpenConvertModal(
+                                            item,
+                                            "Proforma",
+                                          )
+                                        }
+                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-2.5"
+                                      >
+                                        <FileSpreadsheet className="w-3.5 h-3.5 text-slate-500" />
+                                        <span>Convert to Proforma</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
 
                           {/* Send / Share Popover Button */}
                           <DocumentSharePopover
                             id={item.id}
-                            getShareData={() => formatEstimateQuotationShare(item)}
+                            getShareData={() =>
+                              formatEstimateQuotationShare(item)
+                            }
                             title="Share Estimate / Quotation"
                           />
 
@@ -5687,7 +5907,10 @@ export const EstimateQuotationView: React.FC = () => {
                                 variant: "cancel",
                                 hidden: item.status !== "Open",
                                 onClick: () =>
-                                  handleUpdateQuotationStatus(item, "Cancelled"),
+                                  handleUpdateQuotationStatus(
+                                    item,
+                                    "Cancelled",
+                                  ),
                               },
                               {
                                 label: "Mark as Open",
@@ -5773,40 +5996,42 @@ export const EstimateQuotationView: React.FC = () => {
 
             {/* Table */}
             <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="w-full min-w-[480px] text-xs">
-              <thead className="bg-[#33077C] text-white font-bold uppercase text-[11px] tracking-wider">
-                <tr>
-                  <th className="p-2.5 text-left text-white">Item</th>
-                  <th className="p-2.5 text-center w-28 text-white">
-                    Batch No
-                  </th>
-                  <th className="p-2.5 text-center w-16 text-white">Qty</th>
-                  <th className="p-2.5 text-right w-24 text-white">Rate (₹)</th>
-                  <th className="p-2.5 text-right w-28 text-white">
-                    Amount (₹)
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {previewQuotation.items.map((it, idx) => (
-                  <tr key={idx}>
-                    <td className="p-2.5 font-semibold text-slate-800">
-                      {it.productName}
-                    </td>
-                    <td className="p-2.5 text-center font-mono font-bold text-[#33077C]">
-                      {it.batch || "—"}
-                    </td>
-                    <td className="p-2.5 text-center">{it.quantity}</td>
-                    <td className="p-2.5 text-right">
-                      ₹{Number(it.unitPrice).toLocaleString()}
-                    </td>
-                    <td className="p-2.5 text-right font-bold">
-                      ₹{Number(it.total).toLocaleString()}
-                    </td>
+              <table className="w-full min-w-[480px] text-xs">
+                <thead className="bg-[#33077C] text-white font-bold uppercase text-[11px] tracking-wider">
+                  <tr>
+                    <th className="p-2.5 text-left text-white">Item</th>
+                    <th className="p-2.5 text-center w-28 text-white">
+                      Batch No
+                    </th>
+                    <th className="p-2.5 text-center w-16 text-white">Qty</th>
+                    <th className="p-2.5 text-right w-24 text-white">
+                      Rate (₹)
+                    </th>
+                    <th className="p-2.5 text-right w-28 text-white">
+                      Amount (₹)
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {previewQuotation.items.map((it, idx) => (
+                    <tr key={idx}>
+                      <td className="p-2.5 font-semibold text-slate-800">
+                        {it.productName}
+                      </td>
+                      <td className="p-2.5 text-center font-mono font-bold text-[#33077C]">
+                        {it.batch || "—"}
+                      </td>
+                      <td className="p-2.5 text-center">{it.quantity}</td>
+                      <td className="p-2.5 text-right">
+                        ₹{Number(it.unitPrice).toLocaleString()}
+                      </td>
+                      <td className="p-2.5 text-right font-bold">
+                        ₹{Number(it.total).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
 
             {/* Total */}

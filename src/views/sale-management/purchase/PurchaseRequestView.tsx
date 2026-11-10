@@ -1,6 +1,7 @@
 import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { SupplierSearchableSelect, ProductSearchableSelect } from '../../../components/common/paginated-select';
+import { getNextPurchaseRequestNumber } from '../../../utils/documentNumbering';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -109,6 +110,11 @@ export const PurchaseRequestView: React.FC = () => {
   const navigate = useNavigate();
   // Live Commerce API State
   const [liveRequests, setLiveRequests] = useState<PurchaseRequest[]>([]);
+
+  // Computed next preview number based on currently loaded purchase requests
+  const computedPreviewNo = useMemo(() => {
+    return getNextPurchaseRequestNumber(liveRequests);
+  }, [liveRequests]);
   const [isApiLoading, setIsApiLoading] = useState(false);
   const [isApiConnected, setIsApiConnected] = useState<boolean | null>(null);
   const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
@@ -1695,9 +1701,9 @@ export const PurchaseRequestView: React.FC = () => {
               </label>
               <input
                 type="text"
-                {...register('requestNo')}
+                value={editingRequest ? editingRequest.requestNo : computedPreviewNo}
                 readOnly
-                className="w-full h-11 px-4 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 outline-none cursor-not-allowed"
+                className="w-full h-11 px-4 bg-purple-50/70 border border-purple-200/90 rounded-xl text-xs sm:text-[13px] font-extrabold text-[#33077C] font-mono outline-none cursor-default"
                 placeholder="Auto-generated on save"
               />
               <FormError message={errors.requestNo?.message} />

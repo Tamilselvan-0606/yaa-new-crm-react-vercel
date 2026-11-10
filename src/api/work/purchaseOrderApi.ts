@@ -586,6 +586,8 @@ export const workPurchaseOrderApi = {
         cleanPayload[key] = val;
       }
     }
+    delete cleanPayload.poNo;
+    delete cleanPayload.purchaseNo;
     const response = await baseClient.post<PurchaseOrderSingleResponse>(
       '/work/purchase-orders',
       cleanPayload

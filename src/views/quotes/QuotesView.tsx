@@ -529,6 +529,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const [actionDropdownPos, setActionDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
   const [isActionStatusSubmenuOpen, setIsActionStatusSubmenuOpen] = useState(false);
   const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
+  const [newEstimateNumber, setNewEstimateNumber] = useState('');
   const [duplicatedFromEstimateNo, setDuplicatedFromEstimateNo] = useState<string | null>(null);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -591,32 +592,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     };
   }, [openActionMenuId, activeStatusDropdownId, openItemOrgDropdownId]);
 
-  useEffect(() => {
-    if (location.pathname === '/quotes/new') {
-      setIsCreateModalOpen(true);
-    } else if (location.pathname === '/quotes' && !initialCreateOpen) {
-      setIsCreateModalOpen(false);
-      setEditingQuoteId(null);
-    }
-  }, [location.pathname, initialCreateOpen]);
-
-  const handleOpenCreate = () => {
-    setEditingQuoteId(null);
-    setDuplicatedFromEstimateNo(null);
-    setFormErrors({});
-    setItemsList([createDefaultQuoteItem()]);
-    setIsCreateModalOpen(true);
-    navigate('/quotes/new');
-  };
-
-  const handleCloseCreate = () => {
-    setEditingQuoteId(null);
-    setDuplicatedFromEstimateNo(null);
-    setFormErrors({});
-    setIsCreateModalOpen(false);
-    navigate('/quotes');
-  };
-
   // Quotations list: RTK Query hook (no result is kept after leaving the page). Anything that changes a quotation
   // invalidates the 'Quotation' tag, and the list below refetches by itself.
   const dispatch = useAppDispatch();
@@ -658,11 +633,83 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   }, [currentPage, pageSize, appliedSearch, appliedStatus, appliedBilledOrgId, scopeTick, currentUser?.organizationId, isSuperAdmin, isOrgSuperAdmin]);
 
   const quotesQuery = useGetPlatformQuotesQuery(quoteListParams);
+
+  // Helper to compute the next sequential estimate number from existing quotations
+  const nextPredictedEstimateNumber = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    const prefix = `EST-${currentYear}-`;
+    let maxSeq = 0;
+    let seqLength = 4;
+
+    const listToCheck = quotesQuery.data?.data || quotes;
+    if (Array.isArray(listToCheck)) {
+      listToCheck.forEach((q: any) => {
+        const estNum = q.estimateNumber || '';
+        if (estNum) {
+          // Match patterns like EST-2026-0013 or EST-0013
+          const match = estNum.match(/(?:EST-(?:\d{4}-)?)(\d+)/i);
+          if (match && match[1]) {
+            const num = parseInt(match[1], 10);
+            if (!isNaN(num) && num > maxSeq) {
+              maxSeq = num;
+              seqLength = Math.max(seqLength, match[1].length);
+            }
+          }
+        }
+      });
+    }
+
+    const nextSeq = maxSeq + 1;
+    return `${prefix}${String(nextSeq).padStart(seqLength, '0')}`;
+  }, [quotesQuery.data?.data, quotes]);
+
+  useEffect(() => {
+    if (location.pathname === '/quotes/new') {
+      setIsCreateModalOpen(true);
+      if (!editingQuoteId && !newEstimateNumber && nextPredictedEstimateNumber) {
+        setNewEstimateNumber(nextPredictedEstimateNumber);
+      }
+    } else if (location.pathname === '/quotes' && !initialCreateOpen) {
+      setIsCreateModalOpen(false);
+      setEditingQuoteId(null);
+    }
+  }, [location.pathname, initialCreateOpen, editingQuoteId, newEstimateNumber, nextPredictedEstimateNumber]);
+
+  const handleOpenCreate = () => {
+    setEditingQuoteId(null);
+    setDuplicatedFromEstimateNo(null);
+    setFormErrors({});
+    setNewEstimateNumber(nextPredictedEstimateNumber);
+    setItemsList([createDefaultQuoteItem()]);
+    setIsCreateModalOpen(true);
+    navigate('/quotes/new');
+  };
+
+  const handleCloseCreate = () => {
+    setEditingQuoteId(null);
+    setDuplicatedFromEstimateNo(null);
+    setNewEstimateNumber('');
+    setFormErrors({});
+    setIsCreateModalOpen(false);
+    navigate('/quotes');
+  };
   const isLoadingQuotes = quotesQuery.isFetching;
 
   useEffect(() => {
     if (quotesQuery.data?.data) {
-      setQuotes(quotesQuery.data.data.map(mapApiQuoteToUi));
+      const mapped = quotesQuery.data.data.map(mapApiQuoteToUi);
+      // Sort in descending order of estimate number so highest/newest appears at the top
+      mapped.sort((a, b) => {
+        const parseSeq = (str?: string) => {
+          const match = (str || '').match(/(?:EST-(?:\d{4}-)?)(\d+)/i);
+          return match ? parseInt(match[1], 10) : 0;
+        };
+        const seqA = parseSeq(a.estimateNumber);
+        const seqB = parseSeq(b.estimateNumber);
+        if (seqA !== seqB) return seqB - seqA;
+        return (b.estimateNumber || '').localeCompare(a.estimateNumber || '');
+      });
+      setQuotes(mapped);
       setTotalRecords(quotesQuery.data.pagination?.totalRecords ?? quotesQuery.data.data.length);
     }
   }, [quotesQuery.data]);
@@ -755,7 +802,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   };
 
   // New estimate modal form states linked to actual application entities
-  const [newEstimateNumber, setNewEstimateNumber] = useState('');
   const [selectedClientId, setSelectedClientId] = useState('');
   const [isCompanyProductDropdownOpen, setIsCompanyProductDropdownOpen] = useState(false);
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
@@ -1020,6 +1066,13 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const [itemsList, setItemsList] = useState<FormItem[]>([createDefaultQuoteItem()]);
 
   const [newNotes, setNewNotes] = useState('');
+
+  // The client dropdown shows the client name (organizations keep showing the company name).
+  const selectedClientLabel = (() => {
+    const c = availableClients.find((x) => x.id === selectedClientId);
+    if (!c) return '';
+    return isSuperAdmin && !isOrgSuperAdmin ? c.company || c.name : c.name || c.company;
+  })();
 
   // Handle client selection with automatic address and details population
   const handleClientSelect = (clientId: string) => {
@@ -1396,6 +1449,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       } else {
         // Create new quote (or duplicate)
         const payload: CreateQuoteRequest = {
+          estimateNumber: newEstimateNumber.trim() || undefined,
           createdDate: createdDate ? ddmmyyyyToIso(createdDate) : undefined,
           date: estimateDate ? ddmmyyyyToIso(estimateDate) : new Date().toISOString().split('T')[0],
           expiryDate: expiryDate ? ddmmyyyyToIso(expiryDate) : new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
@@ -1460,52 +1514,36 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   };
 
   const getStatusBadge = (status: Quotation['status']) => {
-    switch (status) {
-      case 'CONVERTED':
-        return (
-          <span className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-purple-50 text-purple-700 border border-purple-200">
-            <span className="w-1.5 h-1.5 rounded-full bg-purple-600 shrink-0"></span>
-            <span>CONVERTED</span>
-          </span>
-        );
-      case 'ACCEPTED':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase bg-emerald-50 text-emerald-700 border border-emerald-200">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            ACCEPTED
-          </span>
-        );
-      case 'DRAFT':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase bg-slate-100 text-slate-600 border border-slate-200">
-            <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
-            DRAFT
-          </span>
-        );
-      case 'SENT':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase bg-[#33077C]/10 text-[#33077C] border border-[#33077C]/25">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#33077C]"></span>
-            SENT
-          </span>
-        );
-      case 'EXPIRED':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase bg-amber-50 text-amber-700 border border-amber-200">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-            EXPIRED
-          </span>
-        );
-      case 'DECLINED':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase bg-rose-50 text-rose-700 border border-rose-200">
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
-            DECLINED
-          </span>
-        );
-      default:
-        return null;
+    const s = (status || '').toUpperCase();
+    let dotColor = 'bg-[#94a3b8]';
+    let label = 'Draft';
+
+    if (s === 'ACCEPTED') {
+      dotColor = 'bg-[#10b981]';
+      label = 'Accepted';
+    } else if (s === 'SENT') {
+      dotColor = 'bg-[#33077C]';
+      label = 'Sent';
+    } else if (s === 'EXPIRED') {
+      dotColor = 'bg-[#f59e0b]';
+      label = 'Expired';
+    } else if (s === 'DECLINED') {
+      dotColor = 'bg-[#f43f5e]';
+      label = 'Declined';
+    } else if (s === 'CONVERTED') {
+      dotColor = 'bg-[#8b5cf6]';
+      label = 'Converted';
+    } else {
+      dotColor = 'bg-[#94a3b8]';
+      label = 'Draft';
     }
+
+    return (
+      <div className="inline-flex items-center justify-center gap-2 text-xs font-semibold text-slate-800 select-none">
+        <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
+        <span className="text-xs font-semibold text-slate-800 tracking-tight">{label}</span>
+      </div>
+    );
   };
 
   // =========================================================================
@@ -2136,10 +2174,11 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                           <label className="text-[12px] font-bold text-slate-800">Quotation Number</label>
                           <input
                             type="text"
-                            value={newEstimateNumber}
+                            value={newEstimateNumber || nextPredictedEstimateNumber}
                             readOnly
+                            disabled
                             placeholder="Auto-generated"
-                            className="w-full max-w-[240px] h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 outline-none cursor-not-allowed shadow-2xs"
+                            className="w-full max-w-[240px] h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 outline-none shadow-2xs font-mono cursor-not-allowed select-none"
                           />
                         </div>
 
@@ -2314,13 +2353,13 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                             value={
                               isCompanyProductDropdownOpen
                                 ? clientSearchQuery
-                                : (customerCompany || clientSearchQuery)
+                                : (selectedClientLabel || customerCompany || clientSearchQuery)
                             }
                             onChange={(e) => {
                               const val = e.target.value;
                               setClientSearchQuery(val);
                               if (!isCompanyProductDropdownOpen) setIsCompanyProductDropdownOpen(true);
-                              if (customerCompany && val !== customerCompany) {
+                              if (customerCompany && val !== (selectedClientLabel || customerCompany)) {
                                 setSelectedClientId('');
                                 setCustomerCompany('');
                               }
@@ -2328,7 +2367,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                             onFocus={() => {
                               setIsCompanyProductDropdownOpen(true);
                               if (customerCompany && !clientSearchQuery) {
-                                setClientSearchQuery(customerCompany);
+                                setClientSearchQuery(selectedClientLabel || customerCompany);
                               }
                             }}
                             placeholder={isSuperAdmin && !isOrgSuperAdmin ? "Search or select organization..." : "Search or select client / customer..."}
@@ -2395,7 +2434,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                                 }
                                 return list.map((client) => {
                                   const isSelected = selectedClientId === client.id;
-                                  const displayName = client.company || client.name;
+                                  const displayName = isSuperAdmin && !isOrgSuperAdmin ? client.company || client.name : client.name || client.company;
                                   return (
                                     <button
                                       key={client.id}
@@ -2830,8 +2869,8 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
               <tr className="bg-[#33077C] text-[12px] font-bold text-white tracking-wider uppercase">
                 {isSuperAdmin ? (
                   <>
-                    <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">ORGANIZATION & CODE</th>
                     <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">QUOTATION NUM</th>
+                    <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">ORGANIZATION & CODE</th>
                     <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CONTACT INFO</th>
                     <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">STATUS</th>
                     <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">AMOUNT</th>
@@ -2889,32 +2928,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                     >
                       {isSuperAdmin ? (
                         <>
-                          {/* 1. Organization & Code (as per reference design) */}
-                          <td className="py-4 px-5 border border-slate-200">
-                            {(() => {
-                              const org = getOrgInfo(quote.customerCompany || 'YaaCreations');
-                              return (
-                                <div className="flex items-center gap-3.5">
-                                  <div className="w-10 h-10 rounded-full bg-[#33077C] text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
-                                    {org.initials}
-                                  </div>
-                                  <div className="min-w-0">
-                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                      <span className="font-bold text-slate-900 text-sm">{org.name}</span>
-                                      <span className="text-xs font-bold text-[#4309A2]">
-                                        ({org.code})
-                                      </span>
-                                    </div>
-                                    <p className="text-xs text-slate-500 font-medium mt-0.5">
-                                      {quote.customerName}
-                                    </p>
-                                  </div>
-                                </div>
-                              );
-                            })()}
-                          </td>
-
-                          {/* 2. Quotation Num */}
+                          {/* 1. Quotation Num */}
                           <td className="py-4 px-5 border border-slate-200">
                             <div>
                               <button
@@ -2924,6 +2938,26 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                                 {quote.estimateNumber}
                               </button>
                             </div>
+                          </td>
+
+                          {/* 2. Organization & Code */}
+                          <td className="py-4 px-5 border border-slate-200">
+                            {(() => {
+                              const org = getOrgInfo(quote.customerCompany || 'YaaCreations');
+                              return (
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-bold text-slate-900 text-sm">{org.name}</span>
+                                    <span className="text-xs font-bold text-[#4309A2]">
+                                      ({org.code})
+                                    </span>
+                                  </div>
+                                  <p className="text-xs text-slate-500 font-medium mt-0.5">
+                                    {quote.customerName}
+                                  </p>
+                                </div>
+                              );
+                            })()}
                           </td>
 
                           {/* 3. Contact Info Actions */}

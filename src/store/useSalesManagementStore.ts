@@ -51,6 +51,7 @@ export interface SalePaymentRecord {
 export interface SaleTransaction {
   id: string;
   invoiceNo: string;
+  saleInvoiceManualNo?: string;
   invoiceStatus?: 'Draft' | 'Generated' | 'Invoiced';
   referenceNo?: string;
   saleDate: string;
@@ -105,6 +106,7 @@ export type QuotationStatus = 'Open' | 'Converted' | 'Expired' | 'Cancelled';
 export interface SaleQuotation {
   id: string;
   quotationNo: string;
+  estimationManualNo?: string;
   referenceNo?: string;
   date: string; // ISO format e.g. "2026-10-01"
   validUntil: string;
@@ -157,6 +159,7 @@ export type PaymentInType =
 export interface SalePaymentIn {
   id: string;
   receiptNo: string;
+  paymentInManualNo?: string;
   date: string; // ISO date e.g. "2026-10-05"
   paymentDate?: string; // alias for date
   customerId?: string;
@@ -209,6 +212,7 @@ export interface SalesReturnItem {
 export interface SalesReturn {
   id: string;
   returnNo: string;
+  salesReturnManualNo?: string;
   invoiceNo: string;
   saleId: string;
   customerId: string;

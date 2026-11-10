@@ -397,9 +397,11 @@ export const commercePurchaseReturnApi = {
   createPurchaseReturn: async (
     payload: CreatePurchaseReturnPayload
   ): Promise<PurchaseReturnSingleResponse> => {
+    const cleanPayload = { ...payload };
+    delete (cleanPayload as any).returnNo;
     const response = await baseClient.post<PurchaseReturnSingleResponse>(
       '/commerce/purchase-returns',
-      payload
+      cleanPayload
     );
     return response.data;
   },

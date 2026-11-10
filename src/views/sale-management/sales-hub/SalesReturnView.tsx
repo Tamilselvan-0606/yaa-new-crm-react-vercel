@@ -64,6 +64,7 @@ import { downloadBusinessDocument } from '../../../utils/printUtils';
 import { UniversalShareDropdown, formatCreditNoteShare } from '../../../utils/shareUtils';
 import { SaleActionDropdown } from '../utils/SaleActionDropdown';
 import { toast } from "../../../utils/toast";
+import { getNextSalesReturnNumber } from '../../../utils/documentNumbering';
 import { useAppDispatch } from '../../../hooks/redux';
 import { baseApi } from '../../../api/baseApi';
 import {
@@ -251,6 +252,7 @@ export const SalesReturnView: React.FC = () => {
     new Date().toISOString().split('T')[0]
   );
   const [refNo, setRefNo] = useState('');
+  const [salesReturnManualNo, setSalesReturnManualNo] = useState('');
   const [returnItems, setReturnItems] = useState<SalesReturnItem[]>([]);
   const [refundMethod, setRefundMethod] = useState<
     'Bank Transfer' | 'UPI' | 'Cash' | 'Store Credit' | 'Original Payment Method'
@@ -258,6 +260,11 @@ export const SalesReturnView: React.FC = () => {
   const [refundStatus, setRefundStatus] = useState<RefundStatus>('Refunded');
   const [returnStatus, setReturnStatus] = useState<SalesReturnStatus>('Approved');
   const [generalNotes, setGeneralNotes] = useState('');
+
+  // Computed next preview number based on currently loaded sales returns
+  const computedPreviewNo = useMemo(() => {
+    return getNextSalesReturnNumber(salesReturns || []);
+  }, [salesReturns]);
 
   // -------------------------------------------------------------
   // API: Fetch Sales Returns list with current filters and pagination
@@ -769,6 +776,7 @@ export const SalesReturnView: React.FC = () => {
       setReturnItems([]);
     }
     setRefNo('');
+    setSalesReturnManualNo('');
     setReturnDate(new Date().toISOString().split('T')[0]);
     setRefundMethod('Store Credit');
     setRefundStatus('Refunded');
@@ -902,6 +910,7 @@ export const SalesReturnView: React.FC = () => {
     setIsSaving(true);
     try {
       const payload = mapSalesReturnToApiPayload({
+        salesReturnManualNo: salesReturnManualNo.trim() || undefined,
         invoiceNo: matchedInvoice?.invoiceNo || undefined,
         saleId: selectedInvoiceId && UUID_REGEX.test(selectedInvoiceId) ? selectedInvoiceId : undefined,
         customerId: matchedCustomer?.id && UUID_REGEX.test(matchedCustomer.id) ? matchedCustomer.id : undefined,
@@ -983,6 +992,7 @@ export const SalesReturnView: React.FC = () => {
       setCustomerPhone(cust?.phone || '');
       setReturnDate(tx.originalReturn.returnDate);
       setRefNo(tx.originalReturn.returnNo);
+      setSalesReturnManualNo(tx.originalReturn.salesReturnManualNo || '');
       setReturnItems(tx.originalReturn.items || []);
       setRefundMethod((tx.originalReturn.refundMethod as any) || 'Store Credit');
       setRefundStatus(tx.originalReturn.refundStatus || 'Refunded');
@@ -1262,6 +1272,7 @@ export const SalesReturnView: React.FC = () => {
     setPartyName(tx.partyName);
     setReturnDate(new Date().toISOString().split('T')[0]);
     setRefNo('');
+    setSalesReturnManualNo('');
     setReturnItems(tx.originalReturn?.items || []);
     setRefundMethod(tx.originalReturn?.refundMethod || 'Store Credit');
     setRefundStatus('Refunded');
@@ -1663,7 +1674,19 @@ export const SalesReturnView: React.FC = () => {
           isOpen={isCreateModalOpen}
           onClose={() => setIsCreateModalOpen(false)}
           title={editingReturn ? `Edit Sale Return: ${editingReturn.returnNo}` : "Create Sale Return (Credit Note)"}
-          subtitle="Process product return, calculate refund amount, and update inventory"
+          subtitle={
+            editingReturn
+              ? "Modify return details and returned quantities"
+              : (
+                <span className="flex items-center gap-1.5 flex-wrap">
+                  <span>Process product return, calculate refund amount, and update inventory</span>
+                  <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                    {computedPreviewNo}
+                  </span>
+                  <span className="text-slate-400 text-[11px]">(Preview only. Final number assigned on save.)</span>
+                </span>
+              )
+          }
           maxWidth="4xl"
           headerGradient={true}
           showBackIcon={true}
@@ -1671,7 +1694,7 @@ export const SalesReturnView: React.FC = () => {
         >
           <form noValidate onSubmit={handleSubmitCreateReturn} className="p-4 sm:p-6 space-y-5">
             {/* Row 1: Select Original Invoice & Party */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
               <div>
                 <FormLabel required>Original Invoice</FormLabel>
                 <select
@@ -1726,10 +1749,21 @@ export const SalesReturnView: React.FC = () => {
                 <FormLabel>Return Number</FormLabel>
                 <input
                   type="text"
-                  value={editingReturn ? refNo : ''}
+                  value={editingReturn ? (refNo || editingReturn.returnNo) : computedPreviewNo}
                   readOnly
                   placeholder="Auto-generated on save"
-                  className={`${FORM_INPUT_CLS} font-mono`}
+                  className="w-full h-11 px-4 bg-purple-50/70 border border-purple-200/90 rounded-xl text-xs sm:text-[13px] font-extrabold text-[#33077C] font-mono outline-none cursor-default"
+                />
+              </div>
+
+              <div>
+                <FormLabel>Return No</FormLabel>
+                <input
+                  type="text"
+                  value={salesReturnManualNo}
+                  onChange={(e) => setSalesReturnManualNo(e.target.value)}
+                  placeholder="Enter Return No"
+                  className={FORM_INPUT_CLS}
                 />
               </div>
             </div>

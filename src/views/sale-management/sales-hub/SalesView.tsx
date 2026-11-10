@@ -1,6 +1,7 @@
 import { ProductStockLabel } from "../../../components/common/ProductStockLabel";
 import { attachStockQty } from "../../../utils/stockDisplay";
-import { CommonTableHead } from '../../../components/common/CommonTableHead';
+import { CommonTableHead } from "../../../components/common/CommonTableHead";
+import { getNextSalesInvoiceNumber } from "../../../utils/documentNumbering";
 import React, {
   useState,
   useMemo,
@@ -74,7 +75,10 @@ import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { SearchableSelect } from "../../../components/common/SearchableSelect";
-import { CustomerSearchableSelect, BatchSearchableSelect } from "../../../components/common/paginated-select";
+import {
+  CustomerSearchableSelect,
+  BatchSearchableSelect,
+} from "../../../components/common/paginated-select";
 import { toast } from "../../../utils/toast";
 import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import { SalesCustomer } from "../../../store/useSalesManagementStore";
@@ -171,8 +175,11 @@ import { useBatchStock } from "../../../hooks/useBatchStock";
 import { AddCustomerModal } from "./AddCustomerModal";
 import { AddItemModal } from "../inventory/AddItemModal";
 
-import { formatDate } from '../utils/dateUtils';
-import { SplitPaymentSection, makeSplitRowId } from "../purchase/SplitPaymentSection";
+import { formatDate } from "../utils/dateUtils";
+import {
+  SplitPaymentSection,
+  makeSplitRowId,
+} from "../purchase/SplitPaymentSection";
 import {
   SALES_SPLIT_PAYMENT_METHODS,
   activeSplitRows,
@@ -237,15 +244,22 @@ interface InvoiceValidationContext {
   /** Resolves a line to a real product record id, or undefined when it cannot be matched. */
   resolveProductId: (item: SaleProductItem) => string | undefined;
   /** Backend stock of the chosen batch, or null/undefined when stock data is not loaded. */
-  availableStock: (item: SaleProductItem, index: number) => number | null | undefined;
+  availableStock: (
+    item: SaleProductItem,
+    index: number,
+  ) => number | null | undefined;
   /** Quantity this same saved invoice already holds for the line's product + batch (edit mode). */
-  stockCredit?: (item: SaleProductItem, index: number) => number | null | undefined;
+  stockCredit?: (
+    item: SaleProductItem,
+    index: number,
+  ) => number | null | undefined;
 }
 
 const rupees = (n: number) =>
   `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const isInvoiceRowBlank = (it: SaleProductItem) => !it.productId && !it.productName;
+const isInvoiceRowBlank = (it: SaleProductItem) =>
+  !it.productId && !it.productName;
 
 /**
  * Validates the whole invoice form. Returns a map keyed by field:
@@ -259,7 +273,10 @@ const validateInvoiceForm = (
   const errors: FieldErrors = {};
 
   // Customer (a typed customer name without a saved record is still supported by the API)
-  const customerErr = checkRequiredSelection((form.customerName || "").trim(), "customer");
+  const customerErr = checkRequiredSelection(
+    (form.customerName || "").trim(),
+    "customer",
+  );
   if (customerErr) errors.customer = customerErr;
 
   // Dates
@@ -268,7 +285,14 @@ const validateInvoiceForm = (
   if (form.dueDate) {
     const dueErr =
       checkRequiredDate(form.dueDate, "due date") ||
-      (saleDateErr ? null : checkDateNotBefore(form.dueDate, form.saleDate, "due date", "invoice date"));
+      (saleDateErr
+        ? null
+        : checkDateNotBefore(
+            form.dueDate,
+            form.saleDate,
+            "due date",
+            "invoice date",
+          ));
     if (dueErr) errors.dueDate = dueErr;
   }
 
@@ -287,7 +311,8 @@ const validateInvoiceForm = (
         },
   );
   const noItemsErr = checkHasLineItems(lineInputs);
-  if (noItemsErr) errors.items = "Please add at least one product to the invoice.";
+  if (noItemsErr)
+    errors.items = "Please add at least one product to the invoice.";
 
   Object.assign(
     errors,
@@ -312,7 +337,9 @@ const validateInvoiceForm = (
       ),
       {
         getAvailable: (_l, i) => ctx.availableStock(form.items[i], i),
-        credit: ctx.stockCredit ? (_l, i) => ctx.stockCredit!(form.items[i], i) : undefined,
+        credit: ctx.stockCredit
+          ? (_l, i) => ctx.stockCredit!(form.items[i], i)
+          : undefined,
       },
     );
     Object.entries(stockErrs).forEach(([k, v]) => {
@@ -340,16 +367,25 @@ const validateInvoiceForm = (
 
   // Payments
   const paid = parseNumericValue(form.paidAmount);
-  if (form.paidAmount !== undefined && form.paidAmount !== null && String(form.paidAmount).trim() !== "") {
+  if (
+    form.paidAmount !== undefined &&
+    form.paidAmount !== null &&
+    String(form.paidAmount).trim() !== ""
+  ) {
     if (paid === null) {
       errors.paidAmount = "Paid amount must be a valid number.";
     } else if (paid < 0) {
       errors.paidAmount = "Paid amount cannot be negative.";
     } else if (paid > 0) {
-      const over = checkPaymentWithinBalance(paid, ctx.totals.grandTotal, "Paid amount");
+      const over = checkPaymentWithinBalance(
+        paid,
+        ctx.totals.grandTotal,
+        "Paid amount",
+      );
       if (over) errors.paidAmount = over;
       else if (!(form.paymentSplits[0]?.method || "").trim()) {
-        errors.paymentMethod = "Please select a payment mode for the amount received.";
+        errors.paymentMethod =
+          "Please select a payment mode for the amount received.";
       }
     }
   }
@@ -382,17 +418,27 @@ const validateInvoiceForm = (
     const t = ctx.totals;
     const totalsErr =
       checkTotalConsistency(doc.subtotal, t.subtotal, "subtotal", tol) ||
-      checkTotalConsistency(doc.totalDiscount, t.totalDiscount, "discount total", tol) ||
+      checkTotalConsistency(
+        doc.totalDiscount,
+        t.totalDiscount,
+        "discount total",
+        tol,
+      ) ||
       checkTotalConsistency(doc.totalTax, t.totalTax, "tax total", tol) ||
       checkTotalConsistency(doc.grandTotal, t.grandTotal, "grand total", tol);
     if (totalsErr) {
       errors.totals = totalsErr;
     } else if (t.grandTotal < 0) {
-      errors.totals = "The grand total cannot be negative. Please reduce the discount.";
+      errors.totals =
+        "The grand total cannot be negative. Please reduce the discount.";
     } else {
       const gstErr = checkGstSplit(
         { cgst: t.cgst, sgst: t.sgst, igst: t.igst, total: t.totalTax },
-        !form.withGst ? "exempt" : form.gstType === "intra_state" ? "intra" : "inter",
+        !form.withGst
+          ? "exempt"
+          : form.gstType === "intra_state"
+            ? "intra"
+            : "inter",
       );
       if (gstErr) errors.totals = gstErr;
     }
@@ -418,7 +464,8 @@ const mapInvoiceApiErrorKey = (path: string): string => {
   }
   if (path === "customerId" || path === "customerName") return "customer";
   if (path === "items") return "items";
-  if (/^paymentSplits|^paymentMethod|^paidAmount/.test(path)) return path === "paymentMethod" ? "paymentMethod" : "paidAmount";
+  if (/^paymentSplits|^paymentMethod|^paidAmount/.test(path))
+    return path === "paymentMethod" ? "paymentMethod" : "paidAmount";
   return path;
 };
 
@@ -523,9 +570,13 @@ const CustomCustomerSelect: React.FC<CustomCustomerSelectProps> = ({
         <div className="truncate pr-2">
           {selectedCustomer ? (
             <div className="flex items-center gap-2">
-              <span className="font-bold text-slate-900">{selectedCustomer.name}</span>
+              <span className="font-bold text-slate-900">
+                {selectedCustomer.name}
+              </span>
               {selectedCustomer.company && (
-                <span className="text-slate-500 text-xs">({selectedCustomer.company})</span>
+                <span className="text-slate-500 text-xs">
+                  ({selectedCustomer.company})
+                </span>
               )}
             </div>
           ) : (
@@ -596,15 +647,17 @@ const CustomCustomerSelect: React.FC<CustomCustomerSelectProps> = ({
               <div className="flex items-center gap-2">
                 <span className="text-slate-400 italic">None / Unassigned</span>
               </div>
-              {!value && (
-                <Check className="w-4 h-4 text-[#33077C]" />
-              )}
+              {!value && <Check className="w-4 h-4 text-[#33077C]" />}
             </div>
 
             {filteredCustomers.length === 0 ? (
               <div className="py-6 px-3 text-center text-slate-400">
-                <p className="text-xs font-semibold text-slate-600">No customers found</p>
-                <p className="text-[11px] text-slate-400 mt-0.5">Try searching with a different name, phone or code</p>
+                <p className="text-xs font-semibold text-slate-600">
+                  No customers found
+                </p>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Try searching with a different name, phone or code
+                </p>
                 {searchQuery.trim() && (
                   <button
                     type="button"
@@ -663,9 +716,7 @@ const CustomCustomerSelect: React.FC<CustomCustomerSelectProps> = ({
                               <span>{c.phone}</span>
                             </span>
                           ) : (
-                            <span className="text-slate-400">
-                              No phone
-                            </span>
+                            <span className="text-slate-400">No phone</span>
                           )}
                           {(c.customerCode || c.code) && (
                             <span className="text-[10px] font-mono text-slate-400">
@@ -722,6 +773,11 @@ export const SalesView: React.FC = () => {
   } = useSalesManagementStore();
   // Everything displayed comes from component state filled ONLY by API responses.
   const [sales, setSales] = useState<SaleTransaction[]>([]);
+
+  // Computed next preview number based on currently loaded sales invoices
+  const computedPreviewNo = useMemo(() => {
+    return getNextSalesInvoiceNumber(sales);
+  }, [sales]);
   const [stocks, setStocks] = useState<any[]>([]);
   const [salesRepresentatives, setSalesRepresentatives] = useState<any[]>([]);
   const [customerList, setCustomerList] = useState<any[]>([]);
@@ -776,7 +832,8 @@ export const SalesView: React.FC = () => {
     salesRepresentativeApi
       .getList({ page: 1, limit: 100 }, { fresh: true })
       .then((res) => {
-        if (!cancelled) setSalesRepresentatives(Array.isArray(res?.data) ? res.data : []);
+        if (!cancelled)
+          setSalesRepresentatives(Array.isArray(res?.data) ? res.data : []);
       })
       .catch(() => {
         if (!cancelled) setSalesRepresentatives([]);
@@ -822,7 +879,6 @@ export const SalesView: React.FC = () => {
         sourceNo: convertData.sourceNo || convertData.referenceNo || "",
       };
 
-
       const resolvedItems: SaleProductItem[] = (convertData.items || []).map(
         (it: any, idx: number) => {
           const qty = Number(it.quantity) || 1;
@@ -840,7 +896,7 @@ export const SalesView: React.FC = () => {
             {
               withGst: convertData.withGst !== false,
               gstType: convertData.gstType || "intra_state",
-            }
+            },
           );
           return {
             id: it.id || `s_item_${Date.now()}_${idx}`,
@@ -876,7 +932,9 @@ export const SalesView: React.FC = () => {
         });
       }
 
-      const initialPaid = Number(convertData.paidAmount ?? convertData.advanceAmount ?? 0);
+      const initialPaid = Number(
+        convertData.paidAmount ?? convertData.advanceAmount ?? 0,
+      );
       const initialMethod = convertData.paymentMethod || "Bank Transfer";
 
       setFormData({
@@ -942,8 +1000,6 @@ export const SalesView: React.FC = () => {
     }
   }, [searchParams]);
 
-
-
   // 3-Dots Action dropdown
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
   const [dropdownPos, setDropdownPos] = useState<{
@@ -963,7 +1019,9 @@ export const SalesView: React.FC = () => {
   } | null>(null);
 
   // Next Stage / Convert Dropdown state
-  const [activeConvertDropdownId, setActiveConvertDropdownId] = useState<string | null>(null);
+  const [activeConvertDropdownId, setActiveConvertDropdownId] = useState<
+    string | null
+  >(null);
   const [convertDropdownPos, setConvertDropdownPos] = useState<{
     top?: number;
     bottom?: number;
@@ -980,7 +1038,9 @@ export const SalesView: React.FC = () => {
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   // Split payment (Single / Split mode in the Billing Summary) for a NEW invoice
   const [isSplitMode, setIsSplitMode] = useState(false);
-  const [splitRows, setSplitRows] = useState<SplitPaymentRow[]>(() => [newSplitRow(makeSplitRowId())]);
+  const [splitRows, setSplitRows] = useState<SplitPaymentRow[]>(() => [
+    newSplitRow(makeSplitRowId()),
+  ]);
   const [splitShowErrors, setSplitShowErrors] = useState(false);
   const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
@@ -992,8 +1052,12 @@ export const SalesView: React.FC = () => {
     useState<SalePaymentRecord | null>(null);
   const [isAddCustomerModalOpen, setIsAddCustomerModalOpen] = useState(false);
   const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
-  const [activeItemRowIndex, setActiveItemRowIndex] = useState<number | null>(null);
-  const [openProductDropdownRow, setOpenProductDropdownRow] = useState<number | null>(null);
+  const [activeItemRowIndex, setActiveItemRowIndex] = useState<number | null>(
+    null,
+  );
+  const [openProductDropdownRow, setOpenProductDropdownRow] = useState<
+    number | null
+  >(null);
   const [productSearchQuery, setProductSearchQuery] = useState("");
   const productDropdownRef = useRef<HTMLDivElement>(null);
   const [selectedSale, setSelectedSale] = useState<SaleTransaction | null>(
@@ -1003,7 +1067,8 @@ export const SalesView: React.FC = () => {
 
   // Delete Modal State
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [deleteTargetSale, setDeleteTargetSale] = useState<SaleTransaction | null>(null);
+  const [deleteTargetSale, setDeleteTargetSale] =
+    useState<SaleTransaction | null>(null);
   const [isDeletingSale, setIsDeletingSale] = useState(false);
   const [deleteSaleError, setDeleteSaleError] = useState<string | null>(null);
 
@@ -1033,7 +1098,10 @@ export const SalesView: React.FC = () => {
         const raw = unpackProducts(res);
         if (raw.length > 0) prods = raw;
       } catch (err) {
-        console.warn("Product load pagination_required:true error in SalesView:", err);
+        console.warn(
+          "Product load pagination_required:true error in SalesView:",
+          err,
+        );
       }
 
       // 2. Second attempt: pagination_required: false
@@ -1047,7 +1115,10 @@ export const SalesView: React.FC = () => {
           const raw2 = unpackProducts(res2);
           if (raw2.length > 0) prods = raw2;
         } catch (err2) {
-          console.warn("Product load pagination_required:false error in SalesView:", err2);
+          console.warn(
+            "Product load pagination_required:false error in SalesView:",
+            err2,
+          );
         }
       }
 
@@ -1072,14 +1143,20 @@ export const SalesView: React.FC = () => {
             }));
           }
         } catch (cErr) {
-          console.warn("clientProductApi load fallback error in SalesView:", cErr);
+          console.warn(
+            "clientProductApi load fallback error in SalesView:",
+            cErr,
+          );
         }
       }
 
       // 4. Fourth attempt: fallback to stockApi
       if (prods.length === 0) {
         try {
-          const sRes = await stockApi.getStocks({ pagination_required: false, page_size: 100 });
+          const sRes = await stockApi.getStocks({
+            pagination_required: false,
+            page_size: 100,
+          });
           const rawStocks = unpackProducts(sRes);
           if (rawStocks.length > 0) {
             prods = rawStocks.map((s: any) => ({
@@ -1113,15 +1190,25 @@ export const SalesView: React.FC = () => {
               productName: p.productName || p.name || "Unnamed Product",
               code: p.productCode || p.sku || p.code || pId,
               sku: p.productCode || p.sku || p.code || pId,
-              price: Number(p.salePrice ?? p.sellingPrice ?? p.price ?? p.unitPrice ?? 0),
-              salePrice: Number(p.salePrice ?? p.sellingPrice ?? p.price ?? p.unitPrice ?? 0),
-              unitPrice: Number(p.salePrice ?? p.sellingPrice ?? p.price ?? p.unitPrice ?? 0),
+              price: Number(
+                p.salePrice ?? p.sellingPrice ?? p.price ?? p.unitPrice ?? 0,
+              ),
+              salePrice: Number(
+                p.salePrice ?? p.sellingPrice ?? p.price ?? p.unitPrice ?? 0,
+              ),
+              unitPrice: Number(
+                p.salePrice ?? p.sellingPrice ?? p.price ?? p.unitPrice ?? 0,
+              ),
               cost: Number(p.purchasePrice ?? p.costPrice ?? 0),
               unit: p.unit || "PCS",
               batches: p.batches || p.stockBatches || [],
               hsnCode: p.hsnCode || "",
               category: p.category || "General",
-              imageUrl: (p as any).images?.[0] || (p as any).image || (p as any).imageUrl || "",
+              imageUrl:
+                (p as any).images?.[0] ||
+                (p as any).image ||
+                (p as any).imageUrl ||
+                "",
             });
           });
           return Array.from(map.values());
@@ -1172,11 +1259,14 @@ export const SalesView: React.FC = () => {
   const [isSearchingProducts, setIsSearchingProducts] = useState(false);
 
   // On-demand product search: calls products API
-  const handleProductSearch = useCallback(async (query: string) => {
-    const trimmed = query.trim();
-    if (!trimmed) return;
-    fetchLiveProducts(trimmed);
-  }, [fetchLiveProducts]);
+  const handleProductSearch = useCallback(
+    async (query: string) => {
+      const trimmed = query.trim();
+      if (!trimmed) return;
+      fetchLiveProducts(trimmed);
+    },
+    [fetchLiveProducts],
+  );
 
   useEffect(() => {
     if (isFormModalOpen) {
@@ -1185,14 +1275,21 @@ export const SalesView: React.FC = () => {
         fetchLiveProducts();
       }
     }
-  }, [isFormModalOpen, loadProductAndStockData, fetchLiveProducts, productList.length]);
+  }, [
+    isFormModalOpen,
+    loadProductAndStockData,
+    fetchLiveProducts,
+    productList.length,
+  ]);
 
   // API States
   const [isApiLoading, setIsApiLoading] = useState(false);
   const [isApiConnected, setIsApiConnected] = useState(true);
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [totalApiRecords, setTotalApiRecords] = useState(0);
-  const [apiSummary, setApiSummary] = useState<CommerceInvoiceSummary | null>(null);
+  const [apiSummary, setApiSummary] = useState<CommerceInvoiceSummary | null>(
+    null,
+  );
   const [totalApiPages, setTotalApiPages] = useState(1);
 
   // Resolves a line to a real product record id. It never creates a product and never substitutes a
@@ -1263,111 +1360,131 @@ export const SalesView: React.FC = () => {
 
   // Live Invoices Fetching
   const isFetchingInvoicesRef = useRef(false);
-  const fetchSalesInvoices = useCallback(async (overrides?: {
-    page?: number;
-    search?: string;
-    saleStatus?: string;
-    paymentStatus?: string;
-    customer?: string;
-  }): Promise<boolean> => {
-    if (isFetchingInvoicesRef.current) return false;
-    isFetchingInvoicesRef.current = true;
-    setIsApiLoading(true);
-    try {
-      const targetPage = overrides?.page ?? currentPage;
-      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
-      const targetSaleStatus = overrides?.saleStatus !== undefined ? overrides.saleStatus : appliedSaleStatus;
-      const targetPaymentStatus = overrides?.paymentStatus !== undefined ? overrides.paymentStatus : appliedPaymentStatus;
-      const targetCustomer = overrides?.customer !== undefined ? overrides.customer : appliedCustomer;
+  const fetchSalesInvoices = useCallback(
+    async (overrides?: {
+      page?: number;
+      search?: string;
+      saleStatus?: string;
+      paymentStatus?: string;
+      customer?: string;
+    }): Promise<boolean> => {
+      if (isFetchingInvoicesRef.current) return false;
+      isFetchingInvoicesRef.current = true;
+      setIsApiLoading(true);
+      try {
+        const targetPage = overrides?.page ?? currentPage;
+        const targetSearch =
+          overrides?.search !== undefined ? overrides.search : appliedSearch;
+        const targetSaleStatus =
+          overrides?.saleStatus !== undefined
+            ? overrides.saleStatus
+            : appliedSaleStatus;
+        const targetPaymentStatus =
+          overrides?.paymentStatus !== undefined
+            ? overrides.paymentStatus
+            : appliedPaymentStatus;
+        const targetCustomer =
+          overrides?.customer !== undefined
+            ? overrides.customer
+            : appliedCustomer;
 
-      const params: InvoiceFilterParams = {
-        page_no: targetPage,
-        page_size: pageSize,
-        pagination_required: "true",
-        sortOrder: "desc",
-      };
-      if (targetSearch && targetSearch.trim()) {
-        params.search = targetSearch.trim();
-      }
-      if (targetSaleStatus && targetSaleStatus.toUpperCase() !== "ALL") {
-        params.status = targetSaleStatus;
-      }
-      if (
-        targetPaymentStatus &&
-        targetPaymentStatus.toUpperCase() !== "ALL"
-      ) {
-        params.paymentStatus = targetPaymentStatus;
-      }
-      if (
-        targetCustomer &&
-        targetCustomer.toUpperCase() !== "ALL" &&
-        UUID_REGEX.test(targetCustomer)
-      ) {
-        params.customerId = targetCustomer;
-      }
-
-      const res = await commerceInvoiceApi.getInvoices(params);
-      if (res && res.data && Array.isArray(res.data)) {
-        const mapped = res.data.map((inv) =>
-          mapApiInvoiceToSaleTransaction(inv),
-        );
-
-        setSalesList(mapped);
-
-        // Self-heal and record cross-module lineage for all fetched invoices with references
-        mapped.forEach((sale) => {
-          if (!sale.invoiceNo) return;
-          const ref = sale.referenceNo?.trim();
-          if (!ref) return;
-
-          const existing = findDocumentLineage(sale.invoiceNo);
-          if (!existing || !existing.invoiceNo) {
-            const inferredType = inferDocType(ref);
-            if (inferredType) {
-              recordDocumentConversion({
-                fromType: inferredType,
-                fromNo: ref,
-                toType: "Invoice",
-                toNo: sale.invoiceNo,
-                toId: sale.id,
-                partyName: sale.customerName,
-                customerId: sale.customerId,
-              });
-            }
-          }
-        });
-        setApiSummary(res.summary ?? null);
-        if (res.pagination) {
-          setTotalApiRecords(res.pagination.totalRecords ?? mapped.length);
-          setTotalApiPages(Math.max(1, Math.ceil((res.pagination.totalRecords ?? mapped.length) / pageSize)));
-        } else {
-          setTotalApiRecords(mapped.length);
-          setTotalApiPages(1);
+        const params: InvoiceFilterParams = {
+          page_no: targetPage,
+          page_size: pageSize,
+          pagination_required: "true",
+          sortOrder: "desc",
+        };
+        if (targetSearch && targetSearch.trim()) {
+          params.search = targetSearch.trim();
         }
-        setIsApiConnected(true);
-        return true;
+        if (targetSaleStatus && targetSaleStatus.toUpperCase() !== "ALL") {
+          params.status = targetSaleStatus;
+        }
+        if (
+          targetPaymentStatus &&
+          targetPaymentStatus.toUpperCase() !== "ALL"
+        ) {
+          params.paymentStatus = targetPaymentStatus;
+        }
+        if (
+          targetCustomer &&
+          targetCustomer.toUpperCase() !== "ALL" &&
+          UUID_REGEX.test(targetCustomer)
+        ) {
+          params.customerId = targetCustomer;
+        }
+
+        const res = await commerceInvoiceApi.getInvoices(params);
+        if (res && res.data && Array.isArray(res.data)) {
+          const mapped = res.data.map((inv) =>
+            mapApiInvoiceToSaleTransaction(inv),
+          );
+
+          setSalesList(mapped);
+
+          // Self-heal and record cross-module lineage for all fetched invoices with references
+          mapped.forEach((sale) => {
+            if (!sale.invoiceNo) return;
+            const ref = sale.referenceNo?.trim();
+            if (!ref) return;
+
+            const existing = findDocumentLineage(sale.invoiceNo);
+            if (!existing || !existing.invoiceNo) {
+              const inferredType = inferDocType(ref);
+              if (inferredType) {
+                recordDocumentConversion({
+                  fromType: inferredType,
+                  fromNo: ref,
+                  toType: "Invoice",
+                  toNo: sale.invoiceNo,
+                  toId: sale.id,
+                  partyName: sale.customerName,
+                  customerId: sale.customerId,
+                });
+              }
+            }
+          });
+          setApiSummary(res.summary ?? null);
+          if (res.pagination) {
+            setTotalApiRecords(res.pagination.totalRecords ?? mapped.length);
+            setTotalApiPages(
+              Math.max(
+                1,
+                Math.ceil(
+                  (res.pagination.totalRecords ?? mapped.length) / pageSize,
+                ),
+              ),
+            );
+          } else {
+            setTotalApiRecords(mapped.length);
+            setTotalApiPages(1);
+          }
+          setIsApiConnected(true);
+          return true;
+        }
+        return false;
+      } catch (err: any) {
+        console.error("Failed to fetch invoices:", err);
+        setSalesList([]);
+        setTotalApiRecords(0);
+        setTotalApiPages(1);
+        setIsApiConnected(false);
+        return false;
+      } finally {
+        setIsApiLoading(false);
+        isFetchingInvoicesRef.current = false;
       }
-      return false;
-    } catch (err: any) {
-      console.error("Failed to fetch invoices:", err);
-      setSalesList([]);
-      setTotalApiRecords(0);
-      setTotalApiPages(1);
-      setIsApiConnected(false);
-      return false;
-    } finally {
-      setIsApiLoading(false);
-      isFetchingInvoicesRef.current = false;
-    }
-  }, [
-    currentPage,
-    pageSize,
-    appliedSearch,
-    appliedSaleStatus,
-    appliedPaymentStatus,
-    appliedCustomer,
-    setSalesList,
-  ]);
+    },
+    [
+      currentPage,
+      pageSize,
+      appliedSearch,
+      appliedSaleStatus,
+      appliedPaymentStatus,
+      appliedCustomer,
+      setSalesList,
+    ],
+  );
 
   useEffect(() => {
     fetchSalesInvoices();
@@ -1416,7 +1533,6 @@ export const SalesView: React.FC = () => {
     }
   }, [selectedSale]);
 
-
   // Payment Recording Modal State
   const [paymentModalSplits, setPaymentModalSplits] = useState<
     PaymentSplitItem[]
@@ -1429,6 +1545,7 @@ export const SalesView: React.FC = () => {
   // Form State for Create / Edit
   const [formData, setFormData] = useState<{
     invoiceNo: string;
+    saleInvoiceManualNo: string;
     invoiceStatus: "Draft" | "Generated" | "Invoiced";
     referenceNo: string;
     saleDate: string;
@@ -1465,6 +1582,7 @@ export const SalesView: React.FC = () => {
     notes: string;
   }>({
     invoiceNo: "",
+    saleInvoiceManualNo: "",
     invoiceStatus: "Draft",
     referenceNo: "",
     saleDate: new Date().toISOString().split("T")[0],
@@ -1518,7 +1636,11 @@ export const SalesView: React.FC = () => {
   // Products already on the form (opened for edit, prefilled by a conversion, or picked by the user)
   // get their batch stock loaded once; cached products are not refetched.
   const invoiceProductIdsKey = isFormModalOpen
-    ? Array.from(new Set(formData.items.map((it) => it.productId).filter(Boolean))).sort().join(",")
+    ? Array.from(
+        new Set(formData.items.map((it) => it.productId).filter(Boolean)),
+      )
+        .sort()
+        .join(",")
     : "";
   useEffect(() => {
     if (!invoiceProductIdsKey) return;
@@ -1597,17 +1719,14 @@ export const SalesView: React.FC = () => {
 
   // Helper to extract batches for a product
   const getBatchesForProduct = useCallback(
-    (
-      productId: string,
-      sku: string,
-      name: string,
-      explicitBatches?: any[]
-    ) => {
+    (productId: string, sku: string, name: string, explicitBatches?: any[]) => {
       if (Array.isArray(explicitBatches) && explicitBatches.length > 0) {
         return explicitBatches;
       }
       const matched = liveBatches.filter((b) => {
-        const bPid = String((b as any).productId || (b as any).product_id || "");
+        const bPid = String(
+          (b as any).productId || (b as any).product_id || "",
+        );
         if (productId && bPid && bPid === productId) return true;
         if (sku && (b as any).sku && (b as any).sku === sku) return true;
         if (
@@ -1620,7 +1739,7 @@ export const SalesView: React.FC = () => {
       });
       return matched;
     },
-    [liveBatches]
+    [liveBatches],
   );
 
   // Product Selection helper with real stock batches and searched products
@@ -1633,7 +1752,12 @@ export const SalesView: React.FC = () => {
       if (!pId) return;
       const sku = p.sku || p.code || p.productCode || "";
       const name = p.name || p.productName || "Unnamed Product";
-      const batches = getBatchesForProduct(pId, sku, name, p.batches || p.stockBatches);
+      const batches = getBatchesForProduct(
+        pId,
+        sku,
+        name,
+        p.batches || p.stockBatches,
+      );
       map.set(pId, {
         id: pId,
         productId: pId,
@@ -1727,7 +1851,8 @@ export const SalesView: React.FC = () => {
   // The quantity shown in each product row is read live: refresh the stock whenever a product dropdown opens, so it
   // reflects what the last saved document changed (the stock endpoint is never cached).
   useEffect(() => {
-    if (openProductDropdownRow === null || openProductDropdownRow === undefined) return;
+    if (openProductDropdownRow === null || openProductDropdownRow === undefined)
+      return;
     let cancelled = false;
     stockApi
       .getStocks({ pagination_required: false, page_size: 100 })
@@ -1753,7 +1878,7 @@ export const SalesView: React.FC = () => {
         (p.productName && p.productName.toLowerCase().includes(q)) ||
         (p.sku && p.sku.toLowerCase().includes(q)) ||
         (p.code && p.code.toLowerCase().includes(q)) ||
-        (p.category && p.category.toLowerCase().includes(q))
+        (p.category && p.category.toLowerCase().includes(q)),
     );
   }, [availableProducts, productSearchQuery]);
 
@@ -1767,10 +1892,16 @@ export const SalesView: React.FC = () => {
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (!target.closest('.si-product-cell') && !target.closest('.si-product-dropdown')) {
+      if (
+        !target.closest(".si-product-cell") &&
+        !target.closest(".si-product-dropdown")
+      ) {
         setOpenProductDropdownRow(null);
       }
-      if (!target.closest('.invoice-convert-dropdown-container') && !target.closest('.invoice-convert-dropdown-menu')) {
+      if (
+        !target.closest(".invoice-convert-dropdown-container") &&
+        !target.closest(".invoice-convert-dropdown-menu")
+      ) {
         setActiveConvertDropdownId(null);
         setConvertDropdownPos(null);
       }
@@ -1779,11 +1910,11 @@ export const SalesView: React.FC = () => {
       setActiveConvertDropdownId(null);
       setConvertDropdownPos(null);
     };
-    document.addEventListener('mousedown', handleOutsideClick);
-    window.addEventListener('scroll', handleScroll, true);
+    document.addEventListener("mousedown", handleOutsideClick);
+    window.addEventListener("scroll", handleScroll, true);
     return () => {
-      document.removeEventListener('mousedown', handleOutsideClick);
-      window.removeEventListener('scroll', handleScroll, true);
+      document.removeEventListener("mousedown", handleOutsideClick);
+      window.removeEventListener("scroll", handleScroll, true);
     };
   }, []);
 
@@ -1806,6 +1937,7 @@ export const SalesView: React.FC = () => {
 
     setFormData({
       invoiceNo: "",
+      saleInvoiceManualNo: "",
       referenceNo: "",
       saleDate: new Date().toISOString().split("T")[0],
       dueDate: new Date(Date.now() + 15 * 86400000).toISOString().split("T")[0],
@@ -1885,6 +2017,7 @@ export const SalesView: React.FC = () => {
 
     setFormData({
       invoiceNo: sale.invoiceNo,
+      saleInvoiceManualNo: sale.saleInvoiceManualNo || "",
       referenceNo: sale.referenceNo || "",
       saleDate: sale.saleDate,
       dueDate: sale.dueDate,
@@ -1927,11 +2060,21 @@ export const SalesView: React.FC = () => {
     const dayMs = 86_400_000;
     const termDays =
       sale.dueDate && sale.saleDate
-        ? Math.max(0, Math.round((new Date(sale.dueDate).getTime() - new Date(sale.saleDate).getTime()) / dayMs))
+        ? Math.max(
+            0,
+            Math.round(
+              (new Date(sale.dueDate).getTime() -
+                new Date(sale.saleDate).getTime()) /
+                dayMs,
+            ),
+          )
         : 0;
-    const dueDate = new Date(Date.now() + termDays * dayMs).toISOString().split("T")[0];
+    const dueDate = new Date(Date.now() + termDays * dayMs)
+      .toISOString()
+      .split("T")[0];
     setFormData({
       invoiceNo: "",
+      saleInvoiceManualNo: "",
       referenceNo: "",
       saleDate: today,
       dueDate,
@@ -1946,12 +2089,19 @@ export const SalesView: React.FC = () => {
       withGst: sale.withGst !== undefined ? sale.withGst : true,
       gstType: sale.gstType || "intra_state",
       overallDiscount:
-        sale.overallDiscount !== undefined ? sale.overallDiscount : sale.totalDiscount || 0,
+        sale.overallDiscount !== undefined
+          ? sale.overallDiscount
+          : sale.totalDiscount || 0,
       shippingCharges: sale.shippingCharges,
       otherCharges: sale.otherCharges,
       paymentMethod: sale.paymentMethod,
       paymentSplits: [
-        { id: "ps_1", method: sale.paymentMethod || "Bank Transfer", amount: 0, referenceNo: "" },
+        {
+          id: "ps_1",
+          method: sale.paymentMethod || "Bank Transfer",
+          amount: 0,
+          referenceNo: "",
+        },
       ],
       paymentTerms: sale.paymentTerms,
       paidAmount: 0,
@@ -1964,84 +2114,102 @@ export const SalesView: React.FC = () => {
     });
     setEditingSale(null);
     setIsFormModalOpen(true);
-    toast.info(`Review the copy of ${sale.invoiceNo} and press Save to create the new invoice.`);
+    toast.info(
+      `Review the copy of ${sale.invoiceNo} and press Save to create the new invoice.`,
+    );
   };
 
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
-  const mapSaleToDocumentPrintOptions = (sale: SaleTransaction): DocumentPrintOptions => ({
-    docTypeTitle: "TAX INVOICE",
-    docNo: sale.invoiceNo,
-    docDate: isoToDdmmyyyy(sale.saleDate),
-    dueDate: sale.dueDate ? isoToDdmmyyyy(sale.dueDate) : undefined,
-    status: sale.paymentStatus,
-    statusColor:
-      sale.paymentStatus === "Paid"
-        ? "emerald"
-        : sale.paymentStatus === "Partial"
-        ? "amber"
-        : "rose",
-    referenceNo: sale.referenceNo,
-    companyName: companyProfile.companyName,
-    companySubtitle: companyProfile.companySubtitle,
-    companyAddress: companyProfile.companyAddress,
-    companyGstin: companyProfile.companyGstin,
-    companyPhone: companyProfile.companyPhone,
-    companyEmail: companyProfile.companyEmail,
-    partyTitle: "Billed To",
-    partyName: sale.customerName,
-    partyCompany: sale.customerCompany,
-    partyPhone: sale.customerPhone,
-    partyEmail: sale.customerEmail,
-    partyAddress: sale.billingAddress,
-    extraMeta: [
-      { label: "Payment Status", value: sale.paymentStatus },
-      { label: "Payment Method", value: sale.paymentMethod || "Cash" },
-      { label: "Salesperson", value: sale.salesperson || "Staff" },
-      { label: "Payment Terms", value: sale.paymentTerms || "Net 15 Days" },
-    ],
-    items: (sale.items || []).map((it) => ({
-      name: it.productName,
-      sku: it.sku,
-      batch: it.batch,
-      unit: (it as any).unit || "PCS",
-      quantity: it.quantity,
-      unitPrice: it.unitPrice,
-      discountPercent: it.discountPercent,
-      taxPercent: it.taxPercent,
-      total: it.total,
-    })),
-    subtotal: sale.subtotal,
-    discount: sale.totalDiscount,
-    tax: {
-      taxAmount: sale.totalTax,
-      cgst: sale.cgst,
-      sgst: sale.sgst,
-      igst: sale.igst,
-    },
-    shipping: sale.shippingCharges,
-    otherCharges: sale.otherCharges,
-    roundOff: (sale as any).roundOff,
-    grandTotal: sale.grandTotal,
-    paidAmount: sale.paidAmount,
-    balance: sale.balance,
-    notes: sale.notes,
-    terms: (sale as any).terms || sale.paymentTerms,
-    primarySignatoryLabel: "Authorized Signatory",
-  });
+  const mapSaleToDocumentPrintOptions = (
+    sale: SaleTransaction,
+  ): DocumentPrintOptions => {
+    const isGstActive =
+      sale.withGst !== false && Number(sale.totalTax || 0) > 0;
+    return {
+      docTypeTitle: "TAX INVOICE",
+      docNo: sale.invoiceNo,
+      docDate: isoToDdmmyyyy(sale.saleDate),
+      dueDate: sale.dueDate ? isoToDdmmyyyy(sale.dueDate) : undefined,
+      status: sale.paymentStatus,
+      statusColor:
+        sale.paymentStatus === "Paid"
+          ? "emerald"
+          : sale.paymentStatus === "Partial"
+            ? "amber"
+            : "rose",
+      referenceNo: sale.referenceNo,
+      companyName: companyProfile.companyName,
+      companySubtitle: companyProfile.companySubtitle,
+      companyAddress: companyProfile.companyAddress,
+      companyGstin: companyProfile.companyGstin,
+      companyPhone: companyProfile.companyPhone,
+      companyEmail: companyProfile.companyEmail,
+      partyTitle: "Billed To",
+      partyName: sale.customerName,
+      partyCompany: sale.customerCompany,
+      partyPhone: sale.customerPhone,
+      partyEmail: sale.customerEmail,
+      partyAddress: sale.billingAddress,
+      extraMeta: [
+        { label: "Payment Status", value: sale.paymentStatus },
+        { label: "Payment Method", value: sale.paymentMethod || "Cash" },
+        { label: "Salesperson", value: sale.salesperson || "Staff" },
+        { label: "Payment Terms", value: sale.paymentTerms || "Net 15 Days" },
+      ],
+      items: (sale.items || []).map((it) => ({
+        name: it.productName,
+        sku: it.sku,
+        batch: it.batch,
+        unit: (it as any).unit || "PCS",
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        discountPercent: it.discountPercent,
+        taxPercent: isGstActive ? it.taxPercent || 0 : 0,
+        total: it.total,
+      })),
+      subtotal: sale.subtotal,
+      discount: sale.totalDiscount,
+      tax: {
+        withGst: isGstActive,
+        taxAmount: sale.totalTax,
+        cgst: sale.cgst,
+        sgst: sale.sgst,
+        igst: sale.igst,
+      },
+      shipping: sale.shippingCharges,
+      otherCharges: sale.otherCharges,
+      roundOff: (sale as any).roundOff,
+      grandTotal: sale.grandTotal,
+      paidAmount: sale.paidAmount,
+      balance: sale.balance,
+      notes: sale.notes,
+      terms: (sale as any).terms || sale.paymentTerms,
+      primarySignatoryLabel: "Authorized Signatory",
+    };
+  };
 
   const handleDownloadSaleInvoice = async (sale: SaleTransaction) => {
     if (isDownloadingPdf) return;
     setIsDownloadingPdf(true);
     const toastId = `dl-sale-${sale.id}`;
-    toast.loading(`Preparing PDF for Invoice ${sale.invoiceNo}...`, { id: toastId });
+    toast.loading(`Preparing PDF for Invoice ${sale.invoiceNo}...`, {
+      id: toastId,
+    });
     try {
       const options = mapSaleToDocumentPrintOptions(sale);
-      await downloadBusinessDocument(options, `Invoice_${sale.invoiceNo.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`);
-      toast.success(`Invoice ${sale.invoiceNo} downloaded successfully!`, { id: toastId });
+      await downloadBusinessDocument(
+        options,
+        `Invoice_${sale.invoiceNo.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`,
+      );
+      toast.success(`Invoice ${sale.invoiceNo} downloaded successfully!`, {
+        id: toastId,
+      });
     } catch (err: any) {
       console.error("Invoice PDF download error:", err);
-      toast.error("Failed to generate and download invoice PDF.", { id: toastId });
+      toast.error("Failed to generate and download invoice PDF.", {
+        id: toastId,
+      });
     } finally {
       setIsDownloadingPdf(false);
     }
@@ -2061,10 +2229,16 @@ export const SalesView: React.FC = () => {
         status: "Received",
         statusColor: "emerald",
         partyTitle: "Received From (Customer)",
-        partyName: (record as any).customerName || parentSale?.customerName || "Customer",
+        partyName:
+          (record as any).customerName ||
+          parentSale?.customerName ||
+          "Customer",
         extraMeta: [
           { label: "Invoice No", value: record.invoiceNo },
-          { label: "Payment Mode", value: (record as any).paymentMode || record.method || "Cash" },
+          {
+            label: "Payment Mode",
+            value: (record as any).paymentMode || record.method || "Cash",
+          },
           { label: "Recorded By", value: record.recordedBy || "Cashier" },
         ],
         items: [
@@ -2083,8 +2257,13 @@ export const SalesView: React.FC = () => {
         notes: record.notes || "Thank you for your business!",
         primarySignatoryLabel: "Cashier / Accounts",
       };
-      await downloadBusinessDocument(receiptOptions, `Receipt_${record.invoiceNo}_${record.id}.pdf`);
-      toast.success("Payment receipt downloaded successfully!", { id: toastId });
+      await downloadBusinessDocument(
+        receiptOptions,
+        `Receipt_${record.invoiceNo}_${record.id}.pdf`,
+      );
+      toast.success("Payment receipt downloaded successfully!", {
+        id: toastId,
+      });
     } catch (err: any) {
       console.error("Receipt download error:", err);
       toast.error("Failed to download payment receipt.", { id: toastId });
@@ -2113,7 +2292,7 @@ export const SalesView: React.FC = () => {
           <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; font-size: 12px; text-align: center; font-weight: 700; color: #1e293b;">${item.quantity}</td>
           <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; font-size: 12px; text-align: right; color: #1e293b;">₹${item.unitPrice.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
           <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; font-size: 12px; text-align: center; color: #1e293b;">${item.discountPercent || 0}%</td>
-          <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; font-size: 12px; text-align: center; color: #1e293b;">${sale.withGst !== false ? `${item.taxPercent}%` : "0%"}</td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; font-size: 12px; text-align: center; color: #1e293b;">${sale.withGst !== false && Number(sale.totalTax || 0) > 0 ? `${item.taxPercent || 0}%` : "0%"}</td>
           <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; font-size: 12px; text-align: right; font-weight: 700; color: #1e293b;">₹${item.total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
         </tr>
       `,
@@ -2359,7 +2538,7 @@ export const SalesView: React.FC = () => {
             discountPercent: it.discountPercent,
             taxPercent: it.taxPercent,
           },
-          { withGst: enableGst, gstType: prev.gstType }
+          { withGst: enableGst, gstType: prev.gstType },
         );
         return { ...it, total: lineRes.lineTotal };
       });
@@ -2447,7 +2626,6 @@ export const SalesView: React.FC = () => {
     }
   }, [searchParams]);
 
-
   // Customer Select Change
   const handleCustomerChange = (custId: string) => {
     clearFormError("customer");
@@ -2501,9 +2679,14 @@ export const SalesView: React.FC = () => {
 
   const handleItemProductChange = (index: number, prodId: string) => {
     const prod = availableProducts.find((p) => p.id === prodId);
-    ["product", "quantity", "price", "discountPercent", "discountAmount", "taxPercent"].forEach(
-      (f) => clearFormError(`items.${index}.${f}`),
-    );
+    [
+      "product",
+      "quantity",
+      "price",
+      "discountPercent",
+      "discountAmount",
+      "taxPercent",
+    ].forEach((f) => clearFormError(`items.${index}.${f}`));
     clearFormError("items");
     clearFormError("totals");
     // The line's batch and stock belong to the old product: drop stale stock, then load the new one.
@@ -2758,13 +2941,21 @@ export const SalesView: React.FC = () => {
   useEffect(() => {
     if (isSplitMode) return; // split entries are checked (and shown) by the split section instead
     const currentPaid = Number(formData.paidAmount) || 0;
-    if (calculatedTotals.grandTotal >= 0 && currentPaid > calculatedTotals.grandTotal) {
+    if (
+      calculatedTotals.grandTotal >= 0 &&
+      currentPaid > calculatedTotals.grandTotal
+    ) {
       setFormData((prev) => ({
         ...prev,
         paidAmount: calculatedTotals.grandTotal,
         paymentSplits:
           prev.paymentSplits.length > 0
-            ? [{ ...prev.paymentSplits[0], amount: calculatedTotals.grandTotal }]
+            ? [
+                {
+                  ...prev.paymentSplits[0],
+                  amount: calculatedTotals.grandTotal,
+                },
+              ]
             : [
                 {
                   id: "ps_1",
@@ -2778,8 +2969,17 @@ export const SalesView: React.FC = () => {
   }, [calculatedTotals.grandTotal, isSplitMode]);
 
   // Split payment: live totals and validation for the entries (a new invoice starts with nothing paid)
-  const splitSummary = summarizeSplit(calculatedTotals.grandTotal, 0, splitRows);
-  const splitValidation = validateSplit(calculatedTotals.grandTotal, 0, splitRows, SALES_SPLIT_PAYMENT_METHODS);
+  const splitSummary = summarizeSplit(
+    calculatedTotals.grandTotal,
+    0,
+    splitRows,
+  );
+  const splitValidation = validateSplit(
+    calculatedTotals.grandTotal,
+    0,
+    splitRows,
+    SALES_SPLIT_PAYMENT_METHODS,
+  );
 
   // Every time the form opens (or another invoice is edited) it starts in Single mode with one empty entry
   useEffect(() => {
@@ -2795,11 +2995,24 @@ export const SalesView: React.FC = () => {
     setFormData((prev) => ({
       ...prev,
       paidAmount: splitSummary.totalPaid,
-      paymentMethod: active.length > 0 ? (active[0].method as any) : prev.paymentMethod,
+      paymentMethod:
+        active.length > 0 ? (active[0].method as any) : prev.paymentMethod,
       paymentSplits:
         active.length > 0
-          ? active.map((r) => ({ id: r.id, method: r.method as any, amount: rowAmount(r), referenceNo: r.reference.trim() }))
-          : [{ id: "ps_1", method: prev.paymentMethod || "Bank Transfer", amount: 0, referenceNo: "" }],
+          ? active.map((r) => ({
+              id: r.id,
+              method: r.method as any,
+              amount: rowAmount(r),
+              referenceNo: r.reference.trim(),
+            }))
+          : [
+              {
+                id: "ps_1",
+                method: prev.paymentMethod || "Bank Transfer",
+                amount: 0,
+                referenceNo: "",
+              },
+            ],
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSplitMode, splitRows]);
@@ -2812,7 +3025,12 @@ export const SalesView: React.FC = () => {
       const m = formData.paymentSplits[0]?.method || formData.paymentMethod;
       setSplitRows([
         {
-          ...newSplitRow(makeSplitRowId(), (SALES_SPLIT_PAYMENT_METHODS as string[]).includes(m as string) ? (m as any) : "Cash"),
+          ...newSplitRow(
+            makeSplitRowId(),
+            (SALES_SPLIT_PAYMENT_METHODS as string[]).includes(m as string)
+              ? (m as any)
+              : "Cash",
+          ),
           amount: carried > 0 ? String(carried) : "",
         },
       ]);
@@ -2838,7 +3056,9 @@ export const SalesView: React.FC = () => {
     if (editingSale.invoiceStatus === "Draft") return 0;
     const pid = it.productId || resolveProductId(it);
     return (editingSale.items || [])
-      .filter((o) => o.productId === pid && (o.batch || "") === (it.batch || ""))
+      .filter(
+        (o) => o.productId === pid && (o.batch || "") === (it.batch || ""),
+      )
       .reduce((acc, o) => acc + (Number(o.quantity) || 0), 0);
   };
 
@@ -2880,7 +3100,11 @@ export const SalesView: React.FC = () => {
   const lastCheckStockRef = useRef(true);
   useRevalidateAfterSubmit(
     invoiceFe,
-    () => validateInvoiceForm(formData, buildInvoiceValidationContext(lastCheckStockRef.current)),
+    () =>
+      validateInvoiceForm(
+        formData,
+        buildInvoiceValidationContext(lastCheckStockRef.current),
+      ),
     [formData, calculatedTotals],
   );
 
@@ -2897,7 +3121,8 @@ export const SalesView: React.FC = () => {
     let stockRejected = false;
     Object.keys(mapped).forEach((k) => {
       if (/^items.d+.quantity$/.test(k) && stockWording.test(mapped[k])) {
-        mapped[k] = "Not enough stock is available in this batch. Please reduce the quantity.";
+        mapped[k] =
+          "Not enough stock is available in this batch. Please reduce the quantity.";
         stockRejected = true;
       }
     });
@@ -2911,7 +3136,10 @@ export const SalesView: React.FC = () => {
       requestAnimationFrame(() => focusField(keys[0]));
       if (!stockRejected) {
         toast.error(
-          getApiErrorMessage(err, "Please correct the highlighted fields and try again."),
+          getApiErrorMessage(
+            err,
+            "Please correct the highlighted fields and try again.",
+          ),
         );
       }
     } else {
@@ -2982,6 +3210,7 @@ export const SalesView: React.FC = () => {
       const salePayload: SaleTransaction = {
         id: isEdit ? editingSale!.id : `sale_${Date.now()}`,
         invoiceNo: isEdit ? formData.invoiceNo : "",
+        saleInvoiceManualNo: formData.saleInvoiceManualNo.trim() || undefined,
         invoiceStatus: "Generated",
         referenceNo: formData.referenceNo || undefined,
         saleDate: formData.saleDate,
@@ -3020,9 +3249,12 @@ export const SalesView: React.FC = () => {
         createdBy: editingSale ? editingSale.createdBy : "",
         salesperson: formData.salesperson || editingSale?.salesperson || "",
         notes: formData.notes || undefined,
-        convertedAt: (convertSourceRef.current || (formData.referenceNo && /^(EST|QT|SO|DC|PRO)-/i.test(formData.referenceNo.trim())))
-          ? (editingSale?.convertedAt || new Date().toISOString())
-          : (editingSale?.convertedAt || undefined),
+        convertedAt:
+          convertSourceRef.current ||
+          (formData.referenceNo &&
+            /^(EST|QT|SO|DC|PRO)-/i.test(formData.referenceNo.trim()))
+            ? editingSale?.convertedAt || new Date().toISOString()
+            : editingSale?.convertedAt || undefined,
         createdAt: editingSale
           ? editingSale.createdAt
           : new Date().toISOString(),
@@ -3056,8 +3288,14 @@ export const SalesView: React.FC = () => {
         }
       }
 
-      if ((convertSourceRef.current || (formData.referenceNo && /^(EST|QT|SO|DC|PRO)-/i.test(formData.referenceNo.trim()))) && !savedApiSale.convertedAt) {
-        savedApiSale.convertedAt = salePayload.convertedAt || new Date().toISOString();
+      if (
+        (convertSourceRef.current ||
+          (formData.referenceNo &&
+            /^(EST|QT|SO|DC|PRO)-/i.test(formData.referenceNo.trim()))) &&
+        !savedApiSale.convertedAt
+      ) {
+        savedApiSale.convertedAt =
+          salePayload.convertedAt || new Date().toISOString();
       }
 
       saveSale(savedApiSale);
@@ -3098,7 +3336,7 @@ export const SalesView: React.FC = () => {
         if (currentPaid > 0) {
           const newPaymentInRecord: SalePaymentIn = {
             id: `payin_${Date.now()}`,
-            receiptNo: '',
+            receiptNo: "",
             date:
               savedApiSale.saleDate || new Date().toISOString().split("T")[0],
             paymentDate:
@@ -3146,7 +3384,10 @@ export const SalesView: React.FC = () => {
             if (isSplitMode) {
               // One receipt per split entry, sent one at a time and never retried: if one fails the rest are not sent.
               for (const row of splitToRecord) {
-                const fields = splitRowToPaymentFields(row, savedApiSale.invoiceNo);
+                const fields = splitRowToPaymentFields(
+                  row,
+                  savedApiSale.invoiceNo,
+                );
                 await commercePaymentInApi.createPaymentIn({
                   ...payInPayload,
                   paymentType: normalizeCommercePaymentType(fields.paymentType),
@@ -3160,7 +3401,10 @@ export const SalesView: React.FC = () => {
               await commercePaymentInApi.createPaymentIn(payInPayload);
             }
           } catch (payInErr) {
-            console.warn("commercePaymentInApi.createPaymentIn notice:", payInErr);
+            console.warn(
+              "commercePaymentInApi.createPaymentIn notice:",
+              payInErr,
+            );
             paymentFailed = true;
             paymentFailureReason = getApiErrorMessage(payInErr, "");
           }
@@ -3182,7 +3426,7 @@ export const SalesView: React.FC = () => {
           if (paymentFailed) {
             toast.warning(
               `Invoice ${savedApiSale.invoiceNo} was generated, but ${isSplitMode ? `only ${splitSaved} of ${splitToRecord.length} split payments were recorded` : "the initial payment could not be recorded"}${paymentFailureReason ? `: ${paymentFailureReason}` : "."} You can add the payment from the invoice without re-creating it.`,
-              { duration: 8000 }
+              { duration: 8000 },
             );
           }
         }
@@ -3308,7 +3552,11 @@ export const SalesView: React.FC = () => {
             customerId: savedApiSale.customerId,
             grandTotal: savedApiSale.grandTotal,
           });
-          dispatch(baseApi.util.invalidateTags([{ type: "ProformaInvoice", id: "LIST" }]));
+          dispatch(
+            baseApi.util.invalidateTags([
+              { type: "ProformaInvoice", id: "LIST" },
+            ]),
+          );
         }
 
         // D. Originating from Delivery Challan
@@ -3326,7 +3574,11 @@ export const SalesView: React.FC = () => {
             customerId: savedApiSale.customerId,
             grandTotal: savedApiSale.grandTotal,
           });
-          dispatch(baseApi.util.invalidateTags([{ type: "DeliveryChallan", id: "LIST" }]));
+          dispatch(
+            baseApi.util.invalidateTags([
+              { type: "DeliveryChallan", id: "LIST" },
+            ]),
+          );
         }
 
         // Clear conversion source ref
@@ -3345,7 +3597,10 @@ export const SalesView: React.FC = () => {
     } catch (err: any) {
       console.error("Failed to generate invoice:", err);
       // Entered values are kept; backend field errors are shown inline.
-      handleInvoiceSaveError(err, "Failed to save the invoice. Please try again.");
+      handleInvoiceSaveError(
+        err,
+        "Failed to save the invoice. Please try again.",
+      );
       return false;
     } finally {
       setIsActionLoading(false);
@@ -3400,6 +3655,7 @@ export const SalesView: React.FC = () => {
       const salePayload: SaleTransaction = {
         id: isEdit ? editingSale!.id : `sale_${Date.now()}`,
         invoiceNo: isEdit ? formData.invoiceNo : "",
+        saleInvoiceManualNo: formData.saleInvoiceManualNo.trim() || undefined,
         invoiceStatus: formData.invoiceStatus || "Draft",
         referenceNo: formData.referenceNo || undefined,
         saleDate: formData.saleDate,
@@ -3481,7 +3737,10 @@ export const SalesView: React.FC = () => {
       return true;
     } catch (err: any) {
       console.error("Failed to save draft invoice:", err);
-      handleInvoiceSaveError(err, "Failed to save the draft invoice. Please try again.");
+      handleInvoiceSaveError(
+        err,
+        "Failed to save the draft invoice. Please try again.",
+      );
       return false;
     } finally {
       setIsActionLoading(false);
@@ -3495,7 +3754,9 @@ export const SalesView: React.FC = () => {
 
   const cancelInvoiceInner = async (sale: SaleTransaction) => {
     if (!(sale?.id || "").trim()) {
-      toast.error("This invoice could not be identified. Please refresh the page and try again.");
+      toast.error(
+        "This invoice could not be identified. Please refresh the page and try again.",
+      );
       return;
     }
     if (String(sale.saleStatus).toLowerCase() === "cancelled") {
@@ -3529,7 +3790,12 @@ export const SalesView: React.FC = () => {
       await fetchSalesInvoices();
     } catch (err: any) {
       console.error("Failed to cancel invoice:", err);
-      toast.error(getApiErrorMessage(err, "Failed to cancel the invoice. Please try again."));
+      toast.error(
+        getApiErrorMessage(
+          err,
+          "Failed to cancel the invoice. Please try again.",
+        ),
+      );
     } finally {
       setIsActionLoading(false);
     }
@@ -3551,7 +3817,9 @@ export const SalesView: React.FC = () => {
   const confirmDeleteSaleInner = async () => {
     if (!deleteTargetSale) return;
     if (!(deleteTargetSale.id || "").trim()) {
-      setDeleteSaleError("This invoice could not be identified. Please refresh the page and try again.");
+      setDeleteSaleError(
+        "This invoice could not be identified. Please refresh the page and try again.",
+      );
       return;
     }
     setIsDeletingSale(true);
@@ -3567,7 +3835,11 @@ export const SalesView: React.FC = () => {
       }
       deleteSale(deleteTargetSale.id);
       setSalesList(
-        sales.filter((s) => s.id !== deleteTargetSale.id && s.invoiceNo !== deleteTargetSale.invoiceNo),
+        sales.filter(
+          (s) =>
+            s.id !== deleteTargetSale.id &&
+            s.invoiceNo !== deleteTargetSale.invoiceNo,
+        ),
       );
       dispatch(
         baseApi.util.invalidateTags([
@@ -3580,7 +3852,9 @@ export const SalesView: React.FC = () => {
           "Collection",
         ]),
       );
-      toast.success(`Invoice "${deleteTargetSale.invoiceNo}" deleted successfully.`);
+      toast.success(
+        `Invoice "${deleteTargetSale.invoiceNo}" deleted successfully.`,
+      );
       setIsDeleteModalOpen(false);
       setDeleteTargetSale(null);
       await fetchSalesInvoices();
@@ -3598,7 +3872,9 @@ export const SalesView: React.FC = () => {
   };
 
   // General Save Sale Form Handler (legacy support for form submit)
-  const handleSaveSale = async (mode: "draft" | "confirm" | "print" | "new") => {
+  const handleSaveSale = async (
+    mode: "draft" | "confirm" | "print" | "new",
+  ) => {
     if (mode === "draft") {
       await handleSaveDraft();
       return;
@@ -3635,6 +3911,7 @@ export const SalesView: React.FC = () => {
       targetSale = {
         ...editingSale,
         invoiceNo: formData.invoiceNo,
+        saleInvoiceManualNo: formData.saleInvoiceManualNo.trim() || undefined,
         invoiceStatus: "Generated",
         referenceNo: formData.referenceNo,
         saleDate: formData.saleDate,
@@ -3682,6 +3959,7 @@ export const SalesView: React.FC = () => {
       targetSale = {
         id: `sale_${Date.now()}`,
         invoiceNo: formData.invoiceNo || "",
+        saleInvoiceManualNo: formData.saleInvoiceManualNo.trim() || undefined,
         invoiceStatus: "Generated",
         referenceNo: formData.referenceNo,
         saleDate: formData.saleDate,
@@ -3782,7 +4060,10 @@ export const SalesView: React.FC = () => {
       const due =
         selectedSale.balance !== undefined
           ? selectedSale.balance
-          : Math.max(0, selectedSale.grandTotal - (selectedSale.paidAmount || 0));
+          : Math.max(
+              0,
+              selectedSale.grandTotal - (selectedSale.paidAmount || 0),
+            );
       const otherRows = paymentModalSplits.reduce(
         (acc, p, i) => (i === index ? acc : acc + (Number(p.amount) || 0)),
         0,
@@ -3815,7 +4096,8 @@ export const SalesView: React.FC = () => {
         : Math.max(0, selectedSale.grandTotal - (selectedSale.paidAmount || 0));
 
     if (String(selectedSale.saleStatus).toLowerCase() === "cancelled") {
-      errs.payments = "Payments cannot be recorded against a cancelled invoice.";
+      errs.payments =
+        "Payments cannot be recorded against a cancelled invoice.";
       return errs;
     }
 
@@ -3824,7 +4106,8 @@ export const SalesView: React.FC = () => {
       const n = parseNumericValue(p.amount);
       if (n === null) {
         if (String(p.amount ?? "").trim() !== "") {
-          errs[`payment.${i}.amount`] = "Payment amount must be a valid number.";
+          errs[`payment.${i}.amount`] =
+            "Payment amount must be a valid number.";
         }
         return;
       }
@@ -3842,7 +4125,8 @@ export const SalesView: React.FC = () => {
 
     if (Object.keys(errs).length === 0) {
       if (total <= 0) {
-        errs["payment.0.amount"] = "Please enter a payment amount greater than zero.";
+        errs["payment.0.amount"] =
+          "Please enter a payment amount greater than zero.";
       } else {
         const over = checkPaymentWithinBalance(total, balance);
         if (over) errs["payment.0.amount"] = over;
@@ -3854,11 +4138,11 @@ export const SalesView: React.FC = () => {
     return errs;
   };
 
-  useRevalidateAfterSubmit(
-    paymentFe,
-    () => validatePaymentModal(),
-    [selectedSale, paymentModalSplits, paymentModalDate],
-  );
+  useRevalidateAfterSubmit(paymentFe, () => validatePaymentModal(), [
+    selectedSale,
+    paymentModalSplits,
+    paymentModalDate,
+  ]);
 
   const handleConfirmPayment = async () => {
     await paymentGuard.runOnce(() => confirmPaymentInner());
@@ -3884,7 +4168,8 @@ export const SalesView: React.FC = () => {
     // Attempt to persist to backend via Commerce Payment-In API
     try {
       const isUuidInvoice = UUID_REGEX.test(selectedSale.id);
-      const isUuidCust = selectedSale.customerId && UUID_REGEX.test(selectedSale.customerId);
+      const isUuidCust =
+        selectedSale.customerId && UUID_REGEX.test(selectedSale.customerId);
       await commercePaymentInApi.createPaymentIn({
         partyName: selectedSale.customerName || "Customer",
         customerId: isUuidCust ? selectedSale.customerId : undefined,
@@ -3893,7 +4178,9 @@ export const SalesView: React.FC = () => {
         invoiceId: isUuidInvoice ? selectedSale.id : undefined,
         invoiceNo: selectedSale.invoiceNo,
         date: paymentDateStr,
-        notes: recordNotes || `Payment received for Invoice ${selectedSale.invoiceNo}`,
+        notes:
+          recordNotes ||
+          `Payment received for Invoice ${selectedSale.invoiceNo}`,
       });
       dispatch(
         baseApi.util.invalidateTags([
@@ -3922,7 +4209,10 @@ export const SalesView: React.FC = () => {
           requestAnimationFrame(() => focusField(Object.keys(mapped)[0]));
         }
         toast.error(
-          getApiErrorMessage(apiErr, "Failed to record the payment. Please try again."),
+          getApiErrorMessage(
+            apiErr,
+            "Failed to record the payment. Please try again.",
+          ),
         );
         return;
       }
@@ -3937,8 +4227,7 @@ export const SalesView: React.FC = () => {
         paymentDate: paymentDateStr,
         paymentTime: timeStr,
         method: p.method,
-        referenceNo:
-          p.referenceNo || '',
+        referenceNo: p.referenceNo || "",
         amount: Number(p.amount),
         status: "Paid",
         recordedBy: "Org Super Administrator",
@@ -4054,9 +4343,19 @@ export const SalesView: React.FC = () => {
 
   // Submit-first validation for the two assign-rep forms.
   const validateAssignRep = (repId: string, key: string): FieldErrors =>
-    repId ? {} : { [key]: "Please select a sales representative before saving." };
-  useRevalidateAfterSubmit(assignFe, () => validateAssignRep(assignRepId, "assignRepId"), [assignRepId]);
-  useRevalidateAfterSubmit(detailFe, () => validateAssignRep(detailRepId, "detailRepId"), [detailRepId]);
+    repId
+      ? {}
+      : { [key]: "Please select a sales representative before saving." };
+  useRevalidateAfterSubmit(
+    assignFe,
+    () => validateAssignRep(assignRepId, "assignRepId"),
+    [assignRepId],
+  );
+  useRevalidateAfterSubmit(
+    detailFe,
+    () => validateAssignRep(detailRepId, "detailRepId"),
+    [detailRepId],
+  );
   useEffect(() => {
     assignFe.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4080,7 +4379,10 @@ export const SalesView: React.FC = () => {
   };
 
   // Assign the representative on the server (the same API the Customer screen uses). Returns true only when it was saved.
-  const assignRepViaApi = async (customerId: string, repId: string): Promise<boolean> => {
+  const assignRepViaApi = async (
+    customerId: string,
+    repId: string,
+  ): Promise<boolean> => {
     if (!customerId) return true;
     try {
       const res = await collectionApi.assignCustomer({
@@ -4088,19 +4390,28 @@ export const SalesView: React.FC = () => {
         salesRepresentativeId: repId,
         assignmentType: "Primary",
       });
-      if (res && res.success === false) throw new Error(res.message || "The assignment was not saved");
+      if (res && res.success === false)
+        throw new Error(res.message || "The assignment was not saved");
       const assigned = salesRepresentatives.find((r) => r.id === repId);
       setCustomerList((prev) =>
         prev.map((c: any) =>
           c.id === customerId
-            ? { ...c, salesRepresentativeId: repId, salesRepresentativeName: assigned?.name || c.salesRepresentativeName }
+            ? {
+                ...c,
+                salesRepresentativeId: repId,
+                salesRepresentativeName:
+                  assigned?.name || c.salesRepresentativeName,
+              }
             : c,
         ),
       );
       return true;
     } catch (err: any) {
       toast.error("Could not assign the sales representative", {
-        description: err?.response?.data?.error?.message || err?.message || "Please try again.",
+        description:
+          err?.response?.data?.error?.message ||
+          err?.message ||
+          "Please try again.",
       });
       return false;
     }
@@ -4109,9 +4420,11 @@ export const SalesView: React.FC = () => {
   // Save Quick Assignment
   const handleSaveQuickAssignInvoice = async () => {
     if (!assignInvoiceTarget) return;
-    if (!assignFe.validateAll(validateAssignRep(assignRepId, "assignRepId"))) return;
+    if (!assignFe.validateAll(validateAssignRep(assignRepId, "assignRepId")))
+      return;
     const cust = customers.find((c) => c.id === assignInvoiceTarget.customerId);
-    if (!(await assignRepViaApi(assignInvoiceTarget.customerId, assignRepId))) return;
+    if (!(await assignRepViaApi(assignInvoiceTarget.customerId, assignRepId)))
+      return;
     const rep = salesRepresentatives.find((r) => r.id === assignRepId);
 
     toast.success(
@@ -4127,7 +4440,8 @@ export const SalesView: React.FC = () => {
   // Save Assignment from Invoice Details Modal Card
   const handleSaveDetailAssignment = async () => {
     if (!selectedSale) return;
-    if (!detailFe.validateAll(validateAssignRep(detailRepId, "detailRepId"))) return;
+    if (!detailFe.validateAll(validateAssignRep(detailRepId, "detailRepId")))
+      return;
     const cust = customers.find((c) => c.id === selectedSale.customerId);
     if (!(await assignRepViaApi(selectedSale.customerId, detailRepId))) return;
     const rep = salesRepresentatives.find((r) => r.id === detailRepId);
@@ -4190,14 +4504,24 @@ export const SalesView: React.FC = () => {
       filename: `Sales_Invoices_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Sales Invoices",
       title: "YAA CREATIONS CRM - SALES INVOICES & ORDERS REPORT",
-      subtitle: `Filter: ${appliedSaleStatus} | Total Invoices: ${filteredSales.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
+      subtitle: `Filter: ${appliedSaleStatus} | Total Invoices: ${filteredSales.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
       columns: [
         { header: "#", key: "srNo", align: "center", width: 8 },
         { header: "Invoice No", key: "invoiceNo", align: "center", width: 16 },
         { header: "Sale Date", key: "date", align: "center", width: 14 },
         { header: "Due Date", key: "dueDate", align: "center", width: 14 },
-        { header: "Created Date & Time", key: "createdDt", align: "center", width: 22 },
-        { header: "Converted Date & Time", key: "convertedDt", align: "center", width: 22 },
+        {
+          header: "Created Date & Time",
+          key: "createdDt",
+          align: "center",
+          width: 22,
+        },
+        {
+          header: "Converted Date & Time",
+          key: "convertedDt",
+          align: "center",
+          width: 22,
+        },
         { header: "Customer", key: "customerName", align: "left", width: 26 },
         { header: "Contact", key: "customerPhone", align: "left", width: 16 },
         { header: "Items", key: "itemsList", align: "left", width: 32 },
@@ -4319,8 +4643,18 @@ export const SalesView: React.FC = () => {
           width: "105px",
         },
         { header: "Date", key: "date", align: "center", width: "85px" },
-        { header: "Created At", key: "createdDt", align: "center", width: "110px" },
-        { header: "Converted At", key: "convertedDt", align: "center", width: "110px" },
+        {
+          header: "Created At",
+          key: "createdDt",
+          align: "center",
+          width: "110px",
+        },
+        {
+          header: "Converted At",
+          key: "convertedDt",
+          align: "center",
+          width: "110px",
+        },
         {
           header: "Customer",
           key: "customerName",
@@ -4495,10 +4829,12 @@ export const SalesView: React.FC = () => {
                 <h1 className="text-lg sm:text-xl font-bold text-white tracking-tight">
                   {editingSale ? "Edit Sale" : "New Sale"}
                 </h1>
-                {formData.invoiceNo && (
-                  <span className="font-extrabold text-[#33077C] font-mono text-xs sm:text-[13px] bg-white px-2.5 py-0.5 rounded-md border border-purple-200/80 shadow-2xs">
-                    #{formData.invoiceNo}
-                  </span>
+                {editingSale && formData.invoiceNo && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-extrabold text-[#33077C] font-mono text-xs sm:text-[13px] bg-white px-2.5 py-0.5 rounded-md border border-purple-200/80 shadow-2xs">
+                      #{formData.invoiceNo}
+                    </span>
+                  </div>
                 )}
               </div>
               <p className="text-xs sm:text-sm text-white/80 font-medium mt-0.5">
@@ -4533,36 +4869,37 @@ export const SalesView: React.FC = () => {
                     Customer / Client <span className="text-slate-500">*</span>
                   </label>
                   <div {...fieldAttr("customer")}>
-                  <CustomerSearchableSelect
-                    value={formData.customerId}
-                    onChange={(val, cust) => {
-                      clearFormError("customer");
-                      handleCustomerChange(val);
-                      if (cust) {
-                        setFormData((prev) => ({
-                          ...prev,
-                          customerName: cust.name,
-                          customerCompany: cust.company || "",
-                          customerPhone: cust.phone || "",
-                          customerEmail: cust.email || "",
-                          billingAddress: cust.billingAddress || cust.address || "",
-                        }));
+                    <CustomerSearchableSelect
+                      value={formData.customerId}
+                      onChange={(val, cust) => {
+                        clearFormError("customer");
+                        handleCustomerChange(val);
+                        if (cust) {
+                          setFormData((prev) => ({
+                            ...prev,
+                            customerName: cust.name,
+                            customerCompany: cust.company || "",
+                            customerPhone: cust.phone || "",
+                            customerEmail: cust.email || "",
+                            billingAddress:
+                              cust.billingAddress || cust.address || "",
+                          }));
+                        }
+                      }}
+                      selectedCustomer={
+                        formData.customerId
+                          ? {
+                              id: formData.customerId,
+                              name: formData.customerName,
+                              company: formData.customerCompany,
+                              phone: formData.customerPhone,
+                            }
+                          : null
                       }
-                    }}
-                    selectedCustomer={
-                      formData.customerId
-                        ? {
-                            id: formData.customerId,
-                            name: formData.customerName,
-                            company: formData.customerCompany,
-                            phone: formData.customerPhone,
-                          }
-                        : null
-                    }
-                    onAddNewCustomer={() => {
-                      setIsAddCustomerModalOpen(true);
-                    }}
-                  />
+                      onAddNewCustomer={() => {
+                        setIsAddCustomerModalOpen(true);
+                      }}
+                    />
                   </div>
                   <FormError message={formErrors.customer} />
                 </div>
@@ -4588,16 +4925,39 @@ export const SalesView: React.FC = () => {
                   />
                 </div>
 
-                {/* Row 1, Col 3: Quotation Number / Sale Number */}
+                {/* Row 1, Col 3: Invoice Number / Sale Number */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Quotation Number
+                    Invoice S.No.
                   </label>
                   <input
                     type="text"
-                    value={editingSale ? formData.invoiceNo : ""}
+                    value={
+                      editingSale
+                        ? formData.invoiceNo
+                        : formData.invoiceNo || computedPreviewNo
+                    }
                     readOnly
                     placeholder="Auto-generated on save"
+                    className="w-full h-11 px-4 bg-purple-50/70 border border-purple-200/90 rounded-xl text-xs sm:text-[13px] font-bold text-[#33077C] font-mono outline-none cursor-default"
+                  />
+                </div>
+
+                {/* Invoice No (manual entry) */}
+                <div>
+                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                    Invoice No
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.saleInvoiceManualNo}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        saleInvoiceManualNo: e.target.value,
+                      })
+                    }
+                    placeholder="Enter Invoice No"
                     className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
                   />
                 </div>
@@ -4966,34 +5326,64 @@ export const SalesView: React.FC = () => {
                       </colgroup>
                       <thead>
                         <tr className="bg-[#33077C] text-[11px] font-bold text-white tracking-wider uppercase">
-                          <th rowSpan={2} className="py-3 px-5 text-left border border-[#33077C]/40 bg-[#33077C] text-white align-middle">
+                          <th
+                            rowSpan={2}
+                            className="py-3 px-5 text-left border border-[#33077C]/40 bg-[#33077C] text-white align-middle"
+                          >
                             PROJECTS
                           </th>
-                          <th rowSpan={2} className="py-3 px-3 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">
+                          <th
+                            rowSpan={2}
+                            className="py-3 px-3 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle"
+                          >
                             BATCH NO
                           </th>
-                          <th rowSpan={2} className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">
+                          <th
+                            rowSpan={2}
+                            className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle"
+                          >
                             QTY
                           </th>
-                          <th rowSpan={2} className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">
+                          <th
+                            rowSpan={2}
+                            className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle"
+                          >
                             {formData.withGst ? "GST (%)" : "GST (0%)"}
                           </th>
-                          <th rowSpan={2} className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">
+                          <th
+                            rowSpan={2}
+                            className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle"
+                          >
                             PRICE
                           </th>
-                          <th colSpan={2} className="py-1.5 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white">
-                            <span className="text-[11px] font-bold">DISCOUNT</span>
+                          <th
+                            colSpan={2}
+                            className="py-1.5 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white"
+                          >
+                            <span className="text-[11px] font-bold">
+                              DISCOUNT
+                            </span>
                           </th>
-                          <th rowSpan={2} className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">
+                          <th
+                            rowSpan={2}
+                            className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle"
+                          >
                             TOTAL
                           </th>
-                          <th rowSpan={2} className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">
+                          <th
+                            rowSpan={2}
+                            className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle"
+                          >
                             ACTION
                           </th>
                         </tr>
                         <tr className="bg-[#33077C] text-[10px] font-bold text-purple-200 tracking-wider uppercase">
-                          <th className="py-1.5 px-1 text-center border border-[#33077C]/40 bg-[#33077C]">%</th>
-                          <th className="py-1.5 px-2 text-center border border-[#33077C]/40 bg-[#33077C]">AMOUNT</th>
+                          <th className="py-1.5 px-1 text-center border border-[#33077C]/40 bg-[#33077C]">
+                            %
+                          </th>
+                          <th className="py-1.5 px-2 text-center border border-[#33077C]/40 bg-[#33077C]">
+                            AMOUNT
+                          </th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200 text-sm">
@@ -5017,14 +5407,21 @@ export const SalesView: React.FC = () => {
                             >
                               {/* 1. Product Selection */}
                               <td className="px-4 py-3 align-top border border-slate-200 relative si-product-cell">
-                                <div className="relative" ref={openProductDropdownRow === idx ? productDropdownRef : undefined}>
+                                <div
+                                  className="relative"
+                                  ref={
+                                    openProductDropdownRow === idx
+                                      ? productDropdownRef
+                                      : undefined
+                                  }
+                                >
                                   <div
                                     className={`w-full min-h-[38px] px-3 py-1.5 bg-white border rounded-xl flex items-center justify-between text-xs cursor-pointer transition-all ${
                                       openProductDropdownRow === idx
                                         ? "border-[#33077C] ring-2 ring-[#33077C]/10 bg-white"
                                         : item.productName
-                                        ? "border-slate-300 hover:border-slate-400"
-                                        : "border-slate-200 hover:border-slate-300"
+                                          ? "border-slate-300 hover:border-slate-400"
+                                          : "border-slate-200 hover:border-slate-300"
                                     }`}
                                   >
                                     <input
@@ -5035,14 +5432,18 @@ export const SalesView: React.FC = () => {
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         setOpenProductDropdownRow(idx);
-                                        setProductSearchQuery(item.productName || "");
+                                        setProductSearchQuery(
+                                          item.productName || "",
+                                        );
                                         if (productList.length === 0) {
                                           fetchLiveProducts();
                                         }
                                       }}
                                       onFocus={() => {
                                         setOpenProductDropdownRow(idx);
-                                        setProductSearchQuery(item.productName || "");
+                                        setProductSearchQuery(
+                                          item.productName || "",
+                                        );
                                         if (productList.length === 0) {
                                           fetchLiveProducts();
                                         }
@@ -5053,12 +5454,15 @@ export const SalesView: React.FC = () => {
                                         setProductSearchQuery(val);
                                         setOpenProductDropdownRow(idx);
                                         if (productSearchTimerRef.current) {
-                                          clearTimeout(productSearchTimerRef.current);
+                                          clearTimeout(
+                                            productSearchTimerRef.current,
+                                          );
                                         }
                                         if (val.trim()) {
-                                          productSearchTimerRef.current = setTimeout(() => {
-                                            fetchLiveProducts(val.trim());
-                                          }, 300);
+                                          productSearchTimerRef.current =
+                                            setTimeout(() => {
+                                              fetchLiveProducts(val.trim());
+                                            }, 300);
                                         }
                                       }}
                                       className="w-full bg-transparent text-xs font-semibold text-slate-800 outline-none cursor-pointer"
@@ -5073,7 +5477,9 @@ export const SalesView: React.FC = () => {
                                             setOpenProductDropdownRow(null);
                                           } else {
                                             setOpenProductDropdownRow(idx);
-                                            setProductSearchQuery(item.productName || "");
+                                            setProductSearchQuery(
+                                              item.productName || "",
+                                            );
                                             if (productList.length === 0) {
                                               fetchLiveProducts();
                                             }
@@ -5109,13 +5515,20 @@ export const SalesView: React.FC = () => {
                                             onChange={(e) => {
                                               const val = e.target.value;
                                               setProductSearchQuery(val);
-                                              if (productSearchTimerRef.current) {
-                                                clearTimeout(productSearchTimerRef.current);
+                                              if (
+                                                productSearchTimerRef.current
+                                              ) {
+                                                clearTimeout(
+                                                  productSearchTimerRef.current,
+                                                );
                                               }
                                               if (val.trim().length >= 1) {
-                                                productSearchTimerRef.current = setTimeout(() => {
-                                                  fetchLiveProducts(val.trim());
-                                                }, 300);
+                                                productSearchTimerRef.current =
+                                                  setTimeout(() => {
+                                                    fetchLiveProducts(
+                                                      val.trim(),
+                                                    );
+                                                  }, 300);
                                               }
                                             }}
                                             autoFocus
@@ -5124,7 +5537,9 @@ export const SalesView: React.FC = () => {
                                           {productSearchQuery && (
                                             <button
                                               type="button"
-                                              onClick={() => setProductSearchQuery('')}
+                                              onClick={() =>
+                                                setProductSearchQuery("")
+                                              }
                                               className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
                                             >
                                               <X className="w-3.5 h-3.5" />
@@ -5165,52 +5580,75 @@ export const SalesView: React.FC = () => {
                                           }`}
                                         >
                                           <div className="flex items-center gap-2">
-                                            <span className="text-slate-400 italic">None / Clear Product</span>
+                                            <span className="text-slate-400 italic">
+                                              None / Clear Product
+                                            </span>
                                           </div>
                                           {!item.productName && (
                                             <Check className="w-4 h-4 text-[#33077C]" />
                                           )}
                                         </div>
 
-                                        {isLoadingProducts && matchingProducts.length === 0 ? (
+                                        {isLoadingProducts &&
+                                        matchingProducts.length === 0 ? (
                                           <div className="py-6 text-center text-slate-400 text-xs flex items-center justify-center gap-2">
                                             <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
                                             <span>Loading products...</span>
                                           </div>
                                         ) : matchingProducts.length === 0 ? (
                                           <div className="py-6 px-3 text-center text-slate-400">
-                                            <p className="text-xs font-semibold text-slate-600">No products found</p>
-                                            <p className="text-[11px] text-slate-400 mt-0.5">Try typing a different name, category, or SKU</p>
+                                            <p className="text-xs font-semibold text-slate-600">
+                                              No products found
+                                            </p>
+                                            <p className="text-[11px] text-slate-400 mt-0.5">
+                                              Try typing a different name,
+                                              category, or SKU
+                                            </p>
                                             {productSearchQuery.trim() && (
                                               <button
                                                 type="button"
                                                 onClick={(e) => {
                                                   e.stopPropagation();
                                                   setActiveItemRowIndex(idx);
-                                                  setOpenProductDropdownRow(null);
+                                                  setOpenProductDropdownRow(
+                                                    null,
+                                                  );
                                                   setIsAddItemModalOpen(true);
                                                 }}
                                                 className="mt-2.5 inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-[#33077C] text-white text-[11px] font-bold hover:bg-[#4309A2] transition-colors"
                                               >
                                                 <Plus className="w-3 h-3" />
-                                                <span>Add "{productSearchQuery.trim()}"</span>
+                                                <span>
+                                                  Add "
+                                                  {productSearchQuery.trim()}"
+                                                </span>
                                               </button>
                                             )}
                                           </div>
                                         ) : (
                                           matchingProducts.map((p: any) => {
-                                            const isSelected = item.productId === p.id || (item.productName && item.productName === p.name);
-                                            const imgUrl = p.imageUrl || p.image;
-                                            const pName = p.name || p.productName || "";
-                                            const pSku = p.sku || p.code || "PRD";
+                                            const isSelected =
+                                              item.productId === p.id ||
+                                              (item.productName &&
+                                                item.productName === p.name);
+                                            const imgUrl =
+                                              p.imageUrl || p.image;
+                                            const pName =
+                                              p.name || p.productName || "";
+                                            const pSku =
+                                              p.sku || p.code || "PRD";
                                             const pCategory = p.category;
                                             const pUnit = p.unit || "Pcs";
-                                            const pPrice = Number(p.price || p.unitPrice || 0);
+                                            const pPrice = Number(
+                                              p.price || p.unitPrice || 0,
+                                            );
 
                                             return (
                                               <div
                                                 key={p.id}
-                                                onClick={() => handleSelectProduct(idx, p)}
+                                                onClick={() =>
+                                                  handleSelectProduct(idx, p)
+                                                }
                                                 className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-3 text-xs transition-colors cursor-pointer text-left ${
                                                   isSelected
                                                     ? "bg-purple-50 text-[#33077C] font-semibold border border-purple-200/60"
@@ -5226,7 +5664,12 @@ export const SalesView: React.FC = () => {
                                                         className="w-full h-full object-cover"
                                                       />
                                                     ) : (
-                                                      <span>{getInitials(pName, "PR")}</span>
+                                                      <span>
+                                                        {getInitials(
+                                                          pName,
+                                                          "PR",
+                                                        )}
+                                                      </span>
                                                     )}
                                                   </div>
 
@@ -5248,7 +5691,10 @@ export const SalesView: React.FC = () => {
                                                       <span className="font-mono text-slate-600">
                                                         SKU: {pSku}
                                                       </span>
-                                                      <ProductStockLabel qty={p.stockQty} unit={pUnit} />
+                                                      <ProductStockLabel
+                                                        qty={p.stockQty}
+                                                        unit={pUnit}
+                                                      />
                                                       {p.hsnCode && (
                                                         <span className="text-slate-400 font-mono text-[10px]">
                                                           • HSN: {p.hsnCode}
@@ -5260,7 +5706,10 @@ export const SalesView: React.FC = () => {
 
                                                 <div className="flex items-center gap-2 shrink-0">
                                                   <span className="font-bold text-[#33077C] text-xs">
-                                                    ₹{pPrice.toLocaleString("en-IN")}
+                                                    ₹
+                                                    {pPrice.toLocaleString(
+                                                      "en-IN",
+                                                    )}
                                                   </span>
                                                   {isSelected && (
                                                     <Check className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
@@ -5273,7 +5722,9 @@ export const SalesView: React.FC = () => {
                                       </div>
                                     </div>
                                   )}
-                                  <FormError message={formErrors[`items.${idx}.product`]} />
+                                  <FormError
+                                    message={formErrors[`items.${idx}.product`]}
+                                  />
                                 </div>
                               </td>
 
@@ -5295,34 +5746,41 @@ export const SalesView: React.FC = () => {
                                   );
                                   // Batches of THIS product from the backend stock; the local product
                                   // list is only a fallback until the stock has loaded.
-                                  const stockBatches = getStockBatches(item.productId);
+                                  const stockBatches = getStockBatches(
+                                    item.productId,
+                                  );
                                   const batches: any[] =
-                                    stockBatches.length > 0 ? stockBatches : prod?.batches || [];
+                                    stockBatches.length > 0
+                                      ? stockBatches
+                                      : prod?.batches || [];
                                   if (batches.length > 0) {
-                                    const batchAvail = getBatchAvailable(item.productId, item.batch);
+                                    const batchAvail = getBatchAvailable(
+                                      item.productId,
+                                      item.batch,
+                                    );
                                     return (
                                       <>
-                                      <SearchableSelect
-                                        value={item.batch || ""}
-                                        onChange={(val) =>
-                                          handleItemBatchChange(idx, val)
-                                        }
-                                        options={batches.map((b: any) => ({
-                                          value: b.batchNo,
-                                          label: b.batchNo,
-                                          subLabel: `${b.quantity} in stock${b.expDate ? ` • Exp: ${b.expDate}` : ""}`,
-                                          badge: `${b.quantity} in stock`,
-                                        }))}
-                                        placeholder="Select Batch..."
-                                        searchPlaceholder="Search batch..."
-                                        size="md"
-                                        triggerClassName="bg-purple-50/60 hover:bg-purple-50 text-[#33077C] font-bold border-purple-200 hover:border-purple-300"
-                                      />
-                                      {batchAvail !== null && (
-                                        <p className="mt-1 text-[10px] font-semibold text-slate-500 text-center">
-                                          {batchAvail} in stock
-                                        </p>
-                                      )}
+                                        <SearchableSelect
+                                          value={item.batch || ""}
+                                          onChange={(val) =>
+                                            handleItemBatchChange(idx, val)
+                                          }
+                                          options={batches.map((b: any) => ({
+                                            value: b.batchNo,
+                                            label: b.batchNo,
+                                            subLabel: `${b.quantity} in stock${b.expDate ? ` • Exp: ${b.expDate}` : ""}`,
+                                            badge: `${b.quantity} in stock`,
+                                          }))}
+                                          placeholder="Select Batch..."
+                                          searchPlaceholder="Search batch..."
+                                          size="md"
+                                          triggerClassName="bg-purple-50/60 hover:bg-purple-50 text-[#33077C] font-bold border-purple-200 hover:border-purple-300"
+                                        />
+                                        {batchAvail !== null && (
+                                          <p className="mt-1 text-[10px] font-semibold text-slate-500 text-center">
+                                            {batchAvail} in stock
+                                          </p>
+                                        )}
                                       </>
                                     );
                                   }
@@ -5362,9 +5820,14 @@ export const SalesView: React.FC = () => {
                                       Number(e.target.value),
                                     )
                                   }
-                                  className={`w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs font-semibold text-center text-slate-800 focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all ${(formErrors[`items.${idx}.quantity`] || liveStockErrors[`items.${idx}.quantity`]) ? FORM_ERROR_INPUT_CLS : ""}`}
+                                  className={`w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs font-semibold text-center text-slate-800 focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all ${formErrors[`items.${idx}.quantity`] || liveStockErrors[`items.${idx}.quantity`] ? FORM_ERROR_INPUT_CLS : ""}`}
                                 />
-                                <FormError message={formErrors[`items.${idx}.quantity`] || liveStockErrors[`items.${idx}.quantity`]} />
+                                <FormError
+                                  message={
+                                    formErrors[`items.${idx}.quantity`] ||
+                                    liveStockErrors[`items.${idx}.quantity`]
+                                  }
+                                />
                               </td>
 
                               {/* 3. GST (%) */}
@@ -5390,7 +5853,11 @@ export const SalesView: React.FC = () => {
                                       : "bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed"
                                   }`}
                                 />
-                                <FormError message={formErrors[`items.${idx}.taxPercent`]} />
+                                <FormError
+                                  message={
+                                    formErrors[`items.${idx}.taxPercent`]
+                                  }
+                                />
                               </td>
 
                               {/* 4. PRICE */}
@@ -5410,7 +5877,9 @@ export const SalesView: React.FC = () => {
                                   }
                                   className={`w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs font-bold text-center text-slate-800 focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all ${formErrors[`items.${idx}.price`] ? FORM_ERROR_INPUT_CLS : ""}`}
                                 />
-                                <FormError message={formErrors[`items.${idx}.price`]} />
+                                <FormError
+                                  message={formErrors[`items.${idx}.price`]}
+                                />
                               </td>
 
                               {/* 5. DISCOUNT (%) */}
@@ -5419,7 +5888,11 @@ export const SalesView: React.FC = () => {
                                   type="number"
                                   min="0"
                                   max="100"
-                                  value={item.discountPercent === 0 ? "" : (item.discountPercent || "")}
+                                  value={
+                                    item.discountPercent === 0
+                                      ? ""
+                                      : item.discountPercent || ""
+                                  }
                                   {...fieldAttr(`items.${idx}.discountPercent`)}
                                   onKeyDown={handleNonNegativeKeyDown}
                                   onChange={(e) =>
@@ -5432,7 +5905,11 @@ export const SalesView: React.FC = () => {
                                   placeholder="0"
                                   className={`w-full h-10 px-1 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs font-semibold text-center text-slate-800 focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all ${formErrors[`items.${idx}.discountPercent`] ? FORM_ERROR_INPUT_CLS : ""}`}
                                 />
-                                <FormError message={formErrors[`items.${idx}.discountPercent`]} />
+                                <FormError
+                                  message={
+                                    formErrors[`items.${idx}.discountPercent`]
+                                  }
+                                />
                               </td>
 
                               {/* 6. DISCOUNT (AMOUNT) */}
@@ -5441,7 +5918,11 @@ export const SalesView: React.FC = () => {
                                   type="number"
                                   min="0"
                                   step="any"
-                                  value={item.discountAmount === 0 ? "" : (item.discountAmount || "")}
+                                  value={
+                                    item.discountAmount === 0
+                                      ? ""
+                                      : item.discountAmount || ""
+                                  }
                                   {...fieldAttr(`items.${idx}.discountAmount`)}
                                   onKeyDown={handleNonNegativeKeyDown}
                                   onChange={(e) =>
@@ -5454,7 +5935,11 @@ export const SalesView: React.FC = () => {
                                   placeholder="0.00"
                                   className={`w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs font-semibold text-center text-slate-800 focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all ${formErrors[`items.${idx}.discountAmount`] ? FORM_ERROR_INPUT_CLS : ""}`}
                                 />
-                                <FormError message={formErrors[`items.${idx}.discountAmount`]} />
+                                <FormError
+                                  message={
+                                    formErrors[`items.${idx}.discountAmount`]
+                                  }
+                                />
                               </td>
 
                               {/* 6. TOTAL */}
@@ -5585,10 +6070,13 @@ export const SalesView: React.FC = () => {
                             }`}
                           >
                             {calculatedTotals.totalDiscount > 0
-                              ? `-₹${calculatedTotals.totalDiscount.toLocaleString("en-IN", {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}`
+                              ? `-₹${calculatedTotals.totalDiscount.toLocaleString(
+                                  "en-IN",
+                                  {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                  },
+                                )}`
                               : "₹0.00"}
                           </span>
                         </div>
@@ -5597,10 +6085,13 @@ export const SalesView: React.FC = () => {
                           <span>Amount (After Discount):</span>
                           <span className="font-bold text-slate-900 text-sm">
                             ₹
-                            {calculatedTotals.taxableAmount.toLocaleString("en-IN", {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}
+                            {calculatedTotals.taxableAmount.toLocaleString(
+                              "en-IN",
+                              {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              },
+                            )}
                           </span>
                         </div>
                       </div>
@@ -5614,20 +6105,26 @@ export const SalesView: React.FC = () => {
                                 <span>CGST:</span>
                                 <span className="font-bold text-slate-900">
                                   ₹
-                                  {calculatedTotals.cgst.toLocaleString("en-IN", {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2,
-                                  })}
+                                  {calculatedTotals.cgst.toLocaleString(
+                                    "en-IN",
+                                    {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    },
+                                  )}
                                 </span>
                               </div>
                               <div className="flex items-center justify-between text-slate-600 font-medium">
                                 <span>SGST:</span>
                                 <span className="font-bold text-slate-900">
                                   ₹
-                                  {calculatedTotals.sgst.toLocaleString("en-IN", {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2,
-                                  })}
+                                  {calculatedTotals.sgst.toLocaleString(
+                                    "en-IN",
+                                    {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    },
+                                  )}
                                 </span>
                               </div>
                             </>
@@ -5648,23 +6145,30 @@ export const SalesView: React.FC = () => {
                             <span>Total GST:</span>
                             <span className="font-bold text-slate-900">
                               ₹
-                              {calculatedTotals.totalTax.toLocaleString("en-IN", {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
-                              })}
+                              {calculatedTotals.totalTax.toLocaleString(
+                                "en-IN",
+                                {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                },
+                              )}
                             </span>
                           </div>
                         </div>
                       ) : (
                         <div className="pt-3 pb-1 border-t border-slate-100 flex items-center justify-between text-sm text-slate-600">
                           <span>GST (Without GST):</span>
-                          <span className="font-medium text-slate-500">₹0.00 (Exempt)</span>
+                          <span className="font-medium text-slate-500">
+                            ₹0.00 (Exempt)
+                          </span>
                         </div>
                       )}
 
                       {/* Freight / Shipping */}
                       <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-sm">
-                        <span className="text-slate-600 font-medium">Freight / Shipping:</span>
+                        <span className="text-slate-600 font-medium">
+                          Freight / Shipping:
+                        </span>
                         <div className="relative">
                           <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#33077C] font-bold text-xs sm:text-sm">
                             ₹
@@ -5672,29 +6176,47 @@ export const SalesView: React.FC = () => {
                           <input
                             type="text"
                             inputMode="decimal"
-                            value={formData.shippingCharges === 0 ? "" : formData.shippingCharges}
+                            value={
+                              formData.shippingCharges === 0
+                                ? ""
+                                : formData.shippingCharges
+                            }
                             placeholder="0"
                             {...fieldAttr("shippingCharges")}
                             onKeyDown={handleNonNegativeKeyDown}
                             onChange={(e) => {
                               clearFormError("shippingCharges");
                               clearFormError("totals");
-                              const raw = e.target.value.replace(/[^0-9.]/g, "");
+                              const raw = e.target.value.replace(
+                                /[^0-9.]/g,
+                                "",
+                              );
                               if (raw === "") {
-                                setFormData((prev) => ({ ...prev, shippingCharges: 0 }));
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  shippingCharges: 0,
+                                }));
                                 return;
                               }
                               const parts = raw.split(".");
                               const clean =
-                                parts.length > 2 ? `${parts[0]}.${parts.slice(1).join("")}` : raw;
+                                parts.length > 2
+                                  ? `${parts[0]}.${parts.slice(1).join("")}`
+                                  : raw;
                               const num = Math.max(0, parseFloat(clean) || 0);
-                              setFormData((prev) => ({ ...prev, shippingCharges: num }));
+                              setFormData((prev) => ({
+                                ...prev,
+                                shippingCharges: num,
+                              }));
                             }}
                             className="w-28 h-9 text-right pl-6 pr-2.5 bg-white border-2 border-[#33077C] rounded-[6px] text-xs sm:text-sm font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#33077C]/20 shadow-2xs transition-all"
                           />
                         </div>
                       </div>
-                      <FormError message={formErrors.shippingCharges} className="justify-end" />
+                      <FormError
+                        message={formErrors.shippingCharges}
+                        className="justify-end"
+                      />
 
                       {/* 3. Rounding Adjustment */}
                       <div className="pt-3 border-t border-slate-100 space-y-2">
@@ -5702,7 +6224,9 @@ export const SalesView: React.FC = () => {
                           <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
                             Rounding Adjustment
                           </label>
-                          <span className="text-[11px] text-slate-400">click to apply</span>
+                          <span className="text-[11px] text-slate-400">
+                            click to apply
+                          </span>
                         </div>
 
                         <div className="space-y-2">
@@ -5712,7 +6236,8 @@ export const SalesView: React.FC = () => {
                             onClick={() =>
                               setFormData((prev) => ({
                                 ...prev,
-                                roundMode: prev.roundMode === "down" ? "none" : "down",
+                                roundMode:
+                                  prev.roundMode === "down" ? "none" : "down",
                               }))
                             }
                             className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border transition-all cursor-pointer ${
@@ -5748,7 +6273,8 @@ export const SalesView: React.FC = () => {
                             onClick={() =>
                               setFormData((prev) => ({
                                 ...prev,
-                                roundMode: prev.roundMode === "up" ? "none" : "up",
+                                roundMode:
+                                  prev.roundMode === "up" ? "none" : "up",
                               }))
                             }
                             className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border transition-all cursor-pointer ${
@@ -5786,7 +6312,9 @@ export const SalesView: React.FC = () => {
                           <span className="font-bold text-[11px] text-blue-600 block uppercase tracking-wider">
                             Grand Total
                           </span>
-                          <span className="text-[11px] text-slate-500 font-medium">Net payable amount</span>
+                          <span className="text-[11px] text-slate-500 font-medium">
+                            Net payable amount
+                          </span>
                         </div>
                         <span className="font-bold text-base sm:text-lg text-blue-600">
                           ₹
@@ -5804,8 +6332,14 @@ export const SalesView: React.FC = () => {
                       <div className="pt-2 border-t border-slate-100 space-y-3">
                         {!editingSale && (
                           <div className="flex items-center justify-between gap-2 text-xs">
-                            <span className="font-semibold text-emerald-700">Payment Received</span>
-                            <div className="inline-flex rounded-lg border border-slate-200 overflow-hidden" role="group" aria-label="Payment mode">
+                            <span className="font-semibold text-emerald-700">
+                              Payment Received
+                            </span>
+                            <div
+                              className="inline-flex rounded-lg border border-slate-200 overflow-hidden"
+                              role="group"
+                              aria-label="Payment mode"
+                            >
                               <button
                                 type="button"
                                 onClick={() => switchPaymentMode(false)}
@@ -5838,118 +6372,169 @@ export const SalesView: React.FC = () => {
                           />
                         ) : (
                           <>
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-semibold text-emerald-700">
-                            Paid Amount:
-                          </span>
-                          <div className="relative">
-                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-emerald-600 font-bold text-xs">
-                              ₹
-                            </span>
-                            <input
-                              id="sales-invoice-paid-amount"
-                              type="text"
-                              inputMode="decimal"
-                              value={formData.paidAmount === 0 ? "" : formData.paidAmount}
-                              placeholder="0"
-                              {...fieldAttr("paidAmount")}
-                              onKeyDown={handleNonNegativeKeyDown}
-                              onChange={(e) => {
-                                clearFormError("paidAmount");
-                                clearFormError("paymentMethod");
-                                clearFormError("totals");
-                                const raw = e.target.value.replace(/[^0-9.]/g, "");
-                                if (raw === "") {
-                                  setFormData((prev) => ({
-                                    ...prev,
-                                    paidAmount: 0,
-                                    paymentSplits:
-                                      prev.paymentSplits.length > 0
-                                        ? [{ ...prev.paymentSplits[0], amount: 0 }]
-                                        : [
-                                            {
-                                              id: "ps_1",
-                                              method: prev.paymentMethod || "Bank Transfer",
-                                              amount: 0,
-                                              referenceNo: "",
-                                            },
-                                          ],
-                                  }));
-                                  return;
-                                }
-                                const parts = raw.split(".");
-                                const clean = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join("")}` : raw;
-                                const cleanDecimals =
-                                  parts.length === 2 && parts[1].length > 2
-                                    ? `${parts[0]}.${parts[1].slice(0, 2)}`
-                                    : clean;
-                                let newAmount = parseFloat(cleanDecimals);
-                                let typed = cleanDecimals;
-                                if (isNaN(newAmount) || newAmount < 0) {
-                                  newAmount = 0;
-                                }
-                                // More than the invoice total cannot be paid: hold the amount at the total and say why, inline.
-                                const invoiceTotal = calculatedTotals.grandTotal;
-                                if (invoiceTotal > 0 && newAmount > invoiceTotal + 0.005) {
-                                  newAmount = invoiceTotal;
-                                  typed = String(invoiceTotal);
-                                  mergeFormErrors({
-                                    paidAmount: `Paid amount cannot exceed the invoice total of ₹${invoiceTotal.toFixed(2)}.`,
-                                  });
-                                }
-                                setFormData((prev) => ({
-                                  ...prev,
-                                  paidAmount: typed.endsWith(".") ? (typed as any) : newAmount,
-                                  paymentSplits:
-                                    prev.paymentSplits.length > 0
-                                      ? [{ ...prev.paymentSplits[0], amount: newAmount }]
-                                      : [
-                                          {
-                                            id: "ps_1",
-                                            method: prev.paymentMethod || "Bank Transfer",
-                                            amount: newAmount,
-                                            referenceNo: "",
-                                          },
-                                        ],
-                                }));
-                              }}
-                              onBlur={() => {
-                                const num = Math.max(0, parseFloat(String(formData.paidAmount)) || 0);
-                                // Normalise only; over-payment is reported inline on submit.
-                                const clamped = num;
-                                setFormData((prev) => ({
-                                  ...prev,
-                                  paidAmount: clamped,
-                                  paymentSplits:
-                                    prev.paymentSplits.length > 0
-                                      ? [{ ...prev.paymentSplits[0], amount: clamped }]
-                                      : [
-                                          {
-                                            id: "ps_1",
-                                            method: prev.paymentMethod || "Bank Transfer",
-                                            amount: clamped,
-                                            referenceNo: "",
-                                          },
-                                        ],
-                                }));
-                              }}
-                              className="w-32 h-8.5 text-right pl-6 pr-2.5 bg-white border-2 border-emerald-600 focus:border-emerald-700 focus:ring-2 focus:ring-emerald-500/20 rounded-[6px] font-bold text-emerald-700 text-xs outline-none shadow-2xs transition-all"
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-semibold text-emerald-700">
+                                Paid Amount:
+                              </span>
+                              <div className="relative">
+                                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-emerald-600 font-bold text-xs">
+                                  ₹
+                                </span>
+                                <input
+                                  id="sales-invoice-paid-amount"
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={
+                                    formData.paidAmount === 0
+                                      ? ""
+                                      : formData.paidAmount
+                                  }
+                                  placeholder="0"
+                                  {...fieldAttr("paidAmount")}
+                                  onKeyDown={handleNonNegativeKeyDown}
+                                  onChange={(e) => {
+                                    clearFormError("paidAmount");
+                                    clearFormError("paymentMethod");
+                                    clearFormError("totals");
+                                    const raw = e.target.value.replace(
+                                      /[^0-9.]/g,
+                                      "",
+                                    );
+                                    if (raw === "") {
+                                      setFormData((prev) => ({
+                                        ...prev,
+                                        paidAmount: 0,
+                                        paymentSplits:
+                                          prev.paymentSplits.length > 0
+                                            ? [
+                                                {
+                                                  ...prev.paymentSplits[0],
+                                                  amount: 0,
+                                                },
+                                              ]
+                                            : [
+                                                {
+                                                  id: "ps_1",
+                                                  method:
+                                                    prev.paymentMethod ||
+                                                    "Bank Transfer",
+                                                  amount: 0,
+                                                  referenceNo: "",
+                                                },
+                                              ],
+                                      }));
+                                      return;
+                                    }
+                                    const parts = raw.split(".");
+                                    const clean =
+                                      parts.length > 2
+                                        ? `${parts[0]}.${parts.slice(1).join("")}`
+                                        : raw;
+                                    const cleanDecimals =
+                                      parts.length === 2 && parts[1].length > 2
+                                        ? `${parts[0]}.${parts[1].slice(0, 2)}`
+                                        : clean;
+                                    let newAmount = parseFloat(cleanDecimals);
+                                    let typed = cleanDecimals;
+                                    if (isNaN(newAmount) || newAmount < 0) {
+                                      newAmount = 0;
+                                    }
+                                    // More than the invoice total cannot be paid: hold the amount at the total and say why, inline.
+                                    const invoiceTotal =
+                                      calculatedTotals.grandTotal;
+                                    if (
+                                      invoiceTotal > 0 &&
+                                      newAmount > invoiceTotal + 0.005
+                                    ) {
+                                      newAmount = invoiceTotal;
+                                      typed = String(invoiceTotal);
+                                      mergeFormErrors({
+                                        paidAmount: `Paid amount cannot exceed the invoice total of ₹${invoiceTotal.toFixed(2)}.`,
+                                      });
+                                    }
+                                    setFormData((prev) => ({
+                                      ...prev,
+                                      paidAmount: typed.endsWith(".")
+                                        ? (typed as any)
+                                        : newAmount,
+                                      paymentSplits:
+                                        prev.paymentSplits.length > 0
+                                          ? [
+                                              {
+                                                ...prev.paymentSplits[0],
+                                                amount: newAmount,
+                                              },
+                                            ]
+                                          : [
+                                              {
+                                                id: "ps_1",
+                                                method:
+                                                  prev.paymentMethod ||
+                                                  "Bank Transfer",
+                                                amount: newAmount,
+                                                referenceNo: "",
+                                              },
+                                            ],
+                                    }));
+                                  }}
+                                  onBlur={() => {
+                                    const num = Math.max(
+                                      0,
+                                      parseFloat(String(formData.paidAmount)) ||
+                                        0,
+                                    );
+                                    // Normalise only; over-payment is reported inline on submit.
+                                    const clamped = num;
+                                    setFormData((prev) => ({
+                                      ...prev,
+                                      paidAmount: clamped,
+                                      paymentSplits:
+                                        prev.paymentSplits.length > 0
+                                          ? [
+                                              {
+                                                ...prev.paymentSplits[0],
+                                                amount: clamped,
+                                              },
+                                            ]
+                                          : [
+                                              {
+                                                id: "ps_1",
+                                                method:
+                                                  prev.paymentMethod ||
+                                                  "Bank Transfer",
+                                                amount: clamped,
+                                                referenceNo: "",
+                                              },
+                                            ],
+                                    }));
+                                  }}
+                                  className="w-32 h-8.5 text-right pl-6 pr-2.5 bg-white border-2 border-emerald-600 focus:border-emerald-700 focus:ring-2 focus:ring-emerald-500/20 rounded-[6px] font-bold text-emerald-700 text-xs outline-none shadow-2xs transition-all"
+                                />
+                              </div>
+                            </div>
+                            <FormError
+                              message={
+                                formErrors.paidAmount ||
+                                formErrors.paymentMethod
+                              }
+                              className="justify-end"
                             />
-                          </div>
-                        </div>
-                        <FormError message={formErrors.paidAmount || formErrors.paymentMethod} className="justify-end" />
-
                           </>
                         )}
 
                         <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-sm">
-                          <span className="font-bold text-slate-800">Total Balance:</span>
+                          <span className="font-bold text-slate-800">
+                            Total Balance:
+                          </span>
                           <span
                             className={`font-bold text-sm ${
-                              calculatedTotals.balance > 0 ? "text-amber-600" : "text-emerald-600"
+                              calculatedTotals.balance > 0
+                                ? "text-amber-600"
+                                : "text-emerald-600"
                             }`}
                           >
-                            ₹{calculatedTotals.balance.toLocaleString("en-IN", {
+                            ₹
+                            {calculatedTotals.balance.toLocaleString("en-IN", {
                               minimumFractionDigits: 2,
                               maximumFractionDigits: 2,
                             })}
@@ -5972,7 +6557,8 @@ export const SalesView: React.FC = () => {
                     <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200">
                       UNPAID
                     </span>
-                  ) : calculatedTotals.paid >= calculatedTotals.grandTotal || calculatedTotals.balance <= 0 ? (
+                  ) : calculatedTotals.paid >= calculatedTotals.grandTotal ||
+                    calculatedTotals.balance <= 0 ? (
                     <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
                       <CheckCircle2 className="w-3.5 h-3.5" />
                       <span>PAID</span>
@@ -6600,13 +7186,33 @@ export const SalesView: React.FC = () => {
               <table className="w-full text-left border-collapse border border-slate-200 min-w-[1050px]">
                 <CommonTableHead
                   columns={[
-                    { label: "INVOICE NO.", align: "left", minWidth: "150px" },
+                    {
+                      label: "INVOICE S.NO.",
+                      align: "left",
+                      minWidth: "150px",
+                    },
                     { label: "CUSTOMER", align: "left", minWidth: "180px" },
-                    { label: "CREATED DATE & TIME", align: "left", minWidth: "150px" },
-                    { label: "CONVERTED DATE & TIME", align: "left", minWidth: "150px" },
+                    {
+                      label: "CREATED DATE & TIME",
+                      align: "left",
+                      minWidth: "150px",
+                    },
+                    {
+                      label: "CONVERTED DATE & TIME",
+                      align: "left",
+                      minWidth: "150px",
+                    },
                     { label: "ITEMS", align: "left", minWidth: "150px" },
-                    { label: "TOTAL AMOUNT", align: "right", minWidth: "130px" },
-                    { label: "PAID / BALANCE", align: "right", minWidth: "140px" },
+                    {
+                      label: "TOTAL AMOUNT",
+                      align: "right",
+                      minWidth: "130px",
+                    },
+                    {
+                      label: "PAID / BALANCE",
+                      align: "right",
+                      minWidth: "140px",
+                    },
                     { label: "PAYMENT", align: "center", minWidth: "110px" },
                     { label: "STATUS", align: "center", minWidth: "110px" },
                     { label: "ACTIONS", align: "center", minWidth: "130px" },
@@ -6635,25 +7241,40 @@ export const SalesView: React.FC = () => {
                       const isCancelled = sale.saleStatus === "Cancelled";
                       const initials = getCustomerInitials(sale.customerName);
                       const createdDt = formatDateTime(sale.createdAt);
-                      const convertedAt = resolveDocumentConvertedAt("Invoice", sale);
+                      const convertedAt = resolveDocumentConvertedAt(
+                        "Invoice",
+                        sale,
+                      );
                       const convertedDt = formatDateTime(convertedAt);
                       const resolvedCustomerCode =
                         sale.customerCode ||
                         customers.find(
                           (c) =>
                             (sale.customerId && c.id === sale.customerId) ||
-                            (c.phone && sale.customerPhone && c.phone === sale.customerPhone) ||
-                            (c.name && sale.customerName && c.name.trim().toLowerCase() === sale.customerName.trim().toLowerCase())
+                            (c.phone &&
+                              sale.customerPhone &&
+                              c.phone === sale.customerPhone) ||
+                            (c.name &&
+                              sale.customerName &&
+                              c.name.trim().toLowerCase() ===
+                                sale.customerName.trim().toLowerCase()),
                         )?.customerCode ||
                         customerList.find(
                           (c) =>
                             (sale.customerId && c.id === sale.customerId) ||
-                            (c.phone && sale.customerPhone && c.phone === sale.customerPhone) ||
-                            (c.name && sale.customerName && c.name.trim().toLowerCase() === sale.customerName.trim().toLowerCase())
+                            (c.phone &&
+                              sale.customerPhone &&
+                              c.phone === sale.customerPhone) ||
+                            (c.name &&
+                              sale.customerName &&
+                              c.name.trim().toLowerCase() ===
+                                sale.customerName.trim().toLowerCase()),
                         )?.customerCode ||
                         findDocumentLineage(sale.invoiceNo)?.customerCode ||
-                        (sale.referenceNo ? findDocumentLineage(sale.referenceNo)?.customerCode : '') ||
-                        '';
+                        (sale.referenceNo
+                          ? findDocumentLineage(sale.referenceNo)?.customerCode
+                          : "") ||
+                        "";
 
                       return (
                         <tr
@@ -6711,7 +7332,6 @@ export const SalesView: React.FC = () => {
                               </div>
                             </div>
                           </td>
-
 
                           {/* CREATED DATE & TIME */}
                           <td className="py-4 px-4 border border-slate-200 whitespace-nowrap align-middle">
@@ -6834,7 +7454,6 @@ export const SalesView: React.FC = () => {
                             )}
                           </td>
 
-
                           {/* 9. Actions */}
                           <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap align-middle min-w-[130px] w-36">
                             <div className="flex items-center justify-center gap-1.5 action-dropdown-container">
@@ -6860,13 +7479,16 @@ export const SalesView: React.FC = () => {
                                   {
                                     label: "Assign Sales Rep",
                                     variant: "assign",
-                                    onClick: () => handleOpenAssignInvoiceModal(sale),
+                                    onClick: () =>
+                                      handleOpenAssignInvoiceModal(sale),
                                   },
 
                                   {
                                     label: "Receive Payment",
                                     variant: "payment",
-                                    disabled: sale.paymentStatus === "Paid" || sale.balance <= 0,
+                                    disabled:
+                                      sale.paymentStatus === "Paid" ||
+                                      sale.balance <= 0,
                                     onClick: () => handleOpenAddPayment(sale),
                                   },
                                   {
@@ -6885,7 +7507,7 @@ export const SalesView: React.FC = () => {
                                             amount: sale.grandTotal,
                                             items: sale.items,
                                           },
-                                        }
+                                        },
                                       );
                                       toast.info(
                                         `Converting invoice ${sale.invoiceNo} to Sales Return / Credit Note`,
@@ -6912,7 +7534,8 @@ export const SalesView: React.FC = () => {
                                   {
                                     label: "Download Invoice",
                                     variant: "download",
-                                    onClick: () => handleDownloadSaleInvoice(sale),
+                                    onClick: () =>
+                                      handleDownloadSaleInvoice(sale),
                                   },
                                   {
                                     label: "Duplicate",
@@ -7100,10 +7723,22 @@ export const SalesView: React.FC = () => {
                   columns={[
                     { label: "#", align: "center", width: "45px" },
                     { label: "INVOICE #", align: "left", minWidth: "140px" },
-                    { label: "CUSTOMER NAME", align: "left", minWidth: "160px" },
+                    {
+                      label: "CUSTOMER NAME",
+                      align: "left",
+                      minWidth: "160px",
+                    },
                     { label: "DATE", align: "left", minWidth: "120px" },
-                    { label: "PAYMENT METHOD", align: "center", minWidth: "140px" },
-                    { label: "REFERENCE / TXN ID", align: "left", minWidth: "150px" },
+                    {
+                      label: "PAYMENT METHOD",
+                      align: "center",
+                      minWidth: "140px",
+                    },
+                    {
+                      label: "REFERENCE / TXN ID",
+                      align: "left",
+                      minWidth: "150px",
+                    },
                     { label: "AMOUNT PAID", align: "right", minWidth: "130px" },
                     { label: "STATUS", align: "center", minWidth: "110px" },
                     { label: "ACTIONS", align: "center", minWidth: "90px" },
@@ -8017,9 +8652,15 @@ export const SalesView: React.FC = () => {
                             <option value="UPI">UPI</option>
                             <option value="Card">Card</option>
                             <option value="Cheque">Cheque</option>
-                            <option value="Online Payment">Online Payment</option>
+                            <option value="Online Payment">
+                              Online Payment
+                            </option>
                           </select>
-                          <FormError message={paymentFormErrors[`payment.${sIdx}.method`]} />
+                          <FormError
+                            message={
+                              paymentFormErrors[`payment.${sIdx}.method`]
+                            }
+                          />
                         </div>
 
                         <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -8370,7 +9011,7 @@ export const SalesView: React.FC = () => {
         isOpen={isAddCustomerModalOpen}
         onClose={() => setIsAddCustomerModalOpen(false)}
         onCustomerCreated={(newCust) => {
-          dispatch(baseApi.util.invalidateTags(['Customer']));
+          dispatch(baseApi.util.invalidateTags(["Customer"]));
           hasLoadedCustomersRef.current = false;
           loadCustomersData();
           handleCustomerChange(newCust.id);
@@ -8384,18 +9025,24 @@ export const SalesView: React.FC = () => {
           setActiveItemRowIndex(null);
         }}
         onProductCreated={(newProd) => {
-          dispatch(baseApi.util.invalidateTags(['Product', 'Stock', 'Batch']));
+          dispatch(baseApi.util.invalidateTags(["Product", "Stock", "Batch"]));
           const pId = newProd.id || (newProd as any).productId;
           const mapped = {
             id: pId,
             productId: pId,
-            name: newProd.productName || (newProd as any).name || "Unnamed Product",
-            productName: newProd.productName || (newProd as any).name || "Unnamed Product",
+            name:
+              newProd.productName || (newProd as any).name || "Unnamed Product",
+            productName:
+              newProd.productName || (newProd as any).name || "Unnamed Product",
             code: newProd.productCode || (newProd as any).sku || pId,
             sku: newProd.productCode || (newProd as any).sku || pId,
             price: Number(newProd.salePrice ?? (newProd as any).unitPrice ?? 0),
-            salePrice: Number(newProd.salePrice ?? (newProd as any).unitPrice ?? 0),
-            unitPrice: Number(newProd.salePrice ?? (newProd as any).unitPrice ?? 0),
+            salePrice: Number(
+              newProd.salePrice ?? (newProd as any).unitPrice ?? 0,
+            ),
+            unitPrice: Number(
+              newProd.salePrice ?? (newProd as any).unitPrice ?? 0,
+            ),
             cost: Number(newProd.purchasePrice ?? 0),
             unit: newProd.unit || "PCS",
             batches: newProd.batches || [],
@@ -8403,7 +9050,10 @@ export const SalesView: React.FC = () => {
             category: newProd.category || "General",
             imageUrl: (newProd as any).imageUrl || (newProd as any).image || "",
           };
-          setProductList((prev) => [mapped, ...prev.filter((p) => p.id !== pId)]);
+          setProductList((prev) => [
+            mapped,
+            ...prev.filter((p) => p.id !== pId),
+          ]);
           hasLoadedProductsRef.current = false;
           loadProductAndStockData();
           if (activeItemRowIndex !== null) {
@@ -8896,7 +9546,9 @@ export const SalesView: React.FC = () => {
               <button
                 type="button"
                 disabled={isDownloadingPdf}
-                onClick={() => handleDownloadPaymentReceipt(selectedPaymentRecord)}
+                onClick={() =>
+                  handleDownloadPaymentReceipt(selectedPaymentRecord)
+                }
                 className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
               >
                 <Download className="w-4 h-4" />

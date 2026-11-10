@@ -411,9 +411,11 @@ export const commercePurchaseRequestApi = {
     payload: CreatePurchaseRequestPayload,
     idempotencyKey?: string
   ): Promise<PurchaseRequestSingleResponse> => {
+    const cleanPayload = { ...payload };
+    delete (cleanPayload as any).requestNo;
     const response = await baseClient.post<PurchaseRequestSingleResponse>(
       '/commerce/purchase-requests',
-      payload,
+      cleanPayload,
       idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : undefined
     );
     return response.data;

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Building2,
@@ -37,9 +37,11 @@ import { useInvoiceStore, SavedInvoice } from '../../store/useInvoiceStore';
 import { useProformaInvoiceStore } from '../../store/useProformaInvoiceStore';
 import {
   proformaInvoiceApi,
+  useGetPlatformProformaInvoicesQuery,
   CreateProformaRequest,
   UpdateProformaRequest,
   invoiceApi,
+  useGetPlatformInvoicesQuery,
   CreateInvoiceRequest,
   UpdateInvoiceRequest,
   InvoiceApiItem,
@@ -194,6 +196,47 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const [isCompanyProductDropdownOpen, setIsCompanyProductDropdownOpen] = useState(false);
   const [productSuiteSearchQuery, setProductSuiteSearchQuery] = useState('');
   const companyProductDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Fetch existing invoices / proforma invoices to compute the next sequential document number
+  const existingInvoicesQuery = useGetPlatformInvoicesQuery(
+    { page: 1, limit: 100, sortBy: 'createdAt', sortOrder: 'desc' },
+    { skip: isProforma }
+  );
+  const existingProformasQuery = useGetPlatformProformaInvoicesQuery(
+    { page: 1, limit: 100, sortBy: 'createdAt', sortOrder: 'desc' },
+    { skip: !isProforma }
+  );
+
+  const nextPredictedInvoiceNumber = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    const prefix = isProforma ? `PRO-${currentYear}-` : `INV-${currentYear}-`;
+    let maxSeq = 0;
+    let seqLength = 4;
+
+    const listToCheck = isProforma
+      ? existingProformasQuery.data?.data
+      : existingInvoicesQuery.data?.data;
+
+    if (Array.isArray(listToCheck)) {
+      listToCheck.forEach((item: any) => {
+        const numStr = (isProforma ? item.proformaNumber : item.invoiceNumber) || '';
+        if (numStr) {
+          // Match patterns like INV-2026-0015, PRO-2026-0002, PI-0001, etc.
+          const match = numStr.match(/(?:(?:INV|PRO|PI)-(?:\d{4}-)?)(\d+)/i);
+          if (match && match[1]) {
+            const num = parseInt(match[1], 10);
+            if (!isNaN(num) && num > maxSeq) {
+              maxSeq = num;
+              seqLength = Math.max(seqLength, match[1].length);
+            }
+          }
+        }
+      });
+    }
+
+    const nextSeq = maxSeq + 1;
+    return `${prefix}${String(nextSeq).padStart(seqLength, '0')}`;
+  }, [isProforma, existingInvoicesQuery.data?.data, existingProformasQuery.data?.data]);
 
   // Column 1: Invoice Number & Description
   const [invoiceNumber, setInvoiceNumber] = useState(invoiceToEdit?.invoiceNumber || '');
@@ -646,6 +689,10 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     };
   }, [openProductDropdownId]);
 
+  // The client dropdown shows the client name (organizations keep showing the company name).
+  const clientLabel = (c: { company?: string; name?: string }) =>
+    isSuperAdmin && !isOrgSuperAdmin ? c.company || c.name || '' : c.name || c.company || '';
+
   // Filter clients for dropdown
   const filteredCustomers = availableCustomers.filter((c) => {
     const q = clientSearchQuery.toLowerCase();
@@ -685,6 +732,13 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     description: string;
   } | null>(null);
   const [tempDescription, setTempDescription] = useState('');
+
+  // Auto pre-fill predicted next document number for fresh creations
+  useEffect(() => {
+    if (!invoiceToEdit && !invoiceToDuplicate && !invoiceNumber && nextPredictedInvoiceNumber) {
+      setInvoiceNumber(nextPredictedInvoiceNumber);
+    }
+  }, [invoiceToEdit, invoiceToDuplicate, invoiceNumber, nextPredictedInvoiceNumber]);
 
   // Populate data when editing or duplicating an invoice
   useEffect(() => {
@@ -1174,10 +1228,11 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   </label>
                   <input
                     type="text"
-                    value={invoiceNumber}
+                    value={invoiceNumber || nextPredictedInvoiceNumber}
                     readOnly
+                    disabled
                     placeholder="Auto-generated"
-                    className="w-full max-w-[240px] h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 outline-none cursor-not-allowed shadow-2xs"
+                    className="w-full max-w-[240px] h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 outline-none shadow-2xs font-mono cursor-not-allowed select-none"
                   />
                 </div>
 
@@ -1341,19 +1396,19 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   <Search className="w-4 h-4 text-slate-400 absolute left-4 pointer-events-none" />
                   <input
                     type="text"
-                    value={isClientDropdownOpen ? clientSearchQuery : (selectedCustomer?.company || selectedCustomer?.name || clientSearchQuery)}
+                    value={isClientDropdownOpen ? clientSearchQuery : (selectedCustomer ? clientLabel(selectedCustomer) : clientSearchQuery)}
                     onChange={(e) => {
                       const val = e.target.value;
                       setClientSearchQuery(val);
                       if (!isClientDropdownOpen) setIsClientDropdownOpen(true);
-                      if (selectedCustomer && val !== selectedCustomer.company) {
+                      if (selectedCustomer && val !== clientLabel(selectedCustomer)) {
                         setSelectedCustomer(null);
                       }
                     }}
                     onFocus={() => {
                       setIsClientDropdownOpen(true);
                       if (selectedCustomer && !clientSearchQuery) {
-                        setClientSearchQuery(selectedCustomer.company);
+                        setClientSearchQuery(clientLabel(selectedCustomer));
                       }
                     }}
                     placeholder={isSuperAdmin && !isOrgSuperAdmin ? "Search or select organization..." : "Search or select client / customer..."}
@@ -1389,7 +1444,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                       ) : (
                         filteredCustomers.map((cust) => {
                           const isSelected = selectedCustomer?.id === cust.id;
-                          const displayName = cust.company || cust.name;
+                          const displayName = clientLabel(cust);
                           return (
                             <button
                               key={cust.id}
@@ -1827,6 +1882,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                           const activeBranchId = localStorage.getItem('active_branch_id_sales') || localStorage.getItem('active_branch_id');
 
                           const createPayload: CreateProformaRequest = {
+                            proformaNumber: invoiceNumber.trim() || undefined,
                             createdDate: createdDate || undefined,
                             sourceQuoteId: convertedFromQuoteId || undefined,
                             invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
@@ -1923,6 +1979,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                         navigate('/sales/invoices');
                       } else {
                         const createPayload: CreateInvoiceRequest = {
+                          invoiceNumber: invoiceNumber.trim() || undefined,
                           createdDate: createdDate || undefined,
                           sourceProformaId: convertedFromProformaId || undefined,
                           invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],

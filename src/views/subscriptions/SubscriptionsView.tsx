@@ -2184,10 +2184,10 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 <thead>
                       <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
                         <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">PLAN NAME</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-right">PRICE</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-right">TOTAL PRICE WITH GST</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">BILLING CYCLE</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">PLAN TYPE</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">PRICE</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">TOTAL PRICE WITH GST</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">BILLING CYCLE</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">PLAN TYPE</th>
                         <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
                         <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTION</th>
                       </tr>
@@ -2474,9 +2474,9 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                       <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
                         <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">PRODUCT NAME</th>
                         <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">PLAN NAME</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-right">PRICE</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-right">TOTAL PRICE WITH GST</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">BILLING CYCLE</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">PRICE</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">TOTAL PRICE WITH GST</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">BILLING CYCLE</th>
                         <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
                         <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTION</th>
                       </tr>

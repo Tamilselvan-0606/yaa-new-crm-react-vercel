@@ -68,6 +68,7 @@ import {
 } from "../utils/formUtils";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import { toast } from "../../../utils/toast";
+import { getNextPaymentInNumber } from "../../../utils/documentNumbering";
 import {
   isValidIndianPhone,
   normalizeIndianPhoneTo10Digits,
@@ -218,10 +219,8 @@ const PERIOD_OPTIONS = [
 export const PaymentInView: React.FC = () => {
   const companyProfile = useCompanyDocumentProfile();
   const dispatch = useAppDispatch();
-  const {
-    savePaymentIn,
-    deletePaymentIn: deleteStorePaymentIn,
-  } = useSalesManagementStore();
+  const { savePaymentIn, deletePaymentIn: deleteStorePaymentIn } =
+    useSalesManagementStore();
   // Customers and invoices shown in the UI come only from the Commerce API
   const [customers, setCustomersList] = useState<SalesCustomer[]>([]);
   const [sales, setSalesList] = useState<SaleTransaction[]>([]);
@@ -239,9 +238,9 @@ export const PaymentInView: React.FC = () => {
   const quickCustomerGuard = useSubmitGuard();
   const [imageError, setImageError] = useState<string | null>(null);
   const [serverTotal, setServerTotal] = useState(0);
-  const [apiSummary, setApiSummary] = useState<
-    NonNullable<Awaited<ReturnType<typeof commercePaymentInApi.getPaymentIns>>["summary"]> | null
-  >(null);
+  const [apiSummary, setApiSummary] = useState<NonNullable<
+    Awaited<ReturnType<typeof commercePaymentInApi.getPaymentIns>>["summary"]
+  > | null>(null);
   const isFetchingRef = useRef(false);
   const hasLoadedPrereqs = useRef(false);
 
@@ -310,6 +309,7 @@ export const PaymentInView: React.FC = () => {
   const [selectedInvoiceNo, setSelectedInvoiceNo] = useState("");
   const [formPaymentType, setFormPaymentType] = useState<string>("Cash");
   const [formReceiptNo, setFormReceiptNo] = useState("");
+  const [formPaymentInManualNo, setFormPaymentInManualNo] = useState("");
   const [formDate, setFormDate] = useState(
     new Date().toISOString().split("T")[0],
   );
@@ -320,6 +320,11 @@ export const PaymentInView: React.FC = () => {
   >("Completed");
   const [formDescription, setFormDescription] = useState("");
   const [imageAttachment, setImageAttachment] = useState<string | null>(null);
+
+  // Computed next preview number based on currently loaded payment receipts
+  const computedPreviewNo = useMemo(() => {
+    return getNextPaymentInNumber(paymentIns);
+  }, [paymentIns]);
 
   // 3-Dots Action Dropdown & Share Dropdown & History State
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -345,99 +350,105 @@ export const PaymentInView: React.FC = () => {
   // -------------------------------------------------------------
   // API: Fetch Payment-In list with current filters and pagination
   // -------------------------------------------------------------
-  const fetchPaymentIns = useCallback(async (overrides?: {
-    page?: number;
-    search?: string;
-    period?: string;
-    paymentType?: string;
-    firm?: string;
-    from?: string;
-    to?: string;
-  }) => {
-    if (isFetchingRef.current) return;
-    isFetchingRef.current = true;
-    setIsFetching(true);
-    try {
-      const targetPage = overrides?.page ?? currentPage;
-      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
-      const targetPeriod = overrides?.period !== undefined ? overrides.period : selectedPeriod;
-      const targetPaymentType = overrides?.paymentType !== undefined ? overrides.paymentType : selectedPaymentType;
-      const targetFirm = overrides?.firm !== undefined ? overrides.firm : selectedFirm;
-      const targetFrom = overrides?.from !== undefined ? overrides.from : startDate;
-      const targetTo = overrides?.to !== undefined ? overrides.to : endDate;
+  const fetchPaymentIns = useCallback(
+    async (overrides?: {
+      page?: number;
+      search?: string;
+      period?: string;
+      paymentType?: string;
+      firm?: string;
+      from?: string;
+      to?: string;
+    }) => {
+      if (isFetchingRef.current) return;
+      isFetchingRef.current = true;
+      setIsFetching(true);
+      try {
+        const targetPage = overrides?.page ?? currentPage;
+        const targetSearch =
+          overrides?.search !== undefined ? overrides.search : appliedSearch;
+        const targetPeriod =
+          overrides?.period !== undefined ? overrides.period : selectedPeriod;
+        const targetPaymentType =
+          overrides?.paymentType !== undefined
+            ? overrides.paymentType
+            : selectedPaymentType;
+        const targetFirm =
+          overrides?.firm !== undefined ? overrides.firm : selectedFirm;
+        const targetFrom =
+          overrides?.from !== undefined ? overrides.from : startDate;
+        const targetTo = overrides?.to !== undefined ? overrides.to : endDate;
 
-      const params: PaymentInFilterParams = {
-        page_no: targetPage,
-        page_size: pageSize,
-        pagination_required: true,
-        sortOrder: "desc",
-      };
-
-      if (targetSearch) {
-        params.search = targetSearch;
-      }
-      if (targetFrom) params.from = targetFrom;
-      if (targetTo) params.to = targetTo;
-
-      if (
-        targetPeriod &&
-        targetPeriod !== "All Time" &&
-        targetPeriod !== "Custom"
-      ) {
-        const pMap: Record<string, string> = {
-          Today: "today",
-          "This Week": "this_week",
-          "This Month": "this_month",
-          "Last Month": "last_month",
-          "This Quarter": "this_quarter",
-          "This Year": "this_year",
+        const params: PaymentInFilterParams = {
+          page_no: targetPage,
+          page_size: pageSize,
+          pagination_required: true,
+          sortOrder: "desc",
         };
-        if (pMap[targetPeriod]) params.period = pMap[targetPeriod];
-      }
 
-      if (targetPaymentType && targetPaymentType !== "All") {
-        params.paymentType = targetPaymentType;
-      }
-
-      if (
-        targetFirm &&
-        targetFirm !== "All" &&
-        UUID_REGEX.test(targetFirm)
-      ) {
-        params.customerId = targetFirm;
-      }
-
-      const res = await commercePaymentInApi.getPaymentIns(params);
-      if (res?.success && Array.isArray(res.data)) {
-        const mapped = res.data.map(mapApiPaymentInToSalePaymentIn);
-        setPaymentIns(mapped);
-        setApiSummary(res.summary ?? null);
-        if (res.pagination?.totalRecords !== undefined) {
-          setServerTotal(res.pagination.totalRecords);
-        } else {
-          setServerTotal(mapped.length);
+        if (targetSearch) {
+          params.search = targetSearch;
         }
+        if (targetFrom) params.from = targetFrom;
+        if (targetTo) params.to = targetTo;
+
+        if (
+          targetPeriod &&
+          targetPeriod !== "All Time" &&
+          targetPeriod !== "Custom"
+        ) {
+          const pMap: Record<string, string> = {
+            Today: "today",
+            "This Week": "this_week",
+            "This Month": "this_month",
+            "Last Month": "last_month",
+            "This Quarter": "this_quarter",
+            "This Year": "this_year",
+          };
+          if (pMap[targetPeriod]) params.period = pMap[targetPeriod];
+        }
+
+        if (targetPaymentType && targetPaymentType !== "All") {
+          params.paymentType = targetPaymentType;
+        }
+
+        if (targetFirm && targetFirm !== "All" && UUID_REGEX.test(targetFirm)) {
+          params.customerId = targetFirm;
+        }
+
+        const res = await commercePaymentInApi.getPaymentIns(params);
+        if (res?.success && Array.isArray(res.data)) {
+          const mapped = res.data.map(mapApiPaymentInToSalePaymentIn);
+          setPaymentIns(mapped);
+          setApiSummary(res.summary ?? null);
+          if (res.pagination?.totalRecords !== undefined) {
+            setServerTotal(res.pagination.totalRecords);
+          } else {
+            setServerTotal(mapped.length);
+          }
+        }
+      } catch (err: any) {
+        console.warn(
+          "Commerce Payments In API returned error:",
+          err?.message || err,
+        );
+      } finally {
+        setIsFetching(false);
+        setIsInitialLoading(false);
+        isFetchingRef.current = false;
       }
-    } catch (err: any) {
-      console.warn(
-        "Commerce Payments In API returned error:",
-        err?.message || err,
-      );
-    } finally {
-      setIsFetching(false);
-      setIsInitialLoading(false);
-      isFetchingRef.current = false;
-    }
-  }, [
-    currentPage,
-    pageSize,
-    appliedSearch,
-    startDate,
-    endDate,
-    selectedPeriod,
-    selectedPaymentType,
-    selectedFirm,
-  ]);
+    },
+    [
+      currentPage,
+      pageSize,
+      appliedSearch,
+      startDate,
+      endDate,
+      selectedPeriod,
+      selectedPaymentType,
+      selectedFirm,
+    ],
+  );
 
   // Load Customers for filter dropdown (Runs once on mount)
   const hasLoadedCustomersRef = useRef(false);
@@ -594,7 +605,6 @@ export const PaymentInView: React.FC = () => {
     setCurrentPage(1);
   };
 
-
   // Open Create Modal
   const handleOpenCreateModal = (customer?: SalesCustomer) => {
     setEditingPaymentIn(null);
@@ -605,6 +615,7 @@ export const PaymentInView: React.FC = () => {
     setFormPartyQuery(customer ? customer.name : "");
     setFormPaymentType("Cash");
     setFormReceiptNo("");
+    setFormPaymentInManualNo("");
     setFormDate(new Date().toISOString().split("T")[0]);
     setFormReceivedAmount("");
     setFormReferenceNo("");
@@ -624,7 +635,9 @@ export const PaymentInView: React.FC = () => {
         const res = await commercePaymentInApi.getPaymentInById(item.id);
         if (res?.success && res.data) {
           const fresh = mapApiPaymentInToSalePaymentIn(res.data);
-          setHistoryPaymentIn((prev) => (prev && prev.id === item.id ? { ...prev, ...fresh } : prev));
+          setHistoryPaymentIn((prev) =>
+            prev && prev.id === item.id ? { ...prev, ...fresh } : prev,
+          );
         }
       }
     } catch (err) {
@@ -637,7 +650,8 @@ export const PaymentInView: React.FC = () => {
     if (UUID_REGEX.test(listItem.id)) {
       try {
         const res = await commercePaymentInApi.getPaymentInById(listItem.id);
-        if (res?.success && res.data) item = mapApiPaymentInToSalePaymentIn(res.data);
+        if (res?.success && res.data)
+          item = mapApiPaymentInToSalePaymentIn(res.data);
       } catch (err) {
         console.warn("Could not fetch payment receipt details:", err);
       }
@@ -661,6 +675,7 @@ export const PaymentInView: React.FC = () => {
       setAvailablePaymentTypes((prev) => [...prev, initialPaymentType]);
     }
     setFormReceiptNo(item.receiptNo);
+    setFormPaymentInManualNo(item.paymentInManualNo || "");
     setFormDate(
       item.date
         ? item.date.split("T")[0]
@@ -724,7 +739,10 @@ export const PaymentInView: React.FC = () => {
       ["quickName", checkRequiredText(newCustomerName, "customer name", 2)],
       ["quickPhone", checkPhone(newCustomerPhone, isValidIndianPhone)],
     ]);
-  useRevalidateAfterSubmit(quickFE, validateQuickCustomer, [newCustomerName, newCustomerPhone]);
+  useRevalidateAfterSubmit(quickFE, validateQuickCustomer, [
+    newCustomerName,
+    newCustomerPhone,
+  ]);
 
   // Every modal starts and ends clean: no stale errors from a previous open.
   useEffect(() => {
@@ -771,7 +789,10 @@ export const PaymentInView: React.FC = () => {
       });
       if (res?.success && res.data) {
         const mapped = mapApiCustomerToSalesCustomer(res.data);
-        setCustomersList((prev) => [mapped, ...prev.filter((c) => c.id !== mapped.id)]);
+        setCustomersList((prev) => [
+          mapped,
+          ...prev.filter((c) => c.id !== mapped.id),
+        ]);
         setSelectedCustomerId(mapped.id);
         setSelectedCustomerObj(mapped);
         setFormPartyQuery(mapped.name);
@@ -784,7 +805,12 @@ export const PaymentInView: React.FC = () => {
         toast.success(`Customer "${mapped.name}" added successfully`);
       } else {
         // Never fabricate a local-only customer: a made-up id would later be treated as a real record.
-        toast.error(getApiErrorMessage(null, "We could not add the customer. Please try again."));
+        toast.error(
+          getApiErrorMessage(
+            null,
+            "We could not add the customer. Please try again.",
+          ),
+        );
       }
     } catch (err: any) {
       const apiFields = extractApiFieldErrors(err);
@@ -795,7 +821,12 @@ export const PaymentInView: React.FC = () => {
         quickFE.merge(mapped);
         return;
       }
-      toast.error(getApiErrorMessage(err, "We could not add the customer. Please try again."));
+      toast.error(
+        getApiErrorMessage(
+          err,
+          "We could not add the customer. Please try again.",
+        ),
+      );
     }
   };
 
@@ -804,12 +835,17 @@ export const PaymentInView: React.FC = () => {
     const formatted = newPaymentTypeName.trim();
     const typeErr =
       checkRequiredText(formatted, "payment type name") ||
-      (availablePaymentTypes.some((t) => t.toLowerCase() === formatted.toLowerCase())
+      (availablePaymentTypes.some(
+        (t) => t.toLowerCase() === formatted.toLowerCase(),
+      )
         ? "This payment type already exists. Please choose it from the list."
         : null);
     return collectErrors([["typeName", typeErr]]);
   };
-  useRevalidateAfterSubmit(typeFE, validateTypeName, [newPaymentTypeName, availablePaymentTypes]);
+  useRevalidateAfterSubmit(typeFE, validateTypeName, [
+    newPaymentTypeName,
+    availablePaymentTypes,
+  ]);
   useEffect(() => {
     typeFE.reset();
   }, [isAddPaymentTypeOpen, typeFE.reset]);
@@ -832,12 +868,16 @@ export const PaymentInView: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) {
-      setImageError("Please attach an image file (JPG, PNG, etc.) as the receipt photo.");
+      setImageError(
+        "Please attach an image file (JPG, PNG, etc.) as the receipt photo.",
+      );
       e.target.value = "";
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      setImageError("The image is larger than 5 MB. Please choose a smaller file.");
+      setImageError(
+        "The image is larger than 5 MB. Please choose a smaller file.",
+      );
       e.target.value = "";
       return;
     }
@@ -862,10 +902,8 @@ export const PaymentInView: React.FC = () => {
     statusColor: "emerald",
     referenceNo: item.referenceNo,
     companyName: companyProfile.companyName,
-    companySubtitle:
-      companyProfile.companySubtitle,
-    companyAddress:
-      companyProfile.companyAddress,
+    companySubtitle: companyProfile.companySubtitle,
+    companyAddress: companyProfile.companyAddress,
     companyGstin: companyProfile.companyGstin,
     companyPhone: companyProfile.companyPhone,
     companyEmail: companyProfile.companyEmail,
@@ -1063,7 +1101,7 @@ export const PaymentInView: React.FC = () => {
         <div class="footer">
           <div>
             <div>Generated electronically via CRM Sales Hub.</div>
-            <div style="margin-top:4px;">Date: ${new Date().toLocaleDateString('en-GB')}</div>
+            <div style="margin-top:4px;">Date: ${new Date().toLocaleDateString("en-GB")}</div>
           </div>
           <div class="sign">
             <div>Authorized Signatory</div>
@@ -1145,43 +1183,47 @@ export const PaymentInView: React.FC = () => {
     setIsDeleteModalOpen(true);
   };
 
-  const handleConfirmDeletePayment = () => deleteGuard.runOnce(async () => {
-    if (!deleteTargetPayment?.id) return;
-    setIsDeletingPayment(true);
-    setDeletePaymentError(null);
-    try {
-      if (UUID_REGEX.test(deleteTargetPayment.id)) {
-        await commercePaymentInApi.deletePaymentIn(deleteTargetPayment.id);
+  const handleConfirmDeletePayment = () =>
+    deleteGuard.runOnce(async () => {
+      if (!deleteTargetPayment?.id) return;
+      setIsDeletingPayment(true);
+      setDeletePaymentError(null);
+      try {
+        if (UUID_REGEX.test(deleteTargetPayment.id)) {
+          await commercePaymentInApi.deletePaymentIn(deleteTargetPayment.id);
+        }
+        dispatch(
+          baseApi.util.invalidateTags([
+            { type: "PaymentIn", id: deleteTargetPayment.id },
+            { type: "PaymentIn", id: "LIST" },
+            { type: "SalesInvoice", id: "LIST" },
+            { type: "Customer", id: "LIST" },
+            "Collection",
+            "Dashboard",
+          ]),
+        );
+        setPaymentIns((prev) =>
+          prev.filter((p) => p.id !== deleteTargetPayment.id),
+        );
+        deleteStorePaymentIn(deleteTargetPayment.id);
+        toast.success(
+          `Payment-In #${deleteTargetPayment.receiptNo} voided successfully.`,
+        );
+        setIsDeleteModalOpen(false);
+        setDeleteTargetPayment(null);
+        fetchPaymentIns();
+      } catch (err: any) {
+        console.error("Failed to void payment:", err);
+        const msg = getApiErrorMessage(
+          err,
+          "We could not void this payment receipt. Please try again.",
+        );
+        setDeletePaymentError(msg);
+        toast.error(msg);
+      } finally {
+        setIsDeletingPayment(false);
       }
-      dispatch(
-        baseApi.util.invalidateTags([
-          { type: "PaymentIn", id: deleteTargetPayment.id },
-          { type: "PaymentIn", id: "LIST" },
-          { type: "SalesInvoice", id: "LIST" },
-          { type: "Customer", id: "LIST" },
-          "Collection",
-          "Dashboard",
-        ]),
-      );
-      setPaymentIns((prev) =>
-        prev.filter((p) => p.id !== deleteTargetPayment.id),
-      );
-      deleteStorePaymentIn(deleteTargetPayment.id);
-      toast.success(
-        `Payment-In #${deleteTargetPayment.receiptNo} voided successfully.`,
-      );
-      setIsDeleteModalOpen(false);
-      setDeleteTargetPayment(null);
-      fetchPaymentIns();
-    } catch (err: any) {
-      console.error("Failed to void payment:", err);
-      const msg = getApiErrorMessage(err, "We could not void this payment receipt. Please try again.");
-      setDeletePaymentError(msg);
-      toast.error(msg);
-    } finally {
-      setIsDeletingPayment(false);
-    }
-  });
+    });
 
   // Duplicate Payment Record
   const handleDuplicatePayment = (item: SalePaymentIn) => {
@@ -1204,6 +1246,7 @@ export const PaymentInView: React.FC = () => {
       setAvailablePaymentTypes((prev) => [...prev, initialPaymentType]);
     }
     setFormReceiptNo("");
+    setFormPaymentInManualNo("");
     setFormDate(new Date().toISOString().split("T")[0]);
     setFormReceivedAmount(String(item.receivedAmount));
     setFormReferenceNo("");
@@ -1220,7 +1263,8 @@ export const PaymentInView: React.FC = () => {
   const validatePaymentForm = (): FieldErrors => {
     const errs: FieldErrors = {};
     const resolvedCustomerId = selectedCustomerObj?.id || selectedCustomerId;
-    const isLegacyEdit = !!editingPaymentIn && !resolvedCustomerId && !!formPartyQuery.trim();
+    const isLegacyEdit =
+      !!editingPaymentIn && !resolvedCustomerId && !!formPartyQuery.trim();
 
     if (!resolvedCustomerId && !isLegacyEdit) {
       errs.customer = "Please select a customer before saving the payment.";
@@ -1256,19 +1300,32 @@ export const PaymentInView: React.FC = () => {
           UUID_REGEX.test(linkedInv.customerId) &&
           linkedInv.customerId !== resolvedCustomerId
         ) {
-          errs.invoice = "The selected invoice belongs to a different customer. Please choose the matching invoice or customer.";
+          errs.invoice =
+            "The selected invoice belongs to a different customer. Please choose the matching invoice or customer.";
         }
         if (!errs.invoice) {
           const dErr = !dateErr
-            ? checkDateNotBefore(formDate, linkedInv.saleDate, "payment date", "invoice date")
+            ? checkDateNotBefore(
+                formDate,
+                linkedInv.saleDate,
+                "payment date",
+                "invoice date",
+              )
             : null;
           if (dErr) errs.date = dErr;
         }
         if (!amountErr && linkedInv.balance > 0) {
           // When editing, the invoice balance already excludes this payment's original amount.
           const allowed =
-            linkedInv.balance + (unchangedLinkedInvoice ? editingPaymentIn!.receivedAmount || 0 : 0);
-          const balErr = checkPaymentWithinBalance(formReceivedAmount, allowed, "received amount");
+            linkedInv.balance +
+            (unchangedLinkedInvoice
+              ? editingPaymentIn!.receivedAmount || 0
+              : 0);
+          const balErr = checkPaymentWithinBalance(
+            formReceivedAmount,
+            allowed,
+            "received amount",
+          );
           if (balErr) errs.amount = balErr;
         }
       }
@@ -1295,132 +1352,146 @@ export const PaymentInView: React.FC = () => {
     setImageError(null);
   }, [isCreateModalOpen, payFE.reset]);
 
-  const handleSavePayment = useCallback(() => saveGuard.runOnce(async () => {
-    if (!payFE.validateAll(validatePaymentForm())) return;
-    const amountNum = parseFloat(formReceivedAmount);
+  const handleSavePayment = useCallback(
+    () =>
+      saveGuard.runOnce(async () => {
+        if (!payFE.validateAll(validatePaymentForm())) return;
+        const amountNum = parseFloat(formReceivedAmount);
 
-    const partyName = selectedCustomerObj
-      ? selectedCustomerObj.name
-      : formPartyQuery.trim();
+        const partyName = selectedCustomerObj
+          ? selectedCustomerObj.name
+          : formPartyQuery.trim();
 
-    const matchedCustomer =
-      selectedCustomerObj ||
-      customers.find(
-        (c) =>
-          c.id === selectedCustomerId ||
-          c.name.toLowerCase() === partyName.toLowerCase(),
-      );
-
-    setIsSaving(true);
-    try {
-      const payload = mapSalePaymentInToApiPayload({
-        customerId:
-          matchedCustomer?.id && UUID_REGEX.test(matchedCustomer.id)
-            ? matchedCustomer.id
-            : selectedCustomerId && UUID_REGEX.test(selectedCustomerId)
-              ? selectedCustomerId
-              : undefined,
-        partyName,
-        customerPhone: matchedCustomer?.phone || undefined,
-        customerCompany: matchedCustomer?.company || undefined,
-        date: formDate,
-        paymentType: normalizeCommercePaymentType(formPaymentType),
-        receivedAmount: amountNum,
-        referenceNo: formReferenceNo.trim() || undefined,
-        description: formDescription.trim() || undefined,
-        notes: formDescription.trim() || undefined,
-        imageAttachment: imageAttachment || undefined,
-        status: formStatus || "Completed",
-        invoiceNo: selectedInvoiceNo || undefined,
-        invoiceId:
-          selectedInvoiceId && UUID_REGEX.test(selectedInvoiceId)
-            ? selectedInvoiceId
-            : undefined,
-      });
-
-      if (
-        editingPaymentIn &&
-        editingPaymentIn.id &&
-        UUID_REGEX.test(editingPaymentIn.id)
-      ) {
-        const res = await commercePaymentInApi.updatePaymentIn(
-          editingPaymentIn.id,
-          payload,
-        );
-        if (res?.success && res.data) {
-          const mapped = mapApiPaymentInToSalePaymentIn(res.data);
-          setPaymentIns((prev) =>
-            prev.map((p) => (p.id === mapped.id ? mapped : p)),
+        const matchedCustomer =
+          selectedCustomerObj ||
+          customers.find(
+            (c) =>
+              c.id === selectedCustomerId ||
+              c.name.toLowerCase() === partyName.toLowerCase(),
           );
-          savePaymentIn(mapped);
-          toast.success(
-            `Payment-In #${mapped.receiptNo} updated successfully!`,
+
+        setIsSaving(true);
+        try {
+          const payload = mapSalePaymentInToApiPayload({
+            customerId:
+              matchedCustomer?.id && UUID_REGEX.test(matchedCustomer.id)
+                ? matchedCustomer.id
+                : selectedCustomerId && UUID_REGEX.test(selectedCustomerId)
+                  ? selectedCustomerId
+                  : undefined,
+            partyName,
+            customerPhone: matchedCustomer?.phone || undefined,
+            customerCompany: matchedCustomer?.company || undefined,
+            date: formDate,
+            paymentType: normalizeCommercePaymentType(formPaymentType),
+            receivedAmount: amountNum,
+            paymentInManualNo: formPaymentInManualNo.trim() || undefined,
+            referenceNo: formReferenceNo.trim() || undefined,
+            description: formDescription.trim() || undefined,
+            notes: formDescription.trim() || undefined,
+            imageAttachment: imageAttachment || undefined,
+            status: formStatus || "Completed",
+            invoiceNo: selectedInvoiceNo || undefined,
+            invoiceId:
+              selectedInvoiceId && UUID_REGEX.test(selectedInvoiceId)
+                ? selectedInvoiceId
+                : undefined,
+          });
+
+          if (
+            editingPaymentIn &&
+            editingPaymentIn.id &&
+            UUID_REGEX.test(editingPaymentIn.id)
+          ) {
+            const res = await commercePaymentInApi.updatePaymentIn(
+              editingPaymentIn.id,
+              payload,
+            );
+            if (res?.success && res.data) {
+              const mapped = mapApiPaymentInToSalePaymentIn(res.data);
+              setPaymentIns((prev) =>
+                prev.map((p) => (p.id === mapped.id ? mapped : p)),
+              );
+              savePaymentIn(mapped);
+              toast.success(
+                `Payment-In #${mapped.receiptNo} updated successfully!`,
+              );
+            }
+          } else {
+            const res = await commercePaymentInApi.createPaymentIn(payload);
+            if (res?.success && res.data) {
+              const mapped = mapApiPaymentInToSalePaymentIn(res.data);
+              setPaymentIns((prev) => [mapped, ...prev]);
+              savePaymentIn(mapped);
+              toast.success(
+                `Payment-In #${mapped.receiptNo} recorded successfully!`,
+              );
+            }
+          }
+
+          dispatch(
+            baseApi.util.invalidateTags([
+              { type: "PaymentIn", id: "LIST" },
+              { type: "SalesInvoice", id: "LIST" },
+              { type: "Customer", id: "LIST" },
+              "Collection",
+              "Dashboard",
+            ]),
           );
+
+          setIsCreateModalOpen(false);
+          fetchPaymentIns();
+        } catch (err: any) {
+          console.error("Failed to save payment receipt:", err);
+          const apiFields = extractApiFieldErrors(err);
+          const mappedErrs: FieldErrors = {};
+          if (apiFields.receiptNo) mappedErrs.receiptNo = apiFields.receiptNo;
+          if (apiFields.receivedAmount || apiFields.amount)
+            mappedErrs.amount = apiFields.receivedAmount || apiFields.amount;
+          if (apiFields.customerId) mappedErrs.customer = apiFields.customerId;
+          if (apiFields.invoiceId) mappedErrs.invoice = apiFields.invoiceId;
+          if (apiFields.date || apiFields.paymentDate)
+            mappedErrs.date = apiFields.date || apiFields.paymentDate;
+          if (apiFields.paymentType)
+            mappedErrs.paymentType = apiFields.paymentType;
+          if (Object.keys(mappedErrs).length > 0) {
+            payFE.merge(mappedErrs);
+          } else {
+            toast.error(
+              getApiErrorMessage(
+                err,
+                "We could not save the payment receipt. Please try again.",
+              ),
+            );
+          }
+        } finally {
+          setIsSaving(false);
         }
-      } else {
-        const res = await commercePaymentInApi.createPaymentIn(payload);
-        if (res?.success && res.data) {
-          const mapped = mapApiPaymentInToSalePaymentIn(res.data);
-          setPaymentIns((prev) => [mapped, ...prev]);
-          savePaymentIn(mapped);
-          toast.success(
-            `Payment-In #${mapped.receiptNo} recorded successfully!`,
-          );
-        }
-      }
-
-      dispatch(
-        baseApi.util.invalidateTags([
-          { type: "PaymentIn", id: "LIST" },
-          { type: "SalesInvoice", id: "LIST" },
-          { type: "Customer", id: "LIST" },
-          "Collection",
-          "Dashboard",
-        ]),
-      );
-
-      setIsCreateModalOpen(false);
-      fetchPaymentIns();
-    } catch (err: any) {
-      console.error("Failed to save payment receipt:", err);
-      const apiFields = extractApiFieldErrors(err);
-      const mappedErrs: FieldErrors = {};
-      if (apiFields.receiptNo) mappedErrs.receiptNo = apiFields.receiptNo;
-      if (apiFields.receivedAmount || apiFields.amount) mappedErrs.amount = apiFields.receivedAmount || apiFields.amount;
-      if (apiFields.customerId) mappedErrs.customer = apiFields.customerId;
-      if (apiFields.invoiceId) mappedErrs.invoice = apiFields.invoiceId;
-      if (apiFields.date || apiFields.paymentDate) mappedErrs.date = apiFields.date || apiFields.paymentDate;
-      if (apiFields.paymentType) mappedErrs.paymentType = apiFields.paymentType;
-      if (Object.keys(mappedErrs).length > 0) {
-        payFE.merge(mappedErrs);
-      } else {
-        toast.error(getApiErrorMessage(err, "We could not save the payment receipt. Please try again."));
-      }
-    } finally {
-      setIsSaving(false);
-    }
-  }), [
-    sales,
-    paymentIns,
-    availablePaymentTypes,
-    selectedCustomerId,
-    formPartyQuery,
-    formReceivedAmount,
-    formReceiptNo,
-    selectedCustomerObj,
-    customers,
-    editingPaymentIn,
-    formDate,
-    formPaymentType,
-    formReferenceNo,
-    formDescription,
-    imageAttachment,
-    formStatus,
-    selectedInvoiceNo,
-    selectedInvoiceId,
-    savePaymentIn,
-    fetchPaymentIns,
-  ]);
+      }),
+    [
+      sales,
+      paymentIns,
+      availablePaymentTypes,
+      selectedCustomerId,
+      formPartyQuery,
+      formReceivedAmount,
+      formReceiptNo,
+      selectedCustomerObj,
+      customers,
+      editingPaymentIn,
+      formDate,
+      formPaymentType,
+      formReferenceNo,
+      formPaymentInManualNo,
+      formDescription,
+      imageAttachment,
+      formStatus,
+      selectedInvoiceNo,
+      selectedInvoiceId,
+      savePaymentIn,
+      fetchPaymentIns,
+    ],
+  );
 
   // Keyboard shortcut: Alt+S or Ctrl+S to save modal
   useEffect(() => {
@@ -1494,7 +1565,7 @@ export const PaymentInView: React.FC = () => {
       filename: `Payment_In_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Payment Receipts",
       title: "YAA CREATIONS CRM - PAYMENT-IN REPORT",
-      subtitle: `Filter: ${selectedPeriod} | Total Records: ${paymentIns.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
+      subtitle: `Filter: ${selectedPeriod} | Total Records: ${paymentIns.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
       columns: [
         { header: "#", key: "srNo", align: "center", width: 8 },
         { header: "Date", key: "date", align: "center", width: 15 },
@@ -1940,7 +2011,7 @@ export const PaymentInView: React.FC = () => {
                       minWidth: "180px",
                     },
                     {
-                      label: "RECEIPT NO.",
+                      label: "PAYMENT IN S.NO.",
                       align: "center",
                       minWidth: "120px",
                     },
@@ -2172,9 +2243,22 @@ export const PaymentInView: React.FC = () => {
               : "Add Payment-In"
           }
           subtitle={
-            editingPaymentIn
-              ? `Update payment voucher #${editingPaymentIn.receiptNo} and customer balance`
-              : "Record client payment receipts, counter cash settlements, and digital collections"
+            editingPaymentIn ? (
+              `Update payment voucher #${editingPaymentIn.receiptNo} and customer balance`
+            ) : (
+              <span className="flex items-center gap-1.5 flex-wrap">
+                <span>
+                  Record client payment receipts, counter cash settlements, and
+                  digital collections
+                </span>
+                <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                  {computedPreviewNo}
+                </span>
+                <span className="text-slate-400 text-[11px]">
+                  (Preview only. Final number assigned on save.)
+                </span>
+              </span>
+            )
           }
           maxWidth="4xl"
           headerGradient={true}
@@ -2234,15 +2318,31 @@ export const PaymentInView: React.FC = () => {
 
                 {/* Receipt No */}
                 <div>
-                  <FormLabel>Receipt Number</FormLabel>
+                  <FormLabel>Payment In S.No</FormLabel>
                   <input
                     type="text"
-                    value={editingPaymentIn ? formReceiptNo : ""}
+                    value={
+                      editingPaymentIn
+                        ? formReceiptNo
+                        : formReceiptNo || computedPreviewNo
+                    }
                     readOnly
                     placeholder="Auto-generated on save"
-                    className={`${FORM_INPUT_CLS} font-mono font-bold text-[#33077C]`}
+                    className="w-full h-11 px-4 bg-purple-50/70 border border-purple-200/90 rounded-xl text-xs sm:text-[13px] font-extrabold text-[#33077C] font-mono outline-none cursor-default"
                   />
                   <FormError message={payFE.errors.receiptNo} />
+                </div>
+
+                {/* Payment In No (manual) */}
+                <div>
+                  <FormLabel>Payment In No</FormLabel>
+                  <input
+                    type="text"
+                    value={formPaymentInManualNo}
+                    onChange={(e) => setFormPaymentInManualNo(e.target.value)}
+                    placeholder="Enter Payment In No"
+                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-xl text-xs sm:text-[13px] font-semibold text-slate-800 outline-none transition-colors"
+                  />
                 </div>
 
                 {/* Linked Invoice Selector */}
@@ -2780,17 +2880,35 @@ export const PaymentInView: React.FC = () => {
             eyebrow="Receipt No"
             title={`#${historyPaymentIn.receiptNo}`}
             subtitle={historyPaymentIn.partyName}
-            amount={{ label: "Amount Received", value: `₹${Number(historyPaymentIn.receivedAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` }}
+            amount={{
+              label: "Amount Received",
+              value: `₹${Number(historyPaymentIn.receivedAmount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+            }}
             badges={[
-              { label: historyPaymentIn.status || "Completed", tone: historyPaymentIn.status === "Cancelled" ? "danger" : historyPaymentIn.status === "Pending" || historyPaymentIn.status === "In Process" ? "warning" : "success" },
+              {
+                label: historyPaymentIn.status || "Completed",
+                tone:
+                  historyPaymentIn.status === "Cancelled"
+                    ? "danger"
+                    : historyPaymentIn.status === "Pending" ||
+                        historyPaymentIn.status === "In Process"
+                      ? "warning"
+                      : "success",
+              },
               { label: String(historyPaymentIn.paymentType), tone: "primary" },
             ]}
             facts={[
-              { label: "Receipt Date", value: isoToDdmmyyyy(historyPaymentIn.date) },
+              {
+                label: "Receipt Date",
+                value: isoToDdmmyyyy(historyPaymentIn.date),
+              },
               { label: "Invoice", value: historyPaymentIn.invoiceNo },
               { label: "Reference No", value: historyPaymentIn.referenceNo },
               { label: "Firm", value: historyPaymentIn.firmName },
-              { label: "Sales Rep", value: historyPaymentIn.salesRepresentativeName },
+              {
+                label: "Sales Rep",
+                value: historyPaymentIn.salesRepresentativeName,
+              },
             ]}
             events={[
               {
@@ -2799,22 +2917,47 @@ export const PaymentInView: React.FC = () => {
                 tone: "primary",
                 description: `Payment received from ${historyPaymentIn.partyName}.`,
                 details: [
-                  { label: "Date", value: isoToDdmmyyyy(historyPaymentIn.date) },
-                  { label: "Mode", value: String(historyPaymentIn.paymentType) },
+                  {
+                    label: "Date",
+                    value: isoToDdmmyyyy(historyPaymentIn.date),
+                  },
+                  {
+                    label: "Mode",
+                    value: String(historyPaymentIn.paymentType),
+                  },
                   { label: "Reference", value: historyPaymentIn.referenceNo },
                 ],
               },
               ...(historyPaymentIn.invoiceNo
-                ? [{ title: "Applied to Invoice", tone: "info" as const, description: `Receipt settled against invoice ${historyPaymentIn.invoiceNo}.` }]
+                ? [
+                    {
+                      title: "Applied to Invoice",
+                      tone: "info" as const,
+                      description: `Receipt settled against invoice ${historyPaymentIn.invoiceNo}.`,
+                    },
+                  ]
                 : []),
               {
                 title: "Receipt Voucher Generated",
-                at: historyPaymentIn.updatedAt && historyPaymentIn.updatedAt !== historyPaymentIn.createdAt ? historyPaymentIn.updatedAt : undefined,
-                tone: historyPaymentIn.status === "Cancelled" ? "danger" : "success",
+                at:
+                  historyPaymentIn.updatedAt &&
+                  historyPaymentIn.updatedAt !== historyPaymentIn.createdAt
+                    ? historyPaymentIn.updatedAt
+                    : undefined,
+                tone:
+                  historyPaymentIn.status === "Cancelled"
+                    ? "danger"
+                    : "success",
                 description: `Voucher #${historyPaymentIn.receiptNo} marked as ${historyPaymentIn.status || "Completed"}.`,
               },
-              ...((historyPaymentIn.description || historyPaymentIn.notes)
-                ? [{ title: "Remarks", tone: "muted" as const, description: `"${historyPaymentIn.description || historyPaymentIn.notes}"` }]
+              ...(historyPaymentIn.description || historyPaymentIn.notes
+                ? [
+                    {
+                      title: "Remarks",
+                      tone: "muted" as const,
+                      description: `"${historyPaymentIn.description || historyPaymentIn.notes}"`,
+                    },
+                  ]
                 : []),
             ]}
             recordId={historyPaymentIn.id}

@@ -37,6 +37,7 @@ export interface ExtendedProformaItem extends SaleProductItem {
 export interface SaleProformaInvoice {
   id: string;
   proformaNo: string;
+  proformaManualNo?: string;
   referenceNo?: string;
   date: string;
   validUntil: string;
@@ -79,16 +80,20 @@ export interface SaleProformaInvoice {
  */
 export const mapApiProformaItemToSaleProductItem = (
   it: ApiProformaInvoiceItem,
-  idx: number = 0
+  idx: number = 0,
+  parentWithGst: boolean = true
 ): ExtendedProformaItem => {
   const qty = Number(it.quantity) || 0;
   const rate = Number(it.unitPrice) || 0;
   const discPct = Number(it.discountPercent) || 0;
   const discAmt = Number(it.discountAmount ?? ((qty * rate * discPct) / 100));
   const taxable = Math.max(0, qty * rate - discAmt);
-  const taxRate = Number(it.taxPercent) || 0;
-  const taxAmt = Number(it.taxAmount ?? ((taxable * taxRate) / 100));
-  const lineTotal = Number(it.totalAmount ?? it.total ?? taxable + taxAmt);
+  const rawTaxRate = Number(it.taxPercent) || 0;
+  const rawTaxAmt = Number(it.taxAmount ?? ((taxable * rawTaxRate) / 100));
+  const lineTotal = Number(it.totalAmount ?? it.total ?? taxable + rawTaxAmt);
+  const hasTaxCharged = parentWithGst && (rawTaxAmt > 0 || (rawTaxRate > 0 && Math.abs(lineTotal - taxable) > 0.01));
+  const taxRate = hasTaxCharged ? rawTaxRate : 0;
+  const taxAmt = hasTaxCharged ? rawTaxAmt : 0;
 
   return {
     id: it.id || `item_${idx}_${Date.now()}`,
@@ -121,15 +126,17 @@ export const mapApiProformaToSaleProforma = (apiP: ApiProformaInvoice): SaleProf
     ? apiP.validUntil.split('T')[0]
     : apiP.validUntil || '';
 
+  const totalTax = Number(apiP.taxAmount ?? 0);
+  const totalAmount = Number(apiP.amount ?? apiP.grandTotal ?? 0);
+  const balance = Number(apiP.balance ?? totalAmount);
+  const parentWithGst = apiP.withGst !== false && totalTax > 0;
+
   const mappedItems: ExtendedProformaItem[] = Array.isArray(apiP.items)
-    ? apiP.items.map((it, idx) => mapApiProformaItemToSaleProductItem(it, idx))
+    ? apiP.items.map((it, idx) => mapApiProformaItemToSaleProductItem(it, idx, parentWithGst))
     : [];
 
   const subtotal = Number(apiP.subtotal ?? apiP.subTotal ?? 0);
   const totalDiscount = Number(apiP.discount ?? apiP.discountAmount ?? apiP.overallDiscount ?? 0);
-  const totalTax = Number(apiP.taxAmount ?? 0);
-  const totalAmount = Number(apiP.amount ?? apiP.grandTotal ?? 0);
-  const balance = Number(apiP.balance ?? totalAmount);
 
   // Status mapping
   let normStatus: 'Open' | 'Converted' | 'Expired' | 'Cancelled' = 'Open';
@@ -147,6 +154,7 @@ export const mapApiProformaToSaleProforma = (apiP: ApiProformaInvoice): SaleProf
   return {
     id: apiP.id,
     proformaNo: apiP.proformaNo || (apiP as any).proformaNumber || (apiP as any).proformaCode || (apiP as any).code || (apiP as any).documentNo || '',
+    proformaManualNo: apiP.proformaManualNo || '',
     referenceNo: apiP.referenceNo || '',
     date: dateFormatted,
     validUntil: validUntilFormatted,
@@ -215,7 +223,7 @@ export const mapSaleProformaToPayload = (
       if (typeof it.discountPercent === 'number' && !isNaN(it.discountPercent) && it.discountPercent > 0) {
         itemPayload.discountPercent = it.discountPercent;
       }
-      if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent > 0) {
+      if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent >= 0) {
         itemPayload.taxPercent = it.taxPercent;
       }
       return itemPayload;
@@ -225,6 +233,9 @@ export const mapSaleProformaToPayload = (
   // On creation, omit temporary client-generated proformaNo so backend sequence assigns official unique number
   if (!isCreate && proforma.proformaNo && proforma.proformaNo.trim()) {
     payload.proformaNo = proforma.proformaNo.trim();
+  }
+  if (proforma.proformaManualNo && String(proforma.proformaManualNo).trim()) {
+    payload.proformaManualNo = String(proforma.proformaManualNo).trim();
   }
   if (proforma.referenceNo && proforma.referenceNo.trim()) {
     payload.referenceNo = proforma.referenceNo.trim();

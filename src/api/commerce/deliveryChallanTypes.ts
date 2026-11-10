@@ -54,6 +54,7 @@ export interface ApiDeliveryChallan {
   deletedAt?: string | null;
   customer?: ApiDeliveryChallanCustomer | null;
   challanNo: string;
+  deliveryChallanManualNo?: string | null;
   referenceNo?: string | null;
   invoiceDate?: string | null;
   dueDate?: string | null;
@@ -208,6 +209,7 @@ export interface CreateDeliveryChallanItemPayload {
  */
 export interface CreateDeliveryChallanPayload {
   challanNo?: string;
+  deliveryChallanManualNo?: string;
   referenceNo?: string;
   invoiceDate?: string;
   dueDate?: string;

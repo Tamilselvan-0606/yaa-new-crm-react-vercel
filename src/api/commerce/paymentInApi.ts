@@ -31,6 +31,7 @@ export const mapApiPaymentInToSalePaymentIn = (apiPay: ApiPaymentIn): SalePaymen
   return {
     id: apiPay.id,
     receiptNo: apiPay.receiptNo || '',
+    paymentInManualNo: apiPay.paymentInManualNo || '',
     date: dateStr,
     paymentDate: dateStr,
     customerId: apiPay.customerId || apiPay.customer?.id || undefined,
@@ -85,6 +86,9 @@ export const mapSalePaymentInToApiPayload = (
   }
   if (pay.customerCompany && pay.customerCompany.trim()) {
     payload.customerCompany = pay.customerCompany.trim();
+  }
+  if (pay.paymentInManualNo && String(pay.paymentInManualNo).trim()) {
+    payload.paymentInManualNo = String(pay.paymentInManualNo).trim();
   }
   if (pay.referenceNo && pay.referenceNo.trim()) {
     payload.referenceNo = pay.referenceNo.trim();

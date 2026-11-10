@@ -31,16 +31,19 @@ export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
  */
 export const mapApiInvoiceItemToSaleProductItem = (
   it: ApiSalesInvoiceItem,
-  idx: number = 0
+  idx: number = 0,
+  parentWithGst: boolean = true
 ): SaleProductItem => {
   const qty = Number(it.quantity) || 0;
   const rate = Number(it.unitPrice) || 0;
   const discPct = Number(it.discountPercent) || 0;
   const discAmt = Number(it.discountAmount ?? ((qty * rate * discPct) / 100));
   const taxable = Math.max(0, qty * rate - discAmt);
-  const taxRate = Number(it.taxPercent) || 0;
-  const taxAmt = Number(it.taxAmount ?? ((taxable * taxRate) / 100));
-  const lineTotal = Number(it.totalAmount ?? it.total ?? taxable + taxAmt);
+  const rawTaxRate = Number(it.taxPercent) || 0;
+  const rawTaxAmt = Number(it.taxAmount ?? ((taxable * rawTaxRate) / 100));
+  const lineTotal = Number(it.totalAmount ?? it.total ?? taxable + rawTaxAmt);
+  const hasTaxCharged = parentWithGst && (rawTaxAmt > 0 || (rawTaxRate > 0 && Math.abs(lineTotal - taxable) > 0.01));
+  const taxRate = hasTaxCharged ? rawTaxRate : 0;
 
   return {
     id: it.id || `inv_item_${idx}_${Date.now()}`,
@@ -85,15 +88,17 @@ export const mapApiPaymentToSalePaymentRecord = (p: ApiInvoicePaymentItem): Sale
  * Mapper: ApiSalesInvoice -> SaleTransaction
  */
 export const mapApiInvoiceToSaleTransaction = (apiInv: ApiSalesInvoice): SaleTransaction => {
-  const items: SaleProductItem[] = Array.isArray(apiInv.items)
-    ? apiInv.items.map((it, idx) => mapApiInvoiceItemToSaleProductItem(it, idx))
-    : [];
-
-  const subtotal = Number(apiInv.subtotal ?? apiInv.subTotal ?? 0);
   const cgst = Number(apiInv.cgst ?? 0);
   const sgst = Number(apiInv.sgst ?? 0);
   const igst = Number(apiInv.igst ?? 0);
   const totalTax = Number(apiInv.totalTax ?? apiInv.taxAmount ?? cgst + sgst + igst);
+  const parentWithGst = (apiInv as any).withGst !== false && totalTax > 0;
+
+  const items: SaleProductItem[] = Array.isArray(apiInv.items)
+    ? apiInv.items.map((it, idx) => mapApiInvoiceItemToSaleProductItem(it, idx, parentWithGst))
+    : [];
+
+  const subtotal = Number(apiInv.subtotal ?? apiInv.subTotal ?? 0);
   const totalDiscount = Number(apiInv.totalDiscount ?? apiInv.discountAmount ?? apiInv.discount ?? 0);
   const shippingCharges = Number(apiInv.shippingCharges ?? 0);
   const otherCharges = Number(apiInv.otherCharges ?? 0);
@@ -147,6 +152,7 @@ export const mapApiInvoiceToSaleTransaction = (apiInv: ApiSalesInvoice): SaleTra
   return {
     id: apiInv.id,
     invoiceNo: apiInv.invoiceNo || '',
+    saleInvoiceManualNo: apiInv.saleInvoiceManualNo || '',
     invoiceStatus: normalizedInvoiceStatus,
     referenceNo: apiInv.referenceNo || undefined,
     saleDate: saleDateStr,
@@ -222,7 +228,7 @@ export const mapSaleTransactionToInvoicePayload = (
       if (typeof it.discountPercent === 'number' && !isNaN(it.discountPercent) && it.discountPercent > 0) {
         itemPayload.discountPercent = it.discountPercent;
       }
-      if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent > 0) {
+      if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent >= 0) {
         itemPayload.taxPercent = it.taxPercent;
       }
       return itemPayload;
@@ -231,6 +237,9 @@ export const mapSaleTransactionToInvoicePayload = (
 
   if (sale.invoiceNo && sale.invoiceNo.trim()) {
     payload.invoiceNo = sale.invoiceNo.trim();
+  }
+  if (sale.saleInvoiceManualNo && String(sale.saleInvoiceManualNo).trim()) {
+    payload.saleInvoiceManualNo = String(sale.saleInvoiceManualNo).trim();
   }
   if (sale.invoiceStatus) {
     payload.invoiceStatus = sale.invoiceStatus;
@@ -533,7 +542,9 @@ export const commerceInvoiceApi = {
    * POST /commerce/invoices
    */
   createInvoice: async (payload: CreateInvoicePayload): Promise<CommerceInvoiceSingleResponse> => {
-    const response = await baseClient.post<CommerceInvoiceSingleResponse>('/commerce/invoices', payload);
+    const cleanPayload = { ...payload };
+    delete (cleanPayload as any).invoiceNo;
+    const response = await baseClient.post<CommerceInvoiceSingleResponse>('/commerce/invoices', cleanPayload);
     return response.data;
   },
 

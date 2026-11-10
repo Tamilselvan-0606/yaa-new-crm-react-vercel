@@ -855,19 +855,19 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                       CLIENT
                     </th>
                     <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white">
-                      CONTACT
+                      CONTACT PERSON
                     </th>
                     <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white">
-                      PRODUCTS
+                      BUSINESS NAME
                     </th>
                     <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white text-center">
-                      CHANNELS
+                      CONTACT
                     </th>
                     <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white">
                       STATUS
                     </th>
                     <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white">
-                      PAYMENT
+                      PRODUCTS
                     </th>
                     <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white text-center">
                       ACTIONS
@@ -915,40 +915,70 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                           key={client.id}
                           className="hover:bg-slate-50/70 transition-colors"
                         >
-                          {/* 1. Client */}
+                          {/* 1. Client name + code */}
                           <td className="py-4 px-4 border border-slate-200">
-                            <div>
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="font-bold text-slate-900 text-xs sm:text-[13px] tracking-tight">
-                                  {client.company || client.name}
-                                </span>
-                                <span className="text-xs font-semibold text-purple-700">
-                                  (
-                                  {formatDisplayId(
-                                    "CL",
-                                    client.clientId || client.id,
-                                    101 + index,
-                                  )}
-                                  )
-                                </span>
-                              </div>
-                              <div className="text-[11px] text-slate-500 font-medium mt-0.5">
-                                {client.contactPerson || client.name}
-                              </div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-slate-900 text-xs sm:text-[13px] tracking-tight">
+                                {client.name || client.company}
+                              </span>
+                              <span className="text-xs font-semibold text-purple-700">
+                                (
+                                {formatDisplayId(
+                                  "CL",
+                                  client.clientId || client.id,
+                                  101 + index,
+                                )}
+                                )
+                              </span>
                             </div>
                           </td>
 
-                          {/* 2. Contact */}
+                          {/* 2. Contact person */}
                           <td className="py-4 px-4 border border-slate-200">
                             <div className="font-semibold text-slate-800 text-xs sm:text-[13px]">
-                              {client.contactPerson || client.name}
-                            </div>
-                            <div className="text-[11px] text-slate-500 mt-0.5">
-                              Primary Contact
+                              {client.contactPerson || "-"}
                             </div>
                           </td>
 
-                          {/* 3. Products (1 displayed + "+ X more") */}
+                          {/* 3. Business name */}
+                          <td className="py-4 px-4 border border-slate-200">
+                            <div className="font-semibold text-slate-800 text-xs sm:text-[13px]">
+                              {client.company || "-"}
+                            </div>
+                          </td>
+
+                          {/* 4. Channels (Phone, WhatsApp, Mail with On-Hover Tooltips) */}
+                          <td className="py-4 px-4 border border-slate-200">
+                            <ContactCopyButtons
+                              variant="circle"
+                              id={`client-${client.id}`}
+                              phone={phoneNum}
+                              whatsapp={whatsappNum || phoneNum}
+                              email={emailAddr}
+                              copiedKey={copiedKey}
+                              onCopy={handleCopy}
+                            />
+                          </td>
+
+                          {/* 5. Status */}
+                          <td className="py-4 px-4 border border-slate-200">
+                            <span
+                              className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                                clientStatus === "Active"
+                                  ? "bg-emerald-50 text-emerald-600"
+                                  : clientStatus === "Onboard" ||
+                                      clientStatus === "Onboarding"
+                                    ? "bg-cyan-50 text-cyan-600"
+                                    : clientStatus === "Paused"
+                                      ? "bg-amber-50 text-amber-600"
+                                      : "bg-slate-100 text-slate-600"
+                              }`}
+                            >
+                              {clientStatus}
+                            </span>
+                          </td>
+
+                          {/* 6. Products (1 displayed + "+ X more") */}
                           <td className="py-4 px-4 border border-slate-200">
                             <div className="flex flex-col gap-1.5">
                               {(() => {
@@ -1007,56 +1037,6 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                                 );
                               })()}
                             </div>
-                          </td>
-
-                          {/* 4. Channels (Phone, WhatsApp, Mail with On-Hover Tooltips) */}
-                          <td className="py-4 px-4 border border-slate-200">
-                            <ContactCopyButtons
-                              variant="circle"
-                              id={`client-${client.id}`}
-                              phone={phoneNum}
-                              whatsapp={whatsappNum || phoneNum}
-                              email={emailAddr}
-                              copiedKey={copiedKey}
-                              onCopy={handleCopy}
-                            />
-                          </td>
-
-                          {/* 5. Status */}
-                          <td className="py-4 px-4 border border-slate-200">
-                            <span
-                              className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                                clientStatus === "Active"
-                                  ? "bg-emerald-50 text-emerald-600"
-                                  : clientStatus === "Onboard" ||
-                                      clientStatus === "Onboarding"
-                                    ? "bg-cyan-50 text-cyan-600"
-                                    : clientStatus === "Paused"
-                                      ? "bg-amber-50 text-amber-600"
-                                      : "bg-slate-100 text-slate-600"
-                              }`}
-                            >
-                              {clientStatus}
-                            </span>
-                          </td>
-
-                          {/* 6. Payment */}
-                          <td className="py-4 px-4 border border-slate-200">
-                            {paymentStatus && paymentStatus !== "-" ? (
-                              <span
-                                className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                                  paymentStatus === "Paid"
-                                    ? "bg-emerald-50 text-emerald-600"
-                                    : paymentStatus === "Pending"
-                                      ? "bg-amber-50 text-amber-600"
-                                      : "bg-rose-50 text-rose-600"
-                                }`}
-                              >
-                                {paymentStatus}
-                              </span>
-                            ) : (
-                              <span className="text-xs text-slate-400 font-normal">-</span>
-                            )}
                           </td>
 
                           {/* 8. Actions */}

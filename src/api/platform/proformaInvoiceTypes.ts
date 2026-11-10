@@ -139,6 +139,7 @@ export interface CreateProformaItemPayload {
 }
 
 export interface CreateProformaRequest {
+  proformaNumber?: string;
   /** Shown as the created date; defaults to now on the server. */
   createdDate?: string;
   invoiceDate: string; // YYYY-MM-DD

@@ -173,6 +173,7 @@ export interface CreateInvoiceItemPayload {
 }
 
 export interface CreateInvoiceRequest {
+  invoiceNumber?: string;
   /** Shown as the created date; defaults to now on the server. */
   createdDate?: string;
   /** Proforma invoice this invoice is created from; the server marks it Converted. */

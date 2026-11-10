@@ -84,6 +84,7 @@ export const mapApiSalesReturnToSalesReturn = (apiRet: ApiSalesReturn): SalesRet
   return {
     id: apiRet.id,
     returnNo: apiRet.returnNo || '',
+    salesReturnManualNo: apiRet.salesReturnManualNo || '',
     invoiceNo: apiRet.invoiceNo || apiRet.invoice?.invoiceNo || '',
     saleId: apiRet.saleId || apiRet.invoiceId || apiRet.invoice?.id || '',
     customerId: apiRet.customerId || '',
@@ -144,6 +145,9 @@ export const mapSalesReturnToApiPayload = (
     returnStatus: ret.returnStatus || 'Approved',
   };
 
+  if (ret.salesReturnManualNo && String(ret.salesReturnManualNo).trim()) {
+    payload.salesReturnManualNo = String(ret.salesReturnManualNo).trim();
+  }
   if (ret.invoiceNo && ret.invoiceNo.trim()) {
     payload.invoiceNo = ret.invoiceNo.trim();
   }

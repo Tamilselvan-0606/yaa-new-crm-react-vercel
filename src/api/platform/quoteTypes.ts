@@ -135,6 +135,7 @@ export interface CreateQuoteItemPayload {
 }
 
 export interface CreateQuoteRequest {
+  estimateNumber?: string;
   /** Shown as the created date; defaults to now on the server. */
   createdDate?: string;
   referenceNumber?: string;

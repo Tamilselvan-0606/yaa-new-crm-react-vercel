@@ -7,6 +7,8 @@ import { Modal } from '../common/Modal';
 import { Button } from '../common/Button';
 import { useAuth } from '../../context/AuthContext';
 import { useScopeLock } from '../../hooks/useScopeLock';
+import { useActiveOrgType } from '../../hooks/useActiveOrgType';
+import { filterBranchesForSuite } from '../../utils/branchSuite';
 import { RegisteredField } from '../common/FormField';
 import { PhoneField } from '../common/PhoneField';
 import { LocationFields, LocationMeta } from '../common/LocationFields';
@@ -81,6 +83,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
     currentUser?.email?.toLowerCase() === 'yaaadmin@gmail.com';
   const isOrgAdmin = !isSuperAdmin && !isSubOrgAdmin;
   const { lockSubOrg, lockBranch, lockedSubOrgId, lockedBranchId } = useScopeLock();
+  const { isSaleManagement } = useActiveOrgType();
 
   // Organization, SubOrg, Branch State
   const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
@@ -355,12 +358,21 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
           page_no: 1,
           page_size: 100,
           pagination_required: 'false',
-          sub_organization_id: selectedSubOrgId || undefined,
+          sub_organization_id: selectedSubOrgId && selectedSubOrgId !== '__PARENT_ORG__' ? selectedSubOrgId : undefined,
           organization_id: effectiveOrgId,
         },
         effectiveOrgId
       )
       .then((res) => (Array.isArray(res?.data) ? res.data : []))
+      .then((rows: BranchApiItem[]) => filterBranchesForSuite(rows, isSaleManagement))
+      .then((list: BranchApiItem[]) =>
+        !selectedSubOrgId
+          ? list
+          : selectedSubOrgId === '__PARENT_ORG__'
+            ? // Main organization: only branches not attached to a sub-organization
+              list.filter((b) => !b.subOrganizationId)
+            : list.filter((b) => b.subOrganizationId === selectedSubOrgId)
+      )
       .catch(() => [] as BranchApiItem[])
       .then((list) => {
         if (!isMounted) return;
@@ -374,7 +386,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, effectiveOrgId, selectedSubOrgId, lockBranch]);
+  }, [isOpen, effectiveOrgId, selectedSubOrgId, lockBranch, isSaleManagement]);
 
   // 5. Products: requested with the selected branch once the branches for the current org/sub-org are loaded
   // (so a stale branch id is never sent). If the server rejects the branch, the org/sub-org products are
@@ -433,8 +445,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
       if (pinError) errs.pincode = pinError;
     }
     if (isSuperAdmin && !selectedOrgId) errs.organization = 'Organization is required';
-    if (subOrganizations.length > 0 && !selectedSubOrgId) errs.subOrganization = 'Sub-Organization is required';
-    if (branches.length > 0 && !selectedBranchId) errs.branch = 'Branch is required';
+    // Sub-Organization and Branch are optional
     return errs;
   };
 
@@ -470,7 +481,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
         company: data.company,
         email: data.email || `${data.company.toLowerCase().replace(/[^a-z0-9]/g, '') || 'lead'}@example.com`,
         phone: effectivePhone,
-        whatsapp: data.whatsapp || effectivePhone,
+        whatsapp: data.whatsapp || undefined,
         source: data.leadSource || 'Website',
         status: data.status || 'Open',
         priority: data.priority || 'Medium',
@@ -487,7 +498,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
         notes: data.feedback || data.notes || '',
         designation: data.designation || undefined,
         organizationId: effectiveOrgId,
-        subOrganizationId: selectedSubOrgId || undefined,
+        subOrganizationId: (selectedSubOrgId && selectedSubOrgId !== '__PARENT_ORG__') ? selectedSubOrgId : undefined,
         branchId: selectedBranchId || undefined,
       };
 
@@ -536,55 +547,12 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
             </button>
           </div>
         )}
-        {/* Row 0: Organization | Sub-Organization | Branch (Role-based) */}
+        {/* Lead Details: 3 fields per row throughout */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Organization */}
-          <div>
-            <label className={labelClass}>
-              Organization <span className="text-rose-500 font-bold">*</span>
-            </label>
-            {isSuperAdmin ? (
-              <>
-                <CustomSelect
-                  value={selectedOrgId}
-                  error={!!formErrors.organization}
-                  onChange={(val) => {
-                    setSelectedOrgId(val);
-                    const matched = organizations.find((o) => o.id === val);
-                    if (matched) setSelectedOrgName(matched.name);
-                    setSelectedSubOrgId('');
-                    setSelectedBranchId('');
-                    if (formErrors.organization) setFormErrors((prev) => ({ ...prev, organization: '' }));
-                  }}
-                  options={
-                    organizations.length > 0
-                      ? organizations.map((org) => ({ value: org.id, label: org.code ? `${org.name} (${org.code})` : org.name }))
-                      : [{ value: '', label: 'No Organizations found' }]
-                  }
-                  optionVariant="strong"
-                  placeholder="Select Organization"
-                />
-                {formErrors.organization && (
-                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.organization}</p>
-                )}
-              </>
-            ) : (
-              <div>
-                <input
-                  type="text"
-                  readOnly
-                  disabled
-                  value={selectedOrgName}
-                  className={`${inputClass} bg-slate-100/80 cursor-not-allowed text-slate-600 font-semibold`}
-                />
-              </div>
-            )}
-          </div>
-
           {/* Sub-Organization */}
           <div>
             <label className={labelClass}>
-              Sub-Organization <span className="text-rose-500 font-bold">*</span>
+              Sub-Organization
             </label>
             {lockSubOrg || initialLead ? (
               <input
@@ -618,16 +586,34 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
                   error={!!formErrors.subOrganization}
                   onChange={(val) => {
                     setSelectedSubOrgId(val);
-                    const matched = subOrganizations.find((s) => s.id === val);
-                    if (matched) setSelectedSubOrgName(matched.name);
+                    if (val === '__PARENT_ORG__') {
+                      setSelectedSubOrgName(selectedOrgName);
+                    } else {
+                      const matched = subOrganizations.find((s) => s.id === val);
+                      if (matched) setSelectedSubOrgName(matched.name);
+                    }
                     setSelectedBranchId('');
                     if (formErrors.subOrganization) setFormErrors((prev) => ({ ...prev, subOrganization: '' }));
                   }}
-                  options={
-                    subOrganizations.length > 0
-                      ? subOrganizations.map((s) => ({ value: s.id, label: s.code ? `${s.name} (${s.code})` : s.name }))
-                      : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations' }]
-                  }
+                  options={(() => {
+                    const parentOrgLabel = selectedOrgName ? `${selectedOrgName} (Main Organization)` : 'Main Organization';
+                    const list: { value: string; label: string }[] = [];
+                    if (selectedOrgId) {
+                      list.push({ value: '__PARENT_ORG__', label: parentOrgLabel });
+                    }
+                    if (subOrganizations.length > 0) {
+                      subOrganizations.forEach((s) => {
+                        list.push({
+                          value: s.id,
+                          label: s.code ? `${s.name} (${s.code})` : s.name,
+                        });
+                      });
+                    }
+                    if (list.length === 0) {
+                      return [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations' }];
+                    }
+                    return list;
+                  })()}
                   optionVariant="strong"
                   placeholder={loadingSubOrgs ? 'Loading Sub-Organizations...' : 'Select Sub-Organization'}
                 />
@@ -641,7 +627,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
           {/* Branch */}
           <div>
             <label className={labelClass}>
-              Branch <span className="text-rose-500 font-bold">*</span>
+              Branch
             </label>
             {lockBranch ? (
               <input
@@ -681,10 +667,8 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
               <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.branch}</p>
             )}
           </div>
-        </div>
 
-        {/* Lead details: 3 fields per row */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Lead Code */}
           <div>
             <label className={labelClass}>Lead Code</label>
             <input
@@ -696,6 +680,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
             />
           </div>
 
+          {/* Row 2 */}
           <RegisteredField
             label="Lead Name"
             required
@@ -721,13 +706,13 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
             placeholder="e.g. Founder, Ops Manager"
           />
 
+          {/* Row 3 */}
           <Controller
             name="phone"
             control={control}
             render={({ field }) => (
               <PhoneField
                 label="Phone Number"
-                required
                 value={field.value || ''}
                 onChange={field.onChange}
                 error={errors.phone?.message}
@@ -752,13 +737,13 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
 
           <RegisteredField
             label="Email"
-            required
             type="email"
             registration={register("email")}
             error={errors.email?.message}
             placeholder="name@company.com"
           />
 
+          {/* Row 4 */}
           <div>
             <label className={labelClass}>Lead Source</label>
             <Controller
@@ -777,7 +762,6 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
 
           <RegisteredField
             label="Date"
-            required
             type="date"
             registration={register("leadDate")}
             error={errors.leadDate?.message}
@@ -785,7 +769,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
 
           <div>
             <label className={labelClass}>
-              Product Interest <span className="text-rose-500 font-bold">*</span>
+              Product Interest
             </label>
             <Controller
               name="interestedProductOrService"

@@ -49,6 +49,7 @@ export interface ApiProformaInvoice {
   deletedAt?: string | null;
   customer?: ApiProformaInvoiceCustomer | null;
   proformaNo: string;
+  proformaManualNo?: string | null;
   referenceNo?: string | null;
   date: string;
   validUntil?: string | null;
@@ -226,6 +227,7 @@ export interface CreateProformaItemPayload {
  */
 export interface CreateProformaPayload {
   proformaNo?: string;
+  proformaManualNo?: string;
   referenceNo?: string;
   date?: string;
   validUntil?: string;

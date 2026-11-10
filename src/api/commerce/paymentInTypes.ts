@@ -25,6 +25,7 @@ export interface ApiPaymentIn {
   organizationId: string;
   branchId?: string | null;
   receiptNo: string;
+  paymentInManualNo?: string | null;
   date: string;
   customerId?: string;
   partyName: string;
@@ -182,6 +183,7 @@ export const normalizeCommercePaymentType = (type?: string | null): CommercePaym
 
 export interface CreatePaymentInPayload {
   receiptNo?: string;
+  paymentInManualNo?: string;
   date: string;
   customerId?: string;
   partyName: string;
@@ -201,6 +203,7 @@ export interface CreatePaymentInPayload {
 
 export interface UpdatePaymentInPayload {
   receiptNo?: string;
+  paymentInManualNo?: string;
   date?: string;
   customerId?: string;
   partyName?: string;

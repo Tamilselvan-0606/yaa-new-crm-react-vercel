@@ -1,6 +1,7 @@
 import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { SupplierSearchableSelect, ProductSearchableSelect } from '../../../components/common/paginated-select';
+import { getNextPurchaseReturnNumber } from '../../../utils/documentNumbering';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -286,6 +287,11 @@ export const PurchaseReturnView: React.FC = () => {
   // Live Commerce API State
   // ---------------------------------------------------------
   const [liveReturns, setLiveReturns] = useState<PurchaseReturn[]>([]);
+
+  // Computed next preview number based on currently loaded purchase returns
+  const computedPreviewNo = useMemo(() => {
+    return getNextPurchaseReturnNumber(liveReturns);
+  }, [liveReturns]);
   const [isApiLoading, setIsApiLoading] = useState(false);
   const [isApiConnected, setIsApiConnected] = useState<boolean | null>(null);
   const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
@@ -1959,7 +1965,11 @@ export const PurchaseReturnView: React.FC = () => {
           setIsCreateModalOpen(false);
           setEditingReturn(null);
         }}
-        title={editingReturn ? `Edit Purchase Return: ${editingReturn.returnNo}` : 'Create Purchase Return'}
+        title={
+          editingReturn
+            ? `Edit Purchase Return: ${editingReturn.returnNo}`
+            : 'Create Purchase Return'
+        }
         subtitle={
           editingReturn
             ? 'Modify return details and returned quantities'
@@ -1975,8 +1985,20 @@ export const PurchaseReturnView: React.FC = () => {
         }}
       >
         <form noValidate onSubmit={handleSubmitReturnForm} className="space-y-5 p-2 sm:p-4 animate-in fade-in duration-150">
-          {/* Top Fields: 4-column Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
+          {/* Top Fields: 5-column Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 pt-1">
+            {/* Return / Debit Note # */}
+            <div>
+              <FormLabel>Debit Note / Return #</FormLabel>
+              <input
+                type="text"
+                value={editingReturn ? editingReturn.returnNo : computedPreviewNo}
+                readOnly
+                className="w-full h-11 px-4 bg-purple-50/70 border border-purple-200/90 rounded-xl text-xs sm:text-[13px] font-extrabold text-[#33077C] font-mono outline-none cursor-default"
+                placeholder="Auto-generated on save"
+              />
+            </div>
+
             {/* Purchase Order Selection */}
             <div>
               <FormLabel>Purchase Order</FormLabel>

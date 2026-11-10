@@ -42,6 +42,7 @@ import { Modal } from '../../components/common/Modal';
 import { CustomSelect } from '../../components/common/CustomSelect';
 import { ConfirmationModal } from '../../utils/confirmationModal';
 import { useScopeLock } from '../../hooks/useScopeLock';
+import { filterBranchesForSuite } from '../../utils/branchSuite';
 import {
   alphabetsOnly,  lettersOnly,
   alphanumericUpper,
@@ -77,6 +78,8 @@ export const ProductsView: React.FC = () => {
     );
   });
   const { lockSubOrg, lockBranch, lockedSubOrgId, lockedBranchId } = useScopeLock();
+  const isSaleSuiteActive =
+    window.location.pathname.startsWith('/sale-management') || localStorage.getItem('active_org_type_view') === 'Sales Management';
   const [subOrganizations, setSubOrganizations] = useState<SubOrganizationApiItem[]>([]);
   const [loadingSubOrgs, setLoadingSubOrgs] = useState<boolean>(false);
   const [branches, setBranches] = useState<BranchApiItem[]>([]);
@@ -525,16 +528,6 @@ export const ProductsView: React.FC = () => {
 
     const errors = validateFields([
       ['name', formData.name, [required('Product / Org Name is required')]],
-      ['subOrganizationId', formData.subOrganizationId, requiredWhen(subOrganizations.length > 0, 'Select Sub-Organization is required')],
-      ['branchId', formData.branchId, requiredWhen(branches.length > 0, 'Select Branch is required')],
-      ['contactPerson', formData.contactPerson, [required('Contact Person Name is required'), alphabetsOnly('Contact Person Name')]],
-      ['mobileNumber', formData.mobileNumber, [required('Mobile Number is required'), indianMobile('Mobile Number')]],
-      ['supportWhatsapp', formData.supportWhatsapp, [indianMobile('WhatsApp Number')]],
-      ['supportEmail', formData.supportEmail, [required('Email is required'), emailAddress]],
-      ['gstNumber', formData.gstNumber, [required('GST Number is required'), validGst]],
-      ['panNumber', formData.panNumber, [required('PAN Number is required'), validPan]],
-      ['hqCity', formData.hqCity, [required('HQ City is required'), alphabetsOnly('HQ City')]],
-      ['address', formData.address, [required('Address is required')]],
       ['status', formData.status, [required('Status is required')]],
     ]);
     setFormErrors(errors);
@@ -546,7 +539,7 @@ export const ProductsView: React.FC = () => {
       const payload: CreateClientProductRequest = {
         name: formData.name.trim(),
         organizationId: activeOrgId || undefined,
-        subOrganizationId: formData.subOrganizationId || undefined,
+        subOrganizationId: (formData.subOrganizationId && formData.subOrganizationId !== '__PARENT_ORG__') ? formData.subOrganizationId : undefined,
         branchId: formData.branchId || undefined,
         code: formData.code.trim() || undefined,
         contactPerson: formData.contactPerson.trim() || undefined,
@@ -691,7 +684,6 @@ export const ProductsView: React.FC = () => {
             <thead>
               <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">PRODUCT AND CODE</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">CONTACT INFO</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">TOTAL PLANS</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">STATUS</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CREATED DATE</th>
@@ -702,7 +694,7 @@ export const ProductsView: React.FC = () => {
             <tbody className="text-sm">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={6} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <div className="w-7 h-7 border-2 border-purple-200 border-t-[#33077C] rounded-full animate-spin" />
                       <span className="text-xs text-slate-500">Loading products...</span>
@@ -711,7 +703,7 @@ export const ProductsView: React.FC = () => {
                 </tr>
               ) : products.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={6} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     No products found matching your criteria.
                   </td>
                 </tr>
@@ -766,19 +758,7 @@ export const ProductsView: React.FC = () => {
                         </div>
                       </td>
 
-                      {/* 2. CONTACT INFO */}
-                      <td className="py-4 px-4 border border-slate-200">
-                        <ContactCopyButtons
-                          id={prod.id}
-                          phone={phone}
-                          whatsapp={whatsapp || phone}
-                          email={email}
-                          copiedKey={copiedKey}
-                          onCopy={handleCopy}
-                        />
-                      </td>
-
-                      {/* 3. TOTAL PLANS */}
+                      {/* 2. TOTAL PLANS */}
                       <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
                         <div className="flex items-center gap-2">
                           <div className="w-7 h-7 rounded-lg bg-[#33077C]/10 flex items-center justify-center text-[#33077C] shrink-0">
@@ -995,7 +975,7 @@ export const ProductsView: React.FC = () => {
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         title={editingProduct ? 'Edit Product' : 'Add Product'}
-        subtitle={editingProduct ? 'Update product / organization details' : 'Set product details, contact info, and registration numbers'}
+        subtitle={editingProduct ? 'Update product details' : 'Set product details'}
         maxWidth="4xl"
         headerGradient={true}
         showBackIcon={true}
@@ -1014,27 +994,11 @@ export const ProductsView: React.FC = () => {
             </div>
           )}
 
-          {/* Row 0: Organization (Read-Only) | Sub-Organization | Branch */}
+          {/* Product Fields: 3 fields per row throughout */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Select Organization
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  readOnly
-                  disabled
-                  value={defaultOrgName}
-                  title="Default organization cannot be modified"
-                  className="w-full h-11 px-4 bg-slate-100/80 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 cursor-not-allowed select-none outline-none"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Select Sub-Organization {subOrganizations.length > 0 && <span className="text-rose-500 font-bold">*</span>}
+                Select Sub-Organization
               </label>
               {lockSubOrg || editingProduct ? (
                 <input
@@ -1055,14 +1019,25 @@ export const ProductsView: React.FC = () => {
                   setFormData({ ...formData, subOrganizationId: val, branchId: '' });
                   if (formErrors.subOrganizationId) setFormErrors((prev) => ({ ...prev, subOrganizationId: '' }));
                 }}
-                options={
-                  subOrganizations.length > 0
-                    ? subOrganizations.map((sub) => ({
+                options={(() => {
+                  const parentOrgLabel = defaultOrgName ? `${defaultOrgName} (Main Organization)` : 'Main Organization';
+                  const list: { value: string; label: string }[] = [];
+                  if (defaultOrgName) {
+                    list.push({ value: '__PARENT_ORG__', label: parentOrgLabel });
+                  }
+                  if (subOrganizations.length > 0) {
+                    subOrganizations.forEach((sub) => {
+                      list.push({
                         value: sub.id,
                         label: `${sub.name}${sub.code ? ` (${sub.code})` : ''}`,
-                      }))
-                    : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations found' }]
-                }
+                      });
+                    });
+                  }
+                  if (list.length === 0) {
+                    return [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations found' }];
+                  }
+                  return list;
+                })()}
                 optionVariant="strong"
                 placeholder="Select Sub-Organization"
                 error={!!formErrors.subOrganizationId}
@@ -1075,7 +1050,7 @@ export const ProductsView: React.FC = () => {
 
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Select Branch {branches.length > 0 && <span className="text-rose-500 font-bold">*</span>}
+                Select Branch
               </label>
               {lockBranch ? (
                 <input
@@ -1103,9 +1078,11 @@ export const ProductsView: React.FC = () => {
                 }}
                 options={
                   (() => {
-                    const filtered = branches.filter((b) => {
+                    const filtered = filterBranchesForSuite<BranchApiItem>(branches, isSaleSuiteActive).filter((b) => {
                       if (!formData.subOrganizationId) return true;
-                      return !b.subOrganizationId || b.subOrganizationId === formData.subOrganizationId;
+                      // Main organization: only branches not attached to any sub-organization
+                      if (formData.subOrganizationId === '__PARENT_ORG__') return !b.subOrganizationId;
+                      return b.subOrganizationId === formData.subOrganizationId;
                     });
                     return filtered.length > 0
                       ? filtered.map((br) => ({
@@ -1124,10 +1101,10 @@ export const ProductsView: React.FC = () => {
                 <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.branchId}</p>
               )}
             </div>
-          </div>
 
-          {/* Row 1: Product/Org Name | Product/Org Code | Contact Person */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <ReadOnlyField label="Product Code" value={formData.code} placeholder="Auto-generated" />
+
+            {/* Row 2 */}
             <TextField
               label="Product / Org Name"
               required
@@ -1136,97 +1113,7 @@ export const ProductsView: React.FC = () => {
               placeholder="Enter product / org name"
               onValueChange={(v) => updateField('name', v)}
             />
-            <ReadOnlyField label="Product Code" value={formData.code} placeholder="Auto-generated" />
-            <TextField
-              label="Contact Person Name"
-              required
-              value={formData.contactPerson}
-              error={formErrors.contactPerson}
-              placeholder="Enter contact person name"
-              onValueChange={(v) => updateField('contactPerson', lettersOnly(v))}
-            />
-          </div>
 
-          {/* Row 2: Mobile Number | WhatsApp Number | Email */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <TextField
-              label="Mobile Number"
-              required
-              inputMode="numeric"
-              maxLength={10}
-              placeholder="e.g. 9876543210"
-              value={formData.mobileNumber}
-              error={formErrors.mobileNumber}
-              onValueChange={(v) => {
-                const digits = digitsOnly(v);
-                updateField('mobileNumber', digits, liveMobileStartError('Mobile Number', digits));
-              }}
-            />
-            <TextField
-              label="WhatsApp Number"
-              inputMode="numeric"
-              maxLength={10}
-              placeholder="e.g. 9876543210"
-              value={formData.supportWhatsapp}
-              error={formErrors.supportWhatsapp}
-              onValueChange={(v) => {
-                const digits = digitsOnly(v);
-                updateField('supportWhatsapp', digits, liveMobileStartError('WhatsApp Number', digits));
-              }}
-            />
-            <TextField
-              label="Email"
-              required
-              type="email"
-              value={formData.supportEmail}
-              error={formErrors.supportEmail}
-              placeholder="e.g. product@organization.com"
-              onValueChange={(v) => updateField('supportEmail', v)}
-            />
-          </div>
-
-          {/* Row 3: GST Number | PAN Number | HQ City */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <TextField
-              label="GST Number"
-              required
-              maxLength={15}
-              inputClassName="uppercase"
-              value={formData.gstNumber}
-              error={formErrors.gstNumber}
-              placeholder="e.g. 33AAAAA0000A1Z5"
-              onValueChange={(v) => updateField('gstNumber', alphanumericUpper(v, 15), liveGstError(alphanumericUpper(v, 15)))}
-            />
-            <TextField
-              label="PAN Number"
-              required
-              maxLength={10}
-              inputClassName="uppercase"
-              value={formData.panNumber}
-              error={formErrors.panNumber}
-              placeholder="e.g. AAAAA0000A"
-              onValueChange={(v) => updateField('panNumber', alphanumericUpper(v, 10), livePanError(alphanumericUpper(v, 10)))}
-            />
-            <TextField
-              label="HQ City"
-              required
-              value={formData.hqCity}
-              error={formErrors.hqCity}
-              placeholder="e.g. Chennai"
-              onValueChange={(v) => updateField('hqCity', lettersOnly(v))}
-            />
-          </div>
-
-          {/* Row 4: Address | Status | (spare) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <TextField
-              label="Address"
-              required
-              value={formData.address}
-              error={formErrors.address}
-              placeholder="Enter complete address"
-              onValueChange={(v) => updateField('address', v)}
-            />
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Status <span className="text-rose-500 font-bold">*</span>
@@ -1246,7 +1133,6 @@ export const ProductsView: React.FC = () => {
                 <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.status}</p>
               )}
             </div>
-            <div />
           </div>
 
           <div className="pt-4 flex justify-end items-center gap-3 border-t border-slate-100">

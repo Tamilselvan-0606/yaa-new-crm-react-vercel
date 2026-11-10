@@ -1,6 +1,7 @@
 import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
 import { CommonTableHead } from "../../../components/common/CommonTableHead";
 import { SupplierSearchableSelect } from "../../../components/common/paginated-select";
+import { getNextPurchaseOrderNumber } from "../../../utils/documentNumbering";
 import React, {
   useState,
   useMemo,
@@ -545,6 +546,11 @@ export const PurchaseOrderView: React.FC = () => {
 
   // Live API Integration State
   const [livePurchases, setLivePurchases] = useState<PurchaseOrder[]>([]);
+
+  // Computed next preview number based on currently loaded purchase bills / orders
+  const computedPreviewNo = useMemo(() => {
+    return getNextPurchaseOrderNumber(livePurchases);
+  }, [livePurchases]);
   const [isApiLoading, setIsApiLoading] = useState(false);
   const [isApiConnected, setIsApiConnected] = useState(false);
   const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
@@ -644,7 +650,7 @@ export const PurchaseOrderView: React.FC = () => {
     unit: "PCS",
     purchasePrice: "",
     salePrice: "",
-    taxRate: "GST @ 18%",
+    taxRate: "None",
     hsnCode: "",
   });
 
@@ -658,7 +664,7 @@ export const PurchaseOrderView: React.FC = () => {
       unit: "PCS",
       purchasePrice: "",
       salePrice: "",
-      taxRate: "GST @ 18%",
+      taxRate: "None",
       hsnCode: "",
     });
     setIsAddProductModalOpen(true);
@@ -1704,6 +1710,9 @@ export const PurchaseOrderView: React.FC = () => {
     const matchedSup = mergedSuppliers.find(
       (s) => s.id === targetPo.supplierId || s.name === targetPo.supplierName,
     );
+    const isGstActive =
+      targetPo.withGst !== false &&
+      Number(targetPo.tax || targetPo.taxAmount || 0) > 0;
 
     return {
       docTypeTitle: "PURCHASE ORDER / BILL",
@@ -1774,13 +1783,13 @@ export const PurchaseOrderView: React.FC = () => {
         unit: it.unit,
         quantity: it.quantity,
         unitPrice: it.purchasePrice,
-        taxPercent: it.taxPercent,
+        taxPercent: isGstActive ? (it.taxPercent || 0) : 0,
         total: it.total,
       })),
       subtotal: targetPo.subtotal || targetPo.subTotal,
       discount: targetPo.discount || targetPo.discountAmount || 0,
       tax: {
-        withGst: targetPo.withGst ?? true,
+        withGst: isGstActive,
         gstType: targetPo.gstType || "intra_state",
         taxAmount: targetPo.tax || targetPo.taxAmount,
         cgst: targetPo.cgst,
@@ -3886,13 +3895,13 @@ export const PurchaseOrderView: React.FC = () => {
                 </div>
 
                 <div>
-                  <FormLabel>Purchase Order No</FormLabel>
+                  <FormLabel>Purchase Order / Bill No</FormLabel>
                   <input
                     type="text"
-                    value={formData.purchaseNo}
+                    value={editingPurchase ? formData.purchaseNo : (formData.purchaseNo || computedPreviewNo)}
                     readOnly
                     placeholder="Auto-generated on save"
-                    className={`${FORM_INPUT_CLS} font-bold text-[#33077C]`}
+                    className="w-full h-11 px-4 bg-purple-50/70 border border-purple-200/90 rounded-xl text-xs sm:text-[13px] font-extrabold text-[#33077C] font-mono outline-none cursor-default"
                   />
                 </div>
 

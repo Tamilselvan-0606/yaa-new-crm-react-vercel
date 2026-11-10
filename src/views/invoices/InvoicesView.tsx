@@ -230,9 +230,20 @@ const mapApiProformaToSavedInvoice =(api: ProformaInvoiceApiItem): SavedInvoice 
   };
 };
 
-// Newest first, even if the server returns them oldest first (latest created, then highest number).
+// Newest first by sequence number (highest document number first, fallback to createdAt timestamp).
 const newestFirst = <T extends { createdAt?: string; invoiceNumber?: string }>(list: T[]): T[] =>
   [...list].sort((a, b) => {
+    const parseSeq = (str?: string) => {
+      const match = (str || '').match(/(?:\d{4}-)?(\d+)$/i) || (str || '').match(/(\d+)/g);
+      if (match) {
+        const last = Array.isArray(match) ? match[match.length - 1] : match[1];
+        return parseInt(last, 10) || 0;
+      }
+      return 0;
+    };
+    const seqA = parseSeq(a.invoiceNumber);
+    const seqB = parseSeq(b.invoiceNumber);
+    if (seqA !== seqB) return seqB - seqA;
     const diff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
     return diff || String(b.invoiceNumber || '').localeCompare(String(a.invoiceNumber || ''), undefined, { numeric: true });
   });
@@ -1868,46 +1879,41 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                       </td>
                     )}
                     <td className="py-4 px-4 border border-slate-200 align-middle text-center">
-                      {isProforma ? (
-                        <span
-                          className={`inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                            inv.status === ('Approved' as any)
-                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                              : inv.status === ('Converted' as any)
-                                ? 'bg-purple-50 text-purple-700 border border-purple-200'
-                                : inv.status === ('Sent' as any)
-                                  ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                                  : inv.status === ('Cancelled' as any)
-                                    ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                                    : 'bg-slate-100 text-slate-700 border border-slate-200'
-                          }`}
-                        >
-                          {inv.status === ('Approved' as any) && <CheckCircle2 className="w-3 h-3 text-emerald-600" />}
-                          {inv.status === ('Converted' as any) && <span className="w-1.5 h-1.5 rounded-full bg-purple-600 shrink-0"></span>}
-                          {inv.status === ('Sent' as any) && <Send className="w-3 h-3 text-blue-600" />}
-                          {inv.status === ('Cancelled' as any) && <AlertCircle className="w-3 h-3 text-rose-600" />}
-                          {inv.status === ('Draft' as any) && <FileText className="w-3 h-3 text-slate-500" />}
-                          <span>{inv.status}</span>
-                        </span>
-                      ) : (
-                        <span
-                          className={`inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                            inv.status === 'Paid'
-                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                              : inv.status === 'Partially Paid'
-                                ? 'bg-sky-50 text-sky-700 border border-sky-200'
-                                : inv.status === 'Pending'
-                                  ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                  : 'bg-rose-50 text-rose-700 border border-rose-200'
-                          }`}
-                        >
-                          {inv.status === 'Paid' && <CheckCircle2 className="w-3 h-3" />}
-                          {inv.status === 'Partially Paid' && <Clock className="w-3 h-3 text-sky-600" />}
-                          {inv.status === 'Pending' && <Clock className="w-3 h-3" />}
-                          {inv.status === 'Overdue' && <AlertCircle className="w-3 h-3" />}
-                          <span>{inv.status}</span>
-                        </span>
-                      )}
+                      {(() => {
+                        const s = (inv.status || '').toLowerCase();
+                        let dotColor = 'bg-[#94a3b8]';
+                        let label = inv.status;
+
+                        if (s === 'paid' || s === 'approved') {
+                          dotColor = 'bg-[#10b981]';
+                          label = isProforma ? 'Approved' : 'Paid';
+                        } else if (s === 'partially paid') {
+                          dotColor = 'bg-[#3b82f6]';
+                          label = 'Partially Paid';
+                        } else if (s === 'sent') {
+                          dotColor = 'bg-[#33077C]';
+                          label = 'Sent';
+                        } else if (s === 'expired' || s === 'pending') {
+                          dotColor = 'bg-[#f59e0b]';
+                          label = isProforma ? 'Pending' : 'Pending';
+                        } else if (s === 'overdue' || s === 'cancelled' || s === 'declined') {
+                          dotColor = 'bg-[#f43f5e]';
+                          label = isProforma ? 'Cancelled' : 'Overdue';
+                        } else if (s === 'converted') {
+                          dotColor = 'bg-[#8b5cf6]';
+                          label = 'Converted';
+                        } else {
+                          dotColor = 'bg-[#94a3b8]';
+                          label = 'Draft';
+                        }
+
+                        return (
+                          <div className="inline-flex items-center justify-center gap-2 text-xs font-semibold text-slate-800 select-none">
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
+                            <span className="text-xs font-semibold text-slate-800 tracking-tight">{label}</span>
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="py-4 px-5 border border-slate-200 align-middle text-center">
                       <div className="relative inline-block text-center">

@@ -38,6 +38,7 @@ export interface ExtendedSaleOrderItem extends SaleProductItem {
 export interface SaleOrderRecord {
   id: string;
   orderNo: string;
+  saleOrderManualNo?: string;
   referenceNo?: string;
   orderDate: string;
   dueDate: string;
@@ -83,16 +84,20 @@ export interface SaleOrderRecord {
  */
 export const mapApiSaleOrderItemToSaleProductItem = (
   it: ApiSaleOrderItem,
-  idx: number = 0
+  idx: number = 0,
+  parentWithGst: boolean = true
 ): ExtendedSaleOrderItem => {
   const qty = Number(it.quantity) || 0;
   const rate = Number(it.unitPrice) || 0;
   const discPct = Number(it.discountPercent) || 0;
   const discAmt = Number(it.discountAmount ?? ((qty * rate * discPct) / 100));
   const taxable = Math.max(0, qty * rate - discAmt);
-  const taxRate = Number(it.taxPercent) || 0;
-  const taxAmt = Number(it.taxAmount ?? ((taxable * taxRate) / 100));
-  const lineTotal = Number(it.totalAmount ?? it.total ?? taxable + taxAmt);
+  const rawTaxRate = Number(it.taxPercent) || 0;
+  const rawTaxAmt = Number(it.taxAmount ?? ((taxable * rawTaxRate) / 100));
+  const lineTotal = Number(it.totalAmount ?? it.total ?? taxable + rawTaxAmt);
+  const hasTaxCharged = parentWithGst && (rawTaxAmt > 0 || (rawTaxRate > 0 && Math.abs(lineTotal - taxable) > 0.01));
+  const taxRate = hasTaxCharged ? rawTaxRate : 0;
+  const taxAmt = hasTaxCharged ? rawTaxAmt : 0;
 
   return {
     id: it.id || `item_${idx}_${Date.now()}`,
@@ -119,15 +124,17 @@ export const mapApiSaleOrderItemToSaleProductItem = (
  * Mapper: ApiSaleOrder -> SaleOrderRecord
  */
 export const mapApiSaleOrderToSaleOrderRecord = (apiO: ApiSaleOrder): SaleOrderRecord => {
-  const items: ExtendedSaleOrderItem[] = Array.isArray(apiO.items)
-    ? apiO.items.map((it, idx) => mapApiSaleOrderItemToSaleProductItem(it, idx))
-    : [];
-
-  const subtotal = Number(apiO.subtotal ?? apiO.subTotal ?? 0);
   const cgst = Number(apiO.cgst ?? 0);
   const sgst = Number(apiO.sgst ?? 0);
   const igst = Number(apiO.igst ?? 0);
   const totalTax = Number(apiO.taxAmount ?? cgst + sgst + igst);
+  const parentWithGst = apiO.withGst !== false && totalTax > 0;
+
+  const items: ExtendedSaleOrderItem[] = Array.isArray(apiO.items)
+    ? apiO.items.map((it, idx) => mapApiSaleOrderItemToSaleProductItem(it, idx, parentWithGst))
+    : [];
+
+  const subtotal = Number(apiO.subtotal ?? apiO.subTotal ?? 0);
   const discount = Number(apiO.discount ?? apiO.discountAmount ?? 0);
   const roundOff = Number(apiO.roundOff ?? 0);
   const amount = Number(apiO.amount ?? apiO.grandTotal ?? subtotal - discount + totalTax + roundOff);
@@ -154,6 +161,7 @@ export const mapApiSaleOrderToSaleOrderRecord = (apiO: ApiSaleOrder): SaleOrderR
   return {
     id: apiO.id,
     orderNo: apiO.orderNo || '',
+    saleOrderManualNo: apiO.saleOrderManualNo || '',
     referenceNo: apiO.referenceNo || undefined,
     orderDate: orderDateStr,
     dueDate: dueDateStr,
@@ -225,7 +233,7 @@ export const mapSaleOrderRecordToPayload = (
       if (typeof it.discountPercent === 'number' && !isNaN(it.discountPercent) && it.discountPercent > 0) {
         itemPayload.discountPercent = it.discountPercent;
       }
-      if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent > 0) {
+      if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent >= 0) {
         itemPayload.taxPercent = it.taxPercent;
       }
       if (it.batch && String(it.batch).trim()) {
@@ -239,6 +247,9 @@ export const mapSaleOrderRecordToPayload = (
   // On creation, omit client-generated temporary orderNo so backend sequence assigns the official document number
   if (!isCreate && order.orderNo && order.orderNo.trim()) {
     payload.orderNo = order.orderNo.trim();
+  }
+  if (order.saleOrderManualNo && String(order.saleOrderManualNo).trim()) {
+    payload.saleOrderManualNo = String(order.saleOrderManualNo).trim();
   }
   if (order.referenceNo && order.referenceNo.trim()) {
     payload.referenceNo = order.referenceNo.trim();
@@ -527,7 +538,9 @@ export const commerceSaleOrderApi = {
    * POST /commerce/orders
    */
   createOrder: async (payload: CreateSaleOrderPayload): Promise<SaleOrderSingleResponse> => {
-    const response = await baseClient.post<SaleOrderSingleResponse>('/commerce/orders', payload);
+    const cleanPayload = { ...payload };
+    delete (cleanPayload as any).orderNo;
+    const response = await baseClient.post<SaleOrderSingleResponse>('/commerce/orders', cleanPayload);
     return response.data;
   },
 

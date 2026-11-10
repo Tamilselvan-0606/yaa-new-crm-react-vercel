@@ -63,6 +63,7 @@ import { LocationFields, LocationMeta } from '../../components/common/LocationFi
 import { confirmButtonLabel, nextStatus } from '../../utils/statusActions';
 import { ContactCopyButtons } from '../../components/common/ContactCopyButtons';
 import { useActiveOrgType } from '../../hooks/useActiveOrgType';
+import { normalizeSuite } from '../../utils/branchSuite';
 
 const mapApiBranchToBranch = (item: BranchApiItem): Branch => {
   const rawStatus = (item.status || 'Active').toString();
@@ -127,15 +128,6 @@ const rememberSuite = (id: string | undefined, suite: string) => {
   }
 };
 
-/** Normalises the API type (1 / 2 / 3 or a name) to 'Client Management', 'Sales Management' or 'All'. */
-const normalizeSuite = (raw: unknown): string | undefined => {
-  const t = String(raw ?? '').trim().toLowerCase();
-  if (!t) return undefined;
-  if (t === '1' || t.includes('client')) return 'Client Management';
-  if (t === '2' || t.includes('sale')) return 'Sales Management';
-  if (t === '0' || t === '3' || t === 'all' || t.includes('both')) return 'All';
-  return undefined;
-};
 
 const BRANCH_TYPES = ['Client Management', 'Sales Management'];
 
@@ -337,12 +329,6 @@ export const BranchesView: React.FC = () => {
     if (isModalOpen || isViewModalOpen) ensureOrgAndSubOrgs(true);
   }, [isModalOpen, isViewModalOpen]);
 
-  // New branch: pre-select the first sub-organization once the list arrives (it may load after the form opens).
-  useEffect(() => {
-    if (isModalOpen && !editingBranch && !formData.subOrganizationId && subOrganizations.length > 0) {
-      setFormData((prev) => (prev.subOrganizationId ? prev : { ...prev, subOrganizationId: subOrganizations[0].id }));
-    }
-  }, [subOrganizations, isModalOpen]);
 
   // Listen to subOrgChanged and branchChanged events to reload branches based on header selections
   useEffect(() => {
@@ -516,7 +502,7 @@ export const BranchesView: React.FC = () => {
       name: '',
       code: '',
       organizationId: activeOrgId,
-      subOrganizationId: subOrganizations[0]?.id || '',
+      subOrganizationId: '',
       organizationType: isSaleManagement ? 'Sales Management' : 'Client Management',
       contactPerson: '',
       mobileNumber: '',
@@ -582,8 +568,6 @@ export const BranchesView: React.FC = () => {
     const isCreate = !editingBranch;
     const errors = validateFields([
       ['name', formData.name, [required('Branch Name is required')]],
-      ['organizationId', formData.organizationId || defaultOrgName, [required('Select Organization is required')]],
-      ['subOrganizationId', formData.subOrganizationId, requiredWhen(subOrganizations.length > 0, 'Select Sub-Organization is required')],
       ['contactPerson', formData.contactPerson, [required('Contact Person Name is required'), alphabetsOnly('Contact Person Name')]],
       ['mobileNumber', formData.mobileNumber, [required('Mobile Number is required'), phoneNumber('Mobile Number')]],
       ['whatsapp', formData.whatsapp, [phoneNumber('WhatsApp Number')]],
@@ -608,10 +592,11 @@ export const BranchesView: React.FC = () => {
 
       if (editingBranch) {
         rememberSuite(editingBranch.id, suiteType);
+        const effectiveSubOrgId = (formData.subOrganizationId && formData.subOrganizationId !== '__PARENT_ORG__') ? formData.subOrganizationId : undefined;
         await branchApi.updateBranch(editingBranch.id, {
           name: formData.name.trim(),
           organizationId: activeOrgId || undefined,
-          subOrganizationId: formData.subOrganizationId || undefined,
+          subOrganizationId: effectiveSubOrgId,
           contactPerson: formData.contactPerson.trim(),
           phone: formData.mobileNumber.trim(),
           mobileNumber: formData.mobileNumber.trim(),
@@ -673,13 +658,14 @@ export const BranchesView: React.FC = () => {
         const trimmedCode = formData.code.trim();
         const trimmedName = formData.name.trim();
 
+        const effectiveSubOrgId = (formData.subOrganizationId && formData.subOrganizationId !== '__PARENT_ORG__') ? formData.subOrganizationId : undefined;
         const createdRes: any = await branchApi.createBranch({
           name: trimmedName,
           email: trimmedEmail,
           password: trimmedPassword,
           roleId: formData.roleId.trim() || undefined,
           organizationId: activeOrgId || undefined,
-          subOrganizationId: formData.subOrganizationId || undefined,
+          subOrganizationId: effectiveSubOrgId,
           contactPerson: formData.contactPerson.trim() || undefined,
           phone: formData.mobileNumber.trim() || undefined,
           mobileNumber: formData.mobileNumber.trim() || undefined,
@@ -1214,34 +1200,11 @@ export const BranchesView: React.FC = () => {
       >
         <form noValidate onSubmit={handleSaveBranch} className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
 
-          {/* Row 1: Organization (Read-Only) | Sub-Organization | Branch Name */}
+          {/* Branch Fields: 3 fields per row throughout */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Select Organization <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  readOnly
-                  disabled
-                  value={defaultOrgName}
-                  title="Default organization cannot be modified"
-                  className={`w-full h-11 px-4 bg-slate-100/80 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 cursor-not-allowed select-none outline-none ${
-                    formErrors.organizationId
-                      ? 'border border-red-500'
-                      : 'border border-slate-200'
-                  }`}
-                />
-              </div>
-              {formErrors.organizationId && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.organizationId}</p>
-              )}
-            </div>
-
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Select Sub-Organization {subOrganizations.length > 0 && <span className="text-rose-500 font-bold">*</span>}
+                Select Sub-Organization
               </label>
               <CustomSelect
                 value={formData.subOrganizationId}
@@ -1249,14 +1212,25 @@ export const BranchesView: React.FC = () => {
                   setFormData({ ...formData, subOrganizationId: val });
                   if (formErrors.subOrganizationId) setFormErrors((prev) => ({ ...prev, subOrganizationId: '' }));
                 }}
-                options={
-                  subOrganizations.length > 0
-                    ? subOrganizations.map((sub) => ({
+                options={(() => {
+                  const parentOrgLabel = defaultOrgName ? `${defaultOrgName} (Main Organization)` : 'Main Organization';
+                  const list: { value: string; label: string }[] = [];
+                  if (defaultOrgName) {
+                    list.push({ value: '__PARENT_ORG__', label: parentOrgLabel });
+                  }
+                  if (subOrganizations.length > 0) {
+                    subOrganizations.forEach((sub) => {
+                      list.push({
                         value: sub.id,
                         label: `${sub.name}${sub.code ? ` (${sub.code})` : ''}`,
-                      }))
-                    : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations found' }]
-                }
+                      });
+                    });
+                  }
+                  if (list.length === 0) {
+                    return [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations found' }];
+                  }
+                  return list;
+                })()}
                 optionVariant="strong"
                 placeholder="Select Sub-Organization"
                 error={!!formErrors.subOrganizationId}
@@ -1275,7 +1249,9 @@ export const BranchesView: React.FC = () => {
               onValueChange={(v) => updateField('name', v)}
             />
 
-            {/* Branch Type */}
+            <ReadOnlyField label="Branch Code" value={formData.code} placeholder="Auto-generated" />
+
+            {/* Row 2 */}
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Branch Type <span className="text-rose-500 font-bold">*</span>
@@ -1294,7 +1270,6 @@ export const BranchesView: React.FC = () => {
               )}
             </div>
 
-            <ReadOnlyField label="Branch Code" value={formData.code} placeholder="Auto-generated" />
             <TextField
               label="Contact Person Name"
               required
@@ -1303,6 +1278,7 @@ export const BranchesView: React.FC = () => {
               placeholder="Enter contact person name"
               onValueChange={(v) => updateField('contactPerson', lettersOnly(v))}
             />
+
             <PhoneField
               label="Mobile Number"
               required
@@ -1312,6 +1288,7 @@ export const BranchesView: React.FC = () => {
               onChange={(v) => updateField('mobileNumber', v)}
             />
 
+            {/* Row 3 */}
             <PhoneField
               label="WhatsApp Number"
               placeholder="e.g. 9876543210"
@@ -1319,6 +1296,7 @@ export const BranchesView: React.FC = () => {
               error={formErrors.whatsapp}
               onChange={(v) => updateField('whatsapp', v)}
             />
+
             <TextField
               label="Email"
               required
@@ -1328,6 +1306,7 @@ export const BranchesView: React.FC = () => {
               placeholder="e.g. branch@organization.com"
               onValueChange={(v) => updateField('email', v)}
             />
+
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Password {!editingBranch && <span className="text-rose-500 font-bold">*</span>}
@@ -1361,6 +1340,7 @@ export const BranchesView: React.FC = () => {
               )}
             </div>
 
+            {/* Row 4 */}
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Status <span className="text-rose-500 font-bold">*</span>
@@ -1383,6 +1363,8 @@ export const BranchesView: React.FC = () => {
                 <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.status}</p>
               )}
             </div>
+
+            {/* Row 4, 5: LocationFields (Country, State, District, City, Pincode) */}
             <LocationFields
               country={formData.country}
               state={formData.state}
@@ -1409,7 +1391,6 @@ export const BranchesView: React.FC = () => {
               placeholder="e.g. 600001"
               onValueChange={(v) => updateField('pincode', cleanPincode(v, locationMeta.pincodeRegex))}
             />
-
             {/* Address */}
             <div className="md:col-span-3">
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">

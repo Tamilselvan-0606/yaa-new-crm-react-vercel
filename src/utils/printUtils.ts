@@ -644,6 +644,22 @@ export async function printBusinessDocument(rawOptions: DocumentPrintOptions): P
     }
   }
 
+  // Determine whether GST is actively charged on this document
+  const isGstActive = Boolean(
+    tax &&
+    tax.withGst !== false &&
+    ((tax.taxAmount !== undefined && tax.taxAmount > 0) ||
+      (tax.cgst !== undefined && tax.cgst > 0) ||
+      (tax.sgst !== undefined && tax.sgst > 0) ||
+      (tax.igst !== undefined && tax.igst > 0) ||
+      items.some(
+        (i) =>
+          (Number(i.taxPercent) || 0) > 0 &&
+          Number(i.total || 0) > (Number(i.quantity || 1) * Number(i.unitPrice || 0))
+      ))
+  );
+  const showTaxColumn = isGstActive && items.some((i) => i.taxPercent !== undefined);
+
   // Build items rows
   const itemsHtml = items.length > 0 ? items.map((it, idx) => `
     <tr>
@@ -659,7 +675,7 @@ export async function printBusinessDocument(rawOptions: DocumentPrintOptions): P
       </td>
       ${it.unitPrice !== undefined ? `<td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11.5px; text-align: right; color: #0f172a;">₹${Number(it.unitPrice).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>` : ''}
       ${items.some(i => i.discountPercent !== undefined) ? `<td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: center; color: #0f172a;">${it.discountPercent || 0}%</td>` : ''}
-      ${items.some(i => i.taxPercent !== undefined) ? `<td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: center; color: #0f172a;">${it.taxPercent || 0}%</td>` : ''}
+      ${showTaxColumn ? `<td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: center; color: #0f172a;">${(isGstActive ? (it.taxPercent || 0) : 0)}%</td>` : ''}
       <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11.5px; text-align: right; font-weight: 700; color: #0f172a;">
         ₹${Number(it.total ?? (Number(it.quantity || 1) * Number(it.unitPrice || 0))).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
       </td>
@@ -763,7 +779,7 @@ export async function printBusinessDocument(rawOptions: DocumentPrintOptions): P
                 <th style="text-align: center; width: 70px;">Qty</th>
                 ${items.some(i => i.unitPrice !== undefined) ? '<th style="text-align: right; width: 100px;">Rate (₹)</th>' : ''}
                 ${items.some(i => i.discountPercent !== undefined) ? '<th style="text-align: center; width: 65px;">Disc %</th>' : ''}
-                ${items.some(i => i.taxPercent !== undefined) ? '<th style="text-align: center; width: 65px;">GST %</th>' : ''}
+                ${showTaxColumn ? '<th style="text-align: center; width: 65px;">GST %</th>' : ''}
                 <th style="text-align: right; width: 115px; border-top-right-radius: 6px;">Total (₹)</th>
               </tr>
             </thead>

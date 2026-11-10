@@ -40,6 +40,7 @@ export interface ExtendedChallanItem extends SaleProductItem {
 export interface DeliveryChallanRecord {
   id: string;
   challanNo: string;
+  deliveryChallanManualNo?: string;
   referenceNo?: string;
   invoiceDate: string;
   dueDate: string;
@@ -85,16 +86,20 @@ export interface DeliveryChallanRecord {
  */
 export const mapApiDeliveryChallanItemToExtendedItem = (
   it: ApiDeliveryChallanItem,
-  idx: number = 0
+  idx: number = 0,
+  parentWithGst: boolean = true
 ): ExtendedChallanItem => {
   const qty = Number(it.quantity) || 0;
   const rate = Number(it.unitPrice) || 0;
   const discPct = Number(it.discountPercent) || 0;
   const discAmt = Number(it.discountAmount ?? ((qty * rate * discPct) / 100));
   const taxable = Math.max(0, qty * rate - discAmt);
-  const taxRate = Number(it.taxPercent) || 0;
-  const taxAmt = Number(it.taxAmount ?? ((taxable * taxRate) / 100));
-  const lineTotal = Number(it.totalAmount ?? it.total ?? taxable + taxAmt);
+  const rawTaxRate = Number(it.taxPercent) || 0;
+  const rawTaxAmt = Number(it.taxAmount ?? ((taxable * rawTaxRate) / 100));
+  const lineTotal = Number(it.totalAmount ?? it.total ?? taxable + rawTaxAmt);
+  const hasTaxCharged = parentWithGst && (rawTaxAmt > 0 || (rawTaxRate > 0 && Math.abs(lineTotal - taxable) > 0.01));
+  const taxRate = hasTaxCharged ? rawTaxRate : 0;
+  const taxAmt = hasTaxCharged ? rawTaxAmt : 0;
 
   return {
     id: it.id || `challan_item_${idx}_${Date.now()}`,
@@ -121,15 +126,17 @@ export const mapApiDeliveryChallanItemToExtendedItem = (
  * Mapper: ApiDeliveryChallan -> DeliveryChallanRecord
  */
 export const mapApiDeliveryChallanToRecord = (apiC: ApiDeliveryChallan): DeliveryChallanRecord => {
-  const items: ExtendedChallanItem[] = Array.isArray(apiC.items)
-    ? apiC.items.map((it, idx) => mapApiDeliveryChallanItemToExtendedItem(it, idx))
-    : [];
-
-  const subtotal = Number(apiC.subtotal ?? apiC.subTotal ?? 0);
   const cgst = Number(apiC.cgst ?? 0);
   const sgst = Number(apiC.sgst ?? 0);
   const igst = Number(apiC.igst ?? 0);
   const totalTax = Number(apiC.taxAmount ?? cgst + sgst + igst);
+  const parentWithGst = apiC.withGst !== false && totalTax > 0;
+
+  const items: ExtendedChallanItem[] = Array.isArray(apiC.items)
+    ? apiC.items.map((it, idx) => mapApiDeliveryChallanItemToExtendedItem(it, idx, parentWithGst))
+    : [];
+
+  const subtotal = Number(apiC.subtotal ?? apiC.subTotal ?? 0);
   const discount = Number(apiC.discount ?? apiC.discountAmount ?? 0);
   const roundOff = Number(apiC.roundOff ?? 0);
   const amount = Number(apiC.amount ?? apiC.grandTotal ?? subtotal - discount + totalTax + roundOff);
@@ -155,6 +162,7 @@ export const mapApiDeliveryChallanToRecord = (apiC: ApiDeliveryChallan): Deliver
   return {
     id: apiC.id,
     challanNo: apiC.challanNo || '',
+    deliveryChallanManualNo: apiC.deliveryChallanManualNo || undefined,
     referenceNo: apiC.referenceNo || undefined,
     invoiceDate: dateStr,
     dueDate: dueDateStr,
@@ -228,7 +236,7 @@ export const mapDeliveryChallanRecordToPayload = (
         if (typeof it.discountPercent === 'number' && !isNaN(it.discountPercent) && it.discountPercent > 0) {
           itemPayload.discountPercent = it.discountPercent;
         }
-        if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent > 0) {
+        if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent >= 0) {
           itemPayload.taxPercent = it.taxPercent;
         }
         if (it.batch && String(it.batch).trim()) {
@@ -242,6 +250,9 @@ export const mapDeliveryChallanRecordToPayload = (
   // On creation, omit temporary client-generated challanNo so backend sequence assigns official number
   if (!isCreate && challan.challanNo && challan.challanNo.trim()) {
     payload.challanNo = challan.challanNo.trim();
+  }
+  if (challan.deliveryChallanManualNo && String(challan.deliveryChallanManualNo).trim()) {
+    payload.deliveryChallanManualNo = String(challan.deliveryChallanManualNo).trim();
   }
   if (challan.referenceNo && challan.referenceNo.trim()) {
     payload.referenceNo = challan.referenceNo.trim();
@@ -545,9 +556,11 @@ export const commerceDeliveryChallanApi = {
   createChallan: async (
     payload: CreateDeliveryChallanPayload
   ): Promise<DeliveryChallanSingleResponse> => {
+    const cleanPayload = { ...payload };
+    delete (cleanPayload as any).challanNo;
     const response = await baseClient.post<DeliveryChallanSingleResponse>(
       '/commerce/challans',
-      payload
+      cleanPayload
     );
     return response.data;
   },

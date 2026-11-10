@@ -74,6 +74,7 @@ import { printBusinessDocument, printTableReport, downloadBusinessDocument, Docu
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS, FORM_SELECT_CLS, getFormInputCls, handleNonNegativeKeyDown } from '../utils/formUtils';
 import { SaleActionDropdown } from '../utils';
 import { toast } from "../../../utils/toast";
+import { getNextPaymentOutNumber } from '../../../utils/documentNumbering';
 
 import { formatDate } from '../utils/dateUtils';
 const PERIOD_FILTER_OPTIONS = [
@@ -407,6 +408,11 @@ export const PaymentOutView: React.FC = () => {
 
   // Active pool of records: only the payment vouchers returned by the API
   const activePool = livePayments;
+
+  // Computed next preview number based on currently loaded payment vouchers
+  const computedPreviewNo = useMemo(() => {
+    return getNextPaymentOutNumber(livePayments);
+  }, [livePayments]);
 
   // Open Edit Payment Modal (Cancelled payments cannot be edited as per Swagger docs)
   // Open detail view with fresh data (GET /payments-out/:id)
@@ -1553,7 +1559,15 @@ export const PaymentOutView: React.FC = () => {
         subtitle={
           editingPaymentId
             ? 'Configure payment voucher profile, invoice settlement, and payment details'
-            : 'Configure vendor disbursement voucher, payment mode, and settlement details'
+            : (
+              <span className="flex items-center gap-1.5 flex-wrap">
+                <span>Configure vendor disbursement voucher, payment mode, and settlement details</span>
+                <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                  {computedPreviewNo}
+                </span>
+                <span className="text-slate-400 text-[11px]">(Preview only. Final number assigned on save.)</span>
+              </span>
+            )
         }
         maxWidth="4xl"
         headerGradient={true}
@@ -1633,8 +1647,8 @@ export const PaymentOutView: React.FC = () => {
               <input
                 type="text"
                 readOnly
-                {...register('paymentNo')}
-                className={getFormInputCls(!!errors.paymentNo)}
+                value={editingPaymentId ? (watch('paymentNo') || '') : (watch('paymentNo') || computedPreviewNo)}
+                className="w-full h-11 px-4 bg-purple-50/70 border border-purple-200/90 rounded-xl text-xs sm:text-[13px] font-extrabold text-[#33077C] font-mono outline-none cursor-default"
                 placeholder="Auto-generated on save"
               />
               <FormError message={errors.paymentNo?.message} />

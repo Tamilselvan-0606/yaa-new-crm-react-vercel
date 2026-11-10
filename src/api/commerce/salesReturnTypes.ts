@@ -28,6 +28,7 @@ export interface ApiSalesReturn {
   organizationId: string;
   branchId?: string | null;
   returnNo: string;
+  salesReturnManualNo?: string | null;
   invoiceNo?: string;
   saleId?: string;
   invoiceId?: string;
@@ -79,6 +80,7 @@ export interface CreateSalesReturnItemPayload {
 
 export interface CreateSalesReturnPayload {
   returnNo?: string;
+  salesReturnManualNo?: string;
   invoiceNo?: string;
   saleId?: string;
   invoiceId?: string;
@@ -95,6 +97,7 @@ export interface CreateSalesReturnPayload {
 
 export interface UpdateSalesReturnPayload {
   returnNo?: string;
+  salesReturnManualNo?: string;
   invoiceNo?: string;
   saleId?: string;
   invoiceId?: string;

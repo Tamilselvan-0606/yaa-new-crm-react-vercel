@@ -1274,34 +1274,25 @@ export const CustomerView: React.FC = () => {
     setIsFormModalOpen(true);
   };
 
-  // Duplicate check before saving
+  // Duplicate check before saving (email & customer code)
   const checkDuplicates = (
-    phone: string,
+    _phone: string,
     email: string,
     customerCode: string,
     excludeId?: string,
   ): SalesCustomer[] => {
-    const cleanPhone = normalizePhoneForSave(phone);
     const cleanEmail = email.trim().toLowerCase();
     const cleanCode = customerCode.trim().toLowerCase();
 
     return liveCustomers.filter((c) => {
       if (excludeId && c.id === excludeId) return false;
-      const cPhone = normalizePhoneForSave(c.phone || "");
       const cEmail = (c.email || "").trim().toLowerCase();
       const cCode = (c.customerCode || "").trim().toLowerCase();
 
-      const phoneMatch = Boolean(
-        cleanPhone &&
-        cPhone &&
-        cleanPhone.length >= 10 &&
-        cPhone.length >= 10 &&
-        cleanPhone === cPhone,
-      );
       const emailMatch = Boolean(cleanEmail && cEmail && cleanEmail === cEmail);
       const codeMatch = Boolean(cleanCode && cCode && cleanCode === cCode);
 
-      return phoneMatch || emailMatch || codeMatch;
+      return emailMatch || codeMatch;
     });
   };
 

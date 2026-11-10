@@ -25,7 +25,8 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-
  */
 export const mapApiQuotationItemToSaleProductItem = (
   it: ApiQuotationItem,
-  idx: number = 0
+  idx: number = 0,
+  parentWithGst: boolean = true
 ): SaleProductItem & {
   unit?: string;
   discountAmount?: number;
@@ -40,9 +41,13 @@ export const mapApiQuotationItemToSaleProductItem = (
   const discPct = Number(it.discountPercent) || 0;
   const discAmt = Number(it.discountAmount ?? ((qty * rate * discPct) / 100));
   const taxable = Math.max(0, qty * rate - discAmt);
-  const taxRate = Number(it.taxPercent) || 0;
-  const taxAmt = Number(it.taxAmount ?? ((taxable * taxRate) / 100));
-  const lineTotal = Number(it.totalAmount ?? it.total ?? taxable + taxAmt);
+  const rawTaxRate = Number(it.taxPercent) || 0;
+  const rawTaxAmt = Number(it.taxAmount ?? ((taxable * rawTaxRate) / 100));
+  const lineTotal = Number(it.totalAmount ?? it.total ?? taxable + rawTaxAmt);
+  // An item only carries tax if parent has GST active and actual tax was charged
+  const hasTaxCharged = parentWithGst && (rawTaxAmt > 0 || (rawTaxRate > 0 && Math.abs(lineTotal - taxable) > 0.01));
+  const taxRate = hasTaxCharged ? rawTaxRate : 0;
+  const taxAmt = hasTaxCharged ? rawTaxAmt : 0;
 
   return {
     id: it.id || `item_${idx}_${Date.now()}`,
@@ -75,19 +80,22 @@ export const mapApiQuotationToSaleQuotation = (apiQ: ApiQuotation): SaleQuotatio
     ? apiQ.validUntil.split('T')[0]
     : apiQ.validUntil || '';
 
+  const totalTax = Number(apiQ.taxAmount ?? 0);
+  const totalAmount = Number(apiQ.amount ?? apiQ.grandTotal ?? 0);
+  const balance = Number(apiQ.balance ?? totalAmount);
+  const parentWithGst = apiQ.withGst !== false && totalTax > 0;
+
   const mappedItems: SaleProductItem[] = Array.isArray(apiQ.items)
-    ? apiQ.items.map((it, idx) => mapApiQuotationItemToSaleProductItem(it, idx))
+    ? apiQ.items.map((it, idx) => mapApiQuotationItemToSaleProductItem(it, idx, parentWithGst))
     : [];
 
   const subtotal = Number(apiQ.subtotal ?? apiQ.subTotal ?? 0);
   const totalDiscount = Number(apiQ.discount ?? apiQ.discountAmount ?? apiQ.overallDiscount ?? 0);
-  const totalTax = Number(apiQ.taxAmount ?? 0);
-  const totalAmount = Number(apiQ.amount ?? apiQ.grandTotal ?? 0);
-  const balance = Number(apiQ.balance ?? totalAmount);
 
   return {
     id: apiQ.id,
     quotationNo: apiQ.quotationNo || '',
+    estimationManualNo: apiQ.estimationManualNo || '',
     referenceNo: apiQ.referenceNo || '',
     date: dateFormatted,
     validUntil: validUntilFormatted,
@@ -160,7 +168,7 @@ export const mapSaleQuotationToPayload = (
       if (typeof it.discountPercent === 'number' && !isNaN(it.discountPercent) && it.discountPercent > 0) {
         item.discountPercent = Number(it.discountPercent);
       }
-      if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent > 0) {
+      if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent >= 0) {
         item.taxPercent = Number(it.taxPercent);
       }
       // Strictly omit 'unit' or any unrecognized fields
@@ -171,6 +179,9 @@ export const mapSaleQuotationToPayload = (
   // On creation, omit temporary client-generated quotationNo so backend sequence assigns official unique number
   if (!isCreate && quotation.quotationNo && quotation.quotationNo.trim()) {
     payload.quotationNo = quotation.quotationNo.trim();
+  }
+  if (quotation.estimationManualNo && String(quotation.estimationManualNo).trim()) {
+    payload.estimationManualNo = String(quotation.estimationManualNo).trim();
   }
   // Server generates referenceNo on create; only pass on update
   if (!isCreate && quotation.referenceNo && String(quotation.referenceNo).trim()) {
@@ -250,7 +261,7 @@ export const sanitizeCommerceQuotationPayload = <
       if (typeof it.discountPercent === 'number' && !isNaN(it.discountPercent) && it.discountPercent > 0) {
         cleanItem.discountPercent = Number(it.discountPercent);
       }
-      if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent > 0) {
+      if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent >= 0) {
         cleanItem.taxPercent = Number(it.taxPercent);
       }
       // Explicitly delete 'unit' if present in incoming raw item object
@@ -461,6 +472,7 @@ export const quotationApi = {
    */
   createQuotation: async (payload: CreateQuotationPayload): Promise<QuotationSingleResponse> => {
     const cleanPayload = sanitizeCommerceQuotationPayload(payload);
+    delete (cleanPayload as any).quotationNo;
     const response = await baseClient.post<QuotationSingleResponse>('/commerce/quotations', cleanPayload);
     return response.data;
   },

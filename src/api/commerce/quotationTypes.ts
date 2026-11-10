@@ -49,6 +49,7 @@ export interface ApiQuotation {
   deletedAt?: string | null;
   customer?: ApiQuotationCustomer | null;
   quotationNo: string;
+  estimationManualNo?: string | null;
   referenceNo?: string | null;
   date: string;
   validUntil: string;
@@ -140,6 +141,7 @@ export interface CreateQuotationItemPayload {
  */
 export interface CreateQuotationPayload {
   quotationNo?: string;
+  estimationManualNo?: string;
   referenceNo?: string;
   date?: string;
   validUntil?: string;

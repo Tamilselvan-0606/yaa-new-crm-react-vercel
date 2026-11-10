@@ -8,6 +8,8 @@ import { Button } from '../common/Button';
 import { CustomSelect } from '../common/CustomSelect';
 import { useAuth } from '../../context/AuthContext';
 import { useScopeLock } from '../../hooks/useScopeLock';
+import { useActiveOrgType } from '../../hooks/useActiveOrgType';
+import { filterBranchesForSuite } from '../../utils/branchSuite';
 import { api } from '../../services/api';
 import { customerApi } from '../../api/commerce/customerApi';
 import {
@@ -81,6 +83,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
     currentUser?.email?.toLowerCase() === 'yaaadmin@gmail.com';
   const isOrgAdmin = !isSuperAdmin && !isSubOrgAdmin;
   const { lockSubOrg, lockBranch, lockedSubOrgId, lockedBranchId } = useScopeLock();
+  const { isSaleManagement } = useActiveOrgType();
 
   // Organization, SubOrg, Branch State
   const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
@@ -192,13 +195,19 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             page_no: 1,
             page_size: 100,
             pagination_required: 'false',
-            sub_organization_id: selectedSubOrgId || undefined,
+            sub_organization_id: selectedSubOrgId && selectedSubOrgId !== '__PARENT_ORG__' ? selectedSubOrgId : undefined,
             organization_id: orgToQuery || undefined,
           },
           orgToQuery || undefined
         );
         if (cancelled) return;
-        const list = res && Array.isArray(res.data) ? res.data : [];
+        const all = filterBranchesForSuite(res && Array.isArray(res.data) ? res.data : [], isSaleManagement);
+        const list = !selectedSubOrgId
+          ? all
+          : selectedSubOrgId === '__PARENT_ORG__'
+            ? // Main organization: only branches not attached to a sub-organization
+              all.filter((b) => !b.subOrganizationId)
+            : all.filter((b) => b.subOrganizationId === selectedSubOrgId);
         setBranches(list);
         // Drop a branch that belongs to a previously selected sub-organization
         if (!initialCustomer) setSelectedBranchId((cur) => (cur && !list.some((b) => b.id === cur) ? '' : cur));
@@ -216,7 +225,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, selectedOrgId, selectedSubOrgId, activeOrgId, isSuperAdmin]);
+  }, [isOpen, selectedOrgId, selectedSubOrgId, activeOrgId, isSuperAdmin, isSaleManagement]);
 
   // Products from API
   const [products, setProducts] = useState<ClientProductApiItem[]>([]);
@@ -443,15 +452,8 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
     if (isSuperAdmin && !selectedOrgId) {
       customErrors.organization = 'Organization is required';
     }
-    if (subOrganizations.length > 0 && !selectedSubOrgId) {
-      customErrors.subOrganization = 'Sub-Organization is required';
-    }
-    if (branches.length > 0 && !selectedBranchId) {
-      customErrors.branch = 'Branch is required';
-    }
-    if (!selectedProductId) {
-      customErrors.product = 'Product Selection is required';
-    }
+    // Sub-Organization and Branch are optional
+    // Product selection is optional
     if (!data.country) customErrors.country = 'Country is required';
     if (!data.state && locationMeta.stateRequired) customErrors.state = 'State is required';
     if (!data.district && locationMeta.districtRequired) customErrors.district = 'District is required';
@@ -489,7 +491,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         company: data.businessName,
         contactPerson: data.contactPerson,
         phone: data.phone,
-        whatsapp: data.whatsapp || data.phone,
+        whatsapp: data.whatsapp || undefined,
         email: data.email,
         address: data.address,
         gstin: data.gstNumber,
@@ -508,11 +510,11 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
 
       if (isEditing) {
         await platformClientApi.updateClient(initialCustomer.id, {
-          name: data.businessName || data.clientName,
+          name: data.clientName || data.businessName,
           legalName: data.businessName || data.clientName,
           contactPerson: data.contactPerson || data.clientName,
           phone: data.phone,
-          whatsapp: data.whatsapp || data.phone,
+          whatsapp: data.whatsapp || undefined,
           email: data.email,
           address: data.address,
           city: data.city || undefined,
@@ -527,18 +529,18 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           status: 'Active',
           subOrganizationSupport: true,
           organizationId: effectiveOrgId,
-          subOrganizationId: selectedSubOrgId || undefined,
+          subOrganizationId: (selectedSubOrgId && selectedSubOrgId !== '__PARENT_ORG__') ? selectedSubOrgId : undefined,
           branchId: selectedBranchId || undefined,
           productId: resolvedProdId,
         });
         toast.success('Client updated successfully');
       } else {
         await platformClientApi.createClient({
-          name: data.businessName || data.clientName,
+          name: data.clientName || data.businessName,
           legalName: data.businessName || `${data.clientName} Private Limited`,
           contactPerson: data.contactPerson || data.clientName,
           phone: data.phone,
-          whatsapp: data.whatsapp || data.phone,
+          whatsapp: data.whatsapp || undefined,
           email: data.email,
           password: 'Password@123',
           gstNumber: data.gstNumber,
@@ -550,7 +552,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           districtId: data.districtId || undefined,
           pincode: data.pincode || undefined,
           organizationId: effectiveOrgId,
-          subOrganizationId: selectedSubOrgId || undefined,
+          subOrganizationId: (selectedSubOrgId && selectedSubOrgId !== '__PARENT_ORG__') ? selectedSubOrgId : undefined,
           branchId: selectedBranchId || undefined,
           productId: resolvedProdId,
           registrationType: 'Pvt Ltd',
@@ -621,56 +623,12 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             </button>
           </div>
         )}
-        {/* Row 0: Organization | Sub-Organization | Branch (Role-based) */}
+        {/* Customer Details: 3 fields per row throughout */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Organization */}
-          <div>
-            <label className={labelClass}>
-              Organization <span className="text-rose-500 font-bold">*</span>
-            </label>
-            {isSuperAdmin ? (
-              <>
-                <CustomSelect
-                  value={selectedOrgId}
-                  error={!!formErrors.organization}
-                  onChange={(val) => {
-                    setSelectedOrgId(val);
-                    const matched = organizations.find((o) => o.id === val);
-                    if (matched) setSelectedOrgName(matched.name);
-                    setSelectedSubOrgId('');
-                    setSelectedBranchId('');
-                    if (formErrors.organization) setFormErrors((prev) => ({ ...prev, organization: '' }));
-                  }}
-                  options={
-                    organizations.length > 0
-                      ? organizations.map((org) => ({ value: org.id, label: org.name }))
-                      : [{ value: '', label: 'No Organizations found' }]
-                  }
-                  optionVariant="strong"
-                  placeholder="Select Organization"
-                />
-                {formErrors.organization && (
-                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.organization}</p>
-                )}
-              </>
-            ) : (
-              <div>
-                <input
-                  type="text"
-                  readOnly
-                  disabled
-                  value={selectedOrgName}
-                  title="Default organization cannot be modified"
-                  className={`${inputClass} bg-slate-100/80 cursor-not-allowed text-slate-600 font-semibold`}
-                />
-              </div>
-            )}
-          </div>
-
           {/* Sub-Organization */}
           <div>
             <label className={labelClass}>
-              Sub-Organization <span className="text-rose-500 font-bold">*</span>
+              Sub-Organization
             </label>
             {lockSubOrg || initialCustomer ? (
               <input
@@ -704,16 +662,34 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                   error={!!formErrors.subOrganization}
                   onChange={(val) => {
                     setSelectedSubOrgId(val);
-                    const matched = subOrganizations.find((s) => s.id === val);
-                    if (matched) setSelectedSubOrgName(matched.name);
+                    if (val === '__PARENT_ORG__') {
+                      setSelectedSubOrgName(selectedOrgName);
+                    } else {
+                      const matched = subOrganizations.find((s) => s.id === val);
+                      if (matched) setSelectedSubOrgName(matched.name);
+                    }
                     setSelectedBranchId('');
                     if (formErrors.subOrganization) setFormErrors((prev) => ({ ...prev, subOrganization: '' }));
                   }}
-                  options={
-                    subOrganizations.length > 0
-                      ? subOrganizations.map((s) => ({ value: s.id, label: s.code ? `${s.name} (${s.code})` : s.name }))
-                      : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations' }]
-                  }
+                  options={(() => {
+                    const parentOrgLabel = selectedOrgName ? `${selectedOrgName} (Main Organization)` : 'Main Organization';
+                    const list: { value: string; label: string }[] = [];
+                    if (selectedOrgId) {
+                      list.push({ value: '__PARENT_ORG__', label: parentOrgLabel });
+                    }
+                    if (subOrganizations.length > 0) {
+                      subOrganizations.forEach((s) => {
+                        list.push({
+                          value: s.id,
+                          label: s.code ? `${s.name} (${s.code})` : s.name,
+                        });
+                      });
+                    }
+                    if (list.length === 0) {
+                      return [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations' }];
+                    }
+                    return list;
+                  })()}
                   optionVariant="strong"
                   placeholder={loadingSubOrgs ? 'Loading Sub-Organizations...' : 'Select Sub-Organization'}
                 />
@@ -727,7 +703,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           {/* Branch */}
           <div>
             <label className={labelClass}>
-              Branch <span className="text-rose-500 font-bold">*</span>
+              Branch
             </label>
             {lockBranch ? (
               <input
@@ -767,10 +743,8 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
               <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.branch}</p>
             )}
           </div>
-        </div>
 
-        {/* Row 1: Client Code (generated) | Client Name | Client Business */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Client Code */}
           <div>
             <label className={labelClass}>Client Code</label>
             <input
@@ -782,6 +756,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             />
           </div>
 
+          {/* Row 2 */}
           <RegisteredField
             label="Client Name"
             required
@@ -798,10 +773,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             error={errors.businessName?.message}
             placeholder="Company / Business Name"
           />
-        </div>
 
-        {/* Row 2: Contact Person | Phone Number | WhatsApp Number */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <RegisteredField
             label="Contact Person"
             required
@@ -811,6 +783,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             placeholder="Contact Person Full Name"
           />
 
+          {/* Row 3 */}
           <Controller
             name="phone"
             control={control}
@@ -839,10 +812,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
               />
             )}
           />
-        </div>
 
-        {/* Row 3: Email | GST Number | PAN Number */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <RegisteredField
             label="Email"
             required
@@ -852,9 +822,10 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             placeholder="client@company.com"
           />
 
+          {/* Row 4 */}
           <div>
             <label className={labelClass}>
-              GST Number <span className="text-rose-500 font-bold">*</span>
+              GST Number
             </label>
             <Controller
               name="gstNumber"
@@ -885,7 +856,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
 
           <div>
             <label className={labelClass}>
-              PAN Number <span className="text-rose-500 font-bold">*</span>
+              PAN Number
             </label>
             <Controller
               name="panNumber"
@@ -913,13 +884,10 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
               <p className="text-[11px] font-medium text-red-500 mt-1">{errors.panNumber.message}</p>
             )}
           </div>
-        </div>
 
-        {/* Row 4: Product Selection | Country | State | District | City | Pincode | Address */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label className={labelClass}>
-              Product Selection <span className="text-rose-500 font-bold">*</span>
+              Product Selection
             </label>
             <CustomSelect
               value={selectedProductId}
@@ -940,6 +908,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             )}
           </div>
 
+          {/* Row 5 onwards: Location fields (Country, State, District, City, Pincode, Address) */}
           <LocationFields
             country={watch('country') || ''}
             state={watch('state') || ''}
