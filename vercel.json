@@ -1,5 +1,6 @@
 {
   "rewrites": [
+    { "source": "/api/:path*", "destination": "https://api.dev.crm.yaacreations.com/api/:path*" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }

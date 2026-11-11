@@ -1,6 +1,9 @@
+// Note: must be written as a literal `import.meta.env.X` so Vite statically replaces it.
 export const API_BASE_URL =
-  (typeof import.meta !== 'undefined' && (import.meta as any)?.env?.VITE_API_BASE_URL) ||
-  'https://api.dev.crm.yaacreations.com/api/v1';
+  (import.meta as any).env?.VITE_API_BASE_URL ||
+  // Same-origin by default: Vite dev proxy (vite.config.ts) and Vercel rewrite
+  // (vercel.json) both forward /api to the backend, avoiding CORS.
+  '/api/v1';
 export const AUTH_API_BASE_URL = `${API_BASE_URL}/auth`;
 export const TOKEN_STORAGE_KEY = 'yaa_crm_jwt_token';
 
