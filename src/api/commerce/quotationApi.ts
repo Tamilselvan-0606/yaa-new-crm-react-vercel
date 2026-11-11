@@ -1,5 +1,9 @@
-import { baseClient, baseApi } from '../baseApi';
-import { QuotationStatus, SaleProductItem, SaleQuotation } from '../../store/useSalesManagementStore';
+import { baseClient, baseApi } from "../baseApi";
+import {
+  QuotationStatus,
+  SaleProductItem,
+  SaleQuotation,
+} from "../../store/useSalesManagementStore";
 import {
   ApiQuotation,
   ApiQuotationItem,
@@ -14,11 +18,12 @@ import {
   PatchQuotationPayload,
   QuotationStatusUpdatePayload,
   ConvertQuotationPayload,
-} from './quotationTypes';
+} from "./quotationTypes";
 
-export * from './quotationTypes';
+export * from "./quotationTypes";
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * Mapper: ApiQuotationItem -> SaleProductItem (with extended fields)
@@ -26,7 +31,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-
 export const mapApiQuotationItemToSaleProductItem = (
   it: ApiQuotationItem,
   idx: number = 0,
-  parentWithGst: boolean = true
+  parentWithGst: boolean = true,
 ): SaleProductItem & {
   unit?: string;
   discountAmount?: number;
@@ -39,20 +44,22 @@ export const mapApiQuotationItemToSaleProductItem = (
   const qty = Number(it.quantity) || 0;
   const rate = Number(it.unitPrice) || 0;
   const discPct = Number(it.discountPercent) || 0;
-  const discAmt = Number(it.discountAmount ?? ((qty * rate * discPct) / 100));
+  const discAmt = Number(it.discountAmount ?? (qty * rate * discPct) / 100);
   const taxable = Math.max(0, qty * rate - discAmt);
   const rawTaxRate = Number(it.taxPercent) || 0;
-  const rawTaxAmt = Number(it.taxAmount ?? ((taxable * rawTaxRate) / 100));
+  const rawTaxAmt = Number(it.taxAmount ?? (taxable * rawTaxRate) / 100);
   const lineTotal = Number(it.totalAmount ?? it.total ?? taxable + rawTaxAmt);
   // An item only carries tax if parent has GST active and actual tax was charged
-  const hasTaxCharged = parentWithGst && (rawTaxAmt > 0 || (rawTaxRate > 0 && Math.abs(lineTotal - taxable) > 0.01));
+  const hasTaxCharged =
+    parentWithGst &&
+    (rawTaxAmt > 0 || (rawTaxRate > 0 && Math.abs(lineTotal - taxable) > 0.01));
   const taxRate = hasTaxCharged ? rawTaxRate : 0;
   const taxAmt = hasTaxCharged ? rawTaxAmt : 0;
 
   return {
     id: it.id || `item_${idx}_${Date.now()}`,
-    productId: it.productId || '',
-    productName: it.productName || 'Unnamed Item',
+    productId: it.productId || "",
+    productName: it.productName || "Unnamed Item",
     sku: it.sku || undefined,
     batch: it.batch || undefined,
     quantity: qty,
@@ -60,25 +67,27 @@ export const mapApiQuotationItemToSaleProductItem = (
     discountPercent: discPct,
     taxPercent: taxRate,
     total: lineTotal,
-    unit: it.unit || 'PCS',
+    unit: it.unit || "PCS",
     discountAmount: discAmt,
     taxAmount: taxAmt,
-    category: it.category || '',
-    itemCode: it.itemCode || it.sku || '',
-    hsnCode: it.hsnCode || '',
-    description: it.description || '',
+    category: it.category || "",
+    itemCode: it.itemCode || it.sku || "",
+    hsnCode: it.hsnCode || "",
+    description: it.description || "",
   };
 };
 
 /**
  * Mapper: ApiQuotation -> SaleQuotation
  */
-export const mapApiQuotationToSaleQuotation = (apiQ: ApiQuotation): SaleQuotation => {
+export const mapApiQuotationToSaleQuotation = (
+  apiQ: ApiQuotation,
+): SaleQuotation => {
   const rawDate = apiQ.date || apiQ.quotationDate || new Date().toISOString();
-  const dateFormatted = rawDate.includes('T') ? rawDate.split('T')[0] : rawDate;
-  const validUntilFormatted = apiQ.validUntil?.includes('T')
-    ? apiQ.validUntil.split('T')[0]
-    : apiQ.validUntil || '';
+  const dateFormatted = rawDate.includes("T") ? rawDate.split("T")[0] : rawDate;
+  const validUntilFormatted = apiQ.validUntil?.includes("T")
+    ? apiQ.validUntil.split("T")[0]
+    : apiQ.validUntil || "";
 
   const totalTax = Number(apiQ.taxAmount ?? 0);
   const totalAmount = Number(apiQ.amount ?? apiQ.grandTotal ?? 0);
@@ -86,31 +95,41 @@ export const mapApiQuotationToSaleQuotation = (apiQ: ApiQuotation): SaleQuotatio
   const parentWithGst = apiQ.withGst !== false && totalTax > 0;
 
   const mappedItems: SaleProductItem[] = Array.isArray(apiQ.items)
-    ? apiQ.items.map((it, idx) => mapApiQuotationItemToSaleProductItem(it, idx, parentWithGst))
+    ? apiQ.items.map((it, idx) =>
+        mapApiQuotationItemToSaleProductItem(it, idx, parentWithGst),
+      )
     : [];
 
   const subtotal = Number(apiQ.subtotal ?? apiQ.subTotal ?? 0);
-  const totalDiscount = Number(apiQ.discount ?? apiQ.discountAmount ?? apiQ.overallDiscount ?? 0);
+  const totalDiscount = Number(
+    apiQ.discount ?? apiQ.discountAmount ?? apiQ.overallDiscount ?? 0,
+  );
 
   return {
     id: apiQ.id,
-    quotationNo: apiQ.quotationNo || '',
-    estimationManualNo: apiQ.estimationManualNo || '',
-    referenceNo: apiQ.referenceNo || '',
+    quotationNo: apiQ.quotationNo || "",
+    estimateManualNo: apiQ.estimateManualNo || "",
+    referenceNo: apiQ.referenceNo || "",
     date: dateFormatted,
     validUntil: validUntilFormatted,
-    customerId: apiQ.customerId || apiQ.customer?.id || '',
-    customerCode: apiQ.customer?.customerCode || (apiQ as any).customerCode || '',
-    partyName: apiQ.partyName || apiQ.customer?.name || '',
-    customerCompany: apiQ.customerCompany || apiQ.customer?.company || undefined,
-    customerPhone: apiQ.customerPhone || apiQ.customer?.phone || (apiQ.customer as any)?.customerPhone || undefined,
+    customerId: apiQ.customerId || apiQ.customer?.id || "",
+    customerCode:
+      apiQ.customer?.customerCode || (apiQ as any).customerCode || "",
+    partyName: apiQ.partyName || apiQ.customer?.name || "",
+    customerCompany:
+      apiQ.customerCompany || apiQ.customer?.company || undefined,
+    customerPhone:
+      apiQ.customerPhone ||
+      apiQ.customer?.phone ||
+      (apiQ.customer as any)?.customerPhone ||
+      undefined,
     customerEmail: apiQ.customerEmail || apiQ.customer?.email || undefined,
-    billingAddress: apiQ.billingAddress || '',
-    shippingAddress: apiQ.shippingAddress || apiQ.billingAddress || '',
+    billingAddress: apiQ.billingAddress || "",
+    shippingAddress: apiQ.shippingAddress || apiQ.billingAddress || "",
     items: mappedItems,
     subtotal,
     withGst: apiQ.withGst ?? true,
-    gstType: (apiQ.gstType as any) || 'intra_state',
+    gstType: (apiQ.gstType as any) || "intra_state",
     cgst: Number(apiQ.cgst ?? 0),
     sgst: Number(apiQ.sgst ?? 0),
     igst: Number(apiQ.igst ?? 0),
@@ -119,16 +138,16 @@ export const mapApiQuotationToSaleQuotation = (apiQ: ApiQuotation): SaleQuotatio
     roundOff: Number(apiQ.roundOff ?? 0),
     amount: totalAmount,
     balance: balance,
-    status: (apiQ.status as QuotationStatus) || 'Open',
+    status: (apiQ.status as QuotationStatus) || "Open",
     convertedToType: (apiQ.convertedToType as any) || null,
     convertedToId: apiQ.convertedToId || null,
     convertedToInvoiceNo: apiQ.convertedToInvoiceNo || null,
     convertedAt:
       (apiQ as any).convertedAt ||
       (apiQ.convertedToInvoiceNo || apiQ.convertedToId ? apiQ.updatedAt : null),
-    stateOfSupply: apiQ.stateOfSupply || '',
-    notes: apiQ.notes || '',
-    terms: apiQ.terms || '',
+    stateOfSupply: apiQ.stateOfSupply || "",
+    notes: apiQ.notes || "",
+    terms: apiQ.terms || "",
     createdAt: apiQ.createdAt || new Date().toISOString(),
     updatedAt: apiQ.updatedAt || new Date().toISOString(),
   };
@@ -143,14 +162,17 @@ export const mapSaleQuotationToPayload = (
     partyName: string;
     stateOfSupply?: string;
   },
-  isCreate: boolean = false
+  isCreate: boolean = false,
 ): CreateQuotationPayload => {
   const payload: CreateQuotationPayload = {
     partyName: quotation.partyName.trim(),
     items: (quotation.items || []).map((it: any) => {
       const item: CreateQuotationItemPayload = {
-        productId: it.productId && UUID_REGEX.test(it.productId) ? it.productId : (it.productId || ''),
-        productName: it.productName?.trim() || 'Item',
+        productId:
+          it.productId && UUID_REGEX.test(it.productId)
+            ? it.productId
+            : it.productId || "",
+        productName: it.productName?.trim() || "Item",
         quantity: Math.max(1, Number(it.quantity) || 1),
         unitPrice: Math.max(0, Number(it.unitPrice) || 0),
       };
@@ -165,10 +187,18 @@ export const mapSaleQuotationToPayload = (
       if (it.batch && String(it.batch).trim()) {
         item.batch = String(it.batch).trim();
       }
-      if (typeof it.discountPercent === 'number' && !isNaN(it.discountPercent) && it.discountPercent > 0) {
+      if (
+        typeof it.discountPercent === "number" &&
+        !isNaN(it.discountPercent) &&
+        it.discountPercent > 0
+      ) {
         item.discountPercent = Number(it.discountPercent);
       }
-      if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent >= 0) {
+      if (
+        typeof it.taxPercent === "number" &&
+        !isNaN(it.taxPercent) &&
+        it.taxPercent >= 0
+      ) {
         item.taxPercent = Number(it.taxPercent);
       }
       // Strictly omit 'unit' or any unrecognized fields
@@ -180,11 +210,18 @@ export const mapSaleQuotationToPayload = (
   if (!isCreate && quotation.quotationNo && quotation.quotationNo.trim()) {
     payload.quotationNo = quotation.quotationNo.trim();
   }
-  if (quotation.estimationManualNo && String(quotation.estimationManualNo).trim()) {
-    payload.estimationManualNo = String(quotation.estimationManualNo).trim();
+  if (
+    quotation.estimateManualNo &&
+    String(quotation.estimateManualNo).trim()
+  ) {
+    payload.estimateManualNo = String(quotation.estimateManualNo).trim();
   }
   // Server generates referenceNo on create; only pass on update
-  if (!isCreate && quotation.referenceNo && String(quotation.referenceNo).trim()) {
+  if (
+    !isCreate &&
+    quotation.referenceNo &&
+    String(quotation.referenceNo).trim()
+  ) {
     payload.referenceNo = String(quotation.referenceNo).trim();
   }
   if (quotation.date && quotation.date.trim()) {
@@ -212,11 +249,8 @@ export const mapSaleQuotationToPayload = (
   if (quotation.shippingAddress && quotation.shippingAddress.trim()) {
     payload.shippingAddress = quotation.shippingAddress.trim();
   }
-  if (typeof quotation.withGst === 'boolean') {
+  if (typeof quotation.withGst === "boolean") {
     payload.withGst = quotation.withGst;
-  }
-  if (quotation.gstType && quotation.gstType.trim()) {
-    payload.gstType = quotation.gstType.trim();
   }
   if (quotation.notes && quotation.notes.trim()) {
     payload.notes = quotation.notes.trim();
@@ -236,17 +270,17 @@ export const mapSaleQuotationToPayload = (
  * Strictly adheres to backend schema by stripping 'unit' and any unrecognized line item keys
  */
 export const sanitizeCommerceQuotationPayload = <
-  T extends Partial<CreateQuotationPayload> | Partial<UpdateQuotationPayload>
+  T extends Partial<CreateQuotationPayload> | Partial<UpdateQuotationPayload>,
 >(
-  payload: T
+  payload: T,
 ): T => {
   const sanitized = { ...payload } as any;
 
   if (Array.isArray(sanitized.items)) {
     sanitized.items = sanitized.items.map((it: any) => {
       const cleanItem: CreateQuotationItemPayload = {
-        productId: it.productId || '',
-        productName: it.productName || 'Item',
+        productId: it.productId || "",
+        productName: it.productName || "Item",
         quantity: Math.max(1, Number(it.quantity) || 1),
         unitPrice: Math.max(0, Number(it.unitPrice) || 0),
       };
@@ -258,10 +292,18 @@ export const sanitizeCommerceQuotationPayload = <
       if (it.batch && String(it.batch).trim()) {
         cleanItem.batch = String(it.batch).trim();
       }
-      if (typeof it.discountPercent === 'number' && !isNaN(it.discountPercent) && it.discountPercent > 0) {
+      if (
+        typeof it.discountPercent === "number" &&
+        !isNaN(it.discountPercent) &&
+        it.discountPercent > 0
+      ) {
         cleanItem.discountPercent = Number(it.discountPercent);
       }
-      if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent >= 0) {
+      if (
+        typeof it.taxPercent === "number" &&
+        !isNaN(it.taxPercent) &&
+        it.taxPercent >= 0
+      ) {
         cleanItem.taxPercent = Number(it.taxPercent);
       }
       // Explicitly delete 'unit' if present in incoming raw item object
@@ -284,20 +326,31 @@ export const sanitizeCommerceQuotationPayload = <
 
 export const quotationEndpoints = baseApi.injectEndpoints({
   endpoints: (builder) => ({
-    getCommerceQuotations: builder.query<QuotationListResponse, QuotationFilterParams | void>({
+    getCommerceQuotations: builder.query<
+      QuotationListResponse,
+      QuotationFilterParams | void
+    >({
       query: (params) => {
         const queryParams: Record<string, any> = {};
         if (params) {
-          if (typeof params.page_no === 'number') queryParams.page_no = params.page_no;
-          if (typeof params.page_size === 'number') queryParams.page_size = params.page_size;
-          if (typeof params.pagination_required !== 'undefined') {
-            queryParams.pagination_required = String(params.pagination_required);
+          if (typeof params.page_no === "number")
+            queryParams.page_no = params.page_no;
+          if (typeof params.page_size === "number")
+            queryParams.page_size = params.page_size;
+          if (typeof params.pagination_required !== "undefined") {
+            queryParams.pagination_required = String(
+              params.pagination_required,
+            );
           }
           if (params.search && params.search.trim()) {
             queryParams.search = params.search.trim();
           }
           if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
-          if (params.status && params.status !== 'ALL' && params.status !== 'All') {
+          if (
+            params.status &&
+            params.status !== "ALL" &&
+            params.status !== "All"
+          ) {
             queryParams.status = params.status;
           }
           if (params.customerId && UUID_REGEX.test(params.customerId)) {
@@ -308,95 +361,117 @@ export const quotationEndpoints = baseApi.injectEndpoints({
           }
           if (params.from) queryParams.from = params.from;
           if (params.to) queryParams.to = params.to;
-          if (params.period && params.period !== 'all' && params.period !== 'All Time') {
+          if (
+            params.period &&
+            params.period !== "all" &&
+            params.period !== "All Time"
+          ) {
             queryParams.period = params.period;
           }
         }
         return {
-          url: '/commerce/quotations',
+          url: "/commerce/quotations",
           params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
       providesTags: (result) =>
         result?.data
           ? [
-              ...result.data.map(({ id }) => ({ type: 'Estimation' as const, id })),
-              { type: 'Estimation', id: 'LIST' },
+              ...result.data.map(({ id }) => ({
+                type: "Estimation" as const,
+                id,
+              })),
+              { type: "Estimation", id: "LIST" },
             ]
-          : [{ type: 'Estimation', id: 'LIST' }],
+          : [{ type: "Estimation", id: "LIST" }],
     }),
 
     getCommerceQuotationById: builder.query<QuotationSingleResponse, string>({
       query: (id) => `/commerce/quotations/${id}`,
-      providesTags: (_result, _error, id) => [{ type: 'Estimation', id }],
+      providesTags: (_result, _error, id) => [{ type: "Estimation", id }],
     }),
 
-    createCommerceQuotation: builder.mutation<QuotationSingleResponse, CreateQuotationPayload>({
+    createCommerceQuotation: builder.mutation<
+      QuotationSingleResponse,
+      CreateQuotationPayload
+    >({
       query: (payload) => ({
-        url: '/commerce/quotations',
-        method: 'POST',
+        url: "/commerce/quotations",
+        method: "POST",
         body: sanitizeCommerceQuotationPayload(payload),
       }),
-      invalidatesTags: [{ type: 'Estimation', id: 'LIST' }, 'Dashboard'],
+      invalidatesTags: [{ type: "Estimation", id: "LIST" }, "Dashboard"],
     }),
 
-    updateCommerceQuotation: builder.mutation<QuotationSingleResponse, { id: string; payload: UpdateQuotationPayload }>({
+    updateCommerceQuotation: builder.mutation<
+      QuotationSingleResponse,
+      { id: string; payload: UpdateQuotationPayload }
+    >({
       query: ({ id, payload }) => ({
         url: `/commerce/quotations/${id}`,
-        method: 'PUT',
+        method: "PUT",
         body: sanitizeCommerceQuotationPayload(payload),
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Estimation', id },
-        { type: 'Estimation', id: 'LIST' },
+        { type: "Estimation", id },
+        { type: "Estimation", id: "LIST" },
       ],
     }),
 
-    patchCommerceQuotation: builder.mutation<QuotationSingleResponse, { id: string; payload: PatchQuotationPayload }>({
+    patchCommerceQuotation: builder.mutation<
+      QuotationSingleResponse,
+      { id: string; payload: PatchQuotationPayload }
+    >({
       query: ({ id, payload }) => ({
         url: `/commerce/quotations/${id}`,
-        method: 'PATCH',
+        method: "PATCH",
         body: sanitizeCommerceQuotationPayload(payload),
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Estimation', id },
-        { type: 'Estimation', id: 'LIST' },
+        { type: "Estimation", id },
+        { type: "Estimation", id: "LIST" },
       ],
     }),
 
     deleteCommerceQuotation: builder.mutation<QuotationDeleteResponse, string>({
       query: (id) => ({
         url: `/commerce/quotations/${id}`,
-        method: 'DELETE',
+        method: "DELETE",
       }),
-      invalidatesTags: [{ type: 'Estimation', id: 'LIST' }, 'Dashboard'],
+      invalidatesTags: [{ type: "Estimation", id: "LIST" }, "Dashboard"],
     }),
 
-    updateCommerceQuotationStatus: builder.mutation<QuotationSingleResponse, { id: string; status: string }>({
+    updateCommerceQuotationStatus: builder.mutation<
+      QuotationSingleResponse,
+      { id: string; status: string }
+    >({
       query: ({ id, status }) => ({
         url: `/commerce/quotations/${id}/status`,
-        method: 'PATCH',
+        method: "PATCH",
         body: { status },
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Estimation', id },
-        { type: 'Estimation', id: 'LIST' },
+        { type: "Estimation", id },
+        { type: "Estimation", id: "LIST" },
       ],
     }),
 
-    convertCommerceQuotation: builder.mutation<ConvertQuotationResponse, { id: string; payload: ConvertQuotationPayload }>({
+    convertCommerceQuotation: builder.mutation<
+      ConvertQuotationResponse,
+      { id: string; payload: ConvertQuotationPayload }
+    >({
       query: ({ id, payload }) => ({
         url: `/commerce/quotations/${id}/convert`,
-        method: 'POST',
+        method: "POST",
         body: payload,
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Estimation', id },
-        { type: 'Estimation', id: 'LIST' },
-        { type: 'ProformaInvoice', id: 'LIST' },
-        { type: 'SaleOrder', id: 'LIST' },
-        { type: 'SalesInvoice', id: 'LIST' },
-        'Dashboard',
+        { type: "Estimation", id },
+        { type: "Estimation", id: "LIST" },
+        { type: "ProformaInvoice", id: "LIST" },
+        { type: "SaleOrder", id: "LIST" },
+        { type: "SalesInvoice", id: "LIST" },
+        "Dashboard",
       ],
     }),
   }),
@@ -422,20 +497,24 @@ export const quotationApi = {
    * List quotations
    * GET /commerce/quotations
    */
-  getQuotations: async (params?: QuotationFilterParams): Promise<QuotationListResponse> => {
+  getQuotations: async (
+    params?: QuotationFilterParams,
+  ): Promise<QuotationListResponse> => {
     const queryParams: Record<string, any> = {};
 
     if (params) {
-      if (typeof params.page_no === 'number') queryParams.page_no = params.page_no;
-      if (typeof params.page_size === 'number') queryParams.page_size = params.page_size;
-      if (typeof params.pagination_required !== 'undefined') {
+      if (typeof params.page_no === "number")
+        queryParams.page_no = params.page_no;
+      if (typeof params.page_size === "number")
+        queryParams.page_size = params.page_size;
+      if (typeof params.pagination_required !== "undefined") {
         queryParams.pagination_required = String(params.pagination_required);
       }
       if (params.search && params.search.trim()) {
         queryParams.search = params.search.trim();
       }
       if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
-      if (params.status && params.status !== 'ALL' && params.status !== 'All') {
+      if (params.status && params.status !== "ALL" && params.status !== "All") {
         queryParams.status = params.status;
       }
       if (params.customerId && UUID_REGEX.test(params.customerId)) {
@@ -446,14 +525,21 @@ export const quotationApi = {
       }
       if (params.from) queryParams.from = params.from;
       if (params.to) queryParams.to = params.to;
-      if (params.period && params.period !== 'all' && params.period !== 'All Time') {
+      if (
+        params.period &&
+        params.period !== "all" &&
+        params.period !== "All Time"
+      ) {
         queryParams.period = params.period;
       }
     }
 
-    const response = await baseClient.get<QuotationListResponse>('/commerce/quotations', {
-      params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
-    });
+    const response = await baseClient.get<QuotationListResponse>(
+      "/commerce/quotations",
+      {
+        params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
+      },
+    );
     return response.data;
   },
 
@@ -462,7 +548,9 @@ export const quotationApi = {
    * GET /commerce/quotations/{id}
    */
   getQuotationById: async (id: string): Promise<QuotationSingleResponse> => {
-    const response = await baseClient.get<QuotationSingleResponse>(`/commerce/quotations/${id}`);
+    const response = await baseClient.get<QuotationSingleResponse>(
+      `/commerce/quotations/${id}`,
+    );
     return response.data;
   },
 
@@ -470,10 +558,15 @@ export const quotationApi = {
    * Create quotation
    * POST /commerce/quotations
    */
-  createQuotation: async (payload: CreateQuotationPayload): Promise<QuotationSingleResponse> => {
+  createQuotation: async (
+    payload: CreateQuotationPayload,
+  ): Promise<QuotationSingleResponse> => {
     const cleanPayload = sanitizeCommerceQuotationPayload(payload);
     delete (cleanPayload as any).quotationNo;
-    const response = await baseClient.post<QuotationSingleResponse>('/commerce/quotations', cleanPayload);
+    const response = await baseClient.post<QuotationSingleResponse>(
+      "/commerce/quotations",
+      cleanPayload,
+    );
     return response.data;
   },
 
@@ -483,12 +576,12 @@ export const quotationApi = {
    */
   updateQuotation: async (
     id: string,
-    payload: UpdateQuotationPayload
+    payload: UpdateQuotationPayload,
   ): Promise<QuotationSingleResponse> => {
     const cleanPayload = sanitizeCommerceQuotationPayload(payload);
     const response = await baseClient.put<QuotationSingleResponse>(
       `/commerce/quotations/${id}`,
-      cleanPayload
+      cleanPayload,
     );
     return response.data;
   },
@@ -499,12 +592,12 @@ export const quotationApi = {
    */
   patchQuotation: async (
     id: string,
-    payload: PatchQuotationPayload
+    payload: PatchQuotationPayload,
   ): Promise<QuotationSingleResponse> => {
     const cleanPayload = sanitizeCommerceQuotationPayload(payload);
     const response = await baseClient.patch<QuotationSingleResponse>(
       `/commerce/quotations/${id}`,
-      cleanPayload
+      cleanPayload,
     );
     return response.data;
   },
@@ -514,19 +607,29 @@ export const quotationApi = {
    * DELETE /commerce/quotations/{id}
    */
   deleteQuotation: async (id: string): Promise<QuotationDeleteResponse> => {
-    const response = await baseClient.delete<QuotationDeleteResponse>(`/commerce/quotations/${id}`);
+    const response = await baseClient.delete<QuotationDeleteResponse>(
+      `/commerce/quotations/${id}`,
+    );
     return response.data;
   },
 
   updateStatus: async (
     id: string,
-    statusOrPayload: 'Open' | 'Converted' | 'Cancelled' | 'Expired' | string | QuotationStatusUpdatePayload
+    statusOrPayload:
+      | "Open"
+      | "Converted"
+      | "Cancelled"
+      | "Expired"
+      | string
+      | QuotationStatusUpdatePayload,
   ): Promise<QuotationSingleResponse> => {
     const payload =
-      typeof statusOrPayload === 'string' ? { status: statusOrPayload } : statusOrPayload;
+      typeof statusOrPayload === "string"
+        ? { status: statusOrPayload }
+        : statusOrPayload;
     const response = await baseClient.patch<QuotationSingleResponse>(
       `/commerce/quotations/${id}/status`,
-      payload
+      payload,
     );
     return response.data;
   },
@@ -537,11 +640,11 @@ export const quotationApi = {
    */
   convertQuotation: async (
     id: string,
-    payload: ConvertQuotationPayload
+    payload: ConvertQuotationPayload,
   ): Promise<ConvertQuotationResponse> => {
     const response = await baseClient.post<ConvertQuotationResponse>(
       `/commerce/quotations/${id}/convert`,
-      payload
+      payload,
     );
     return response.data;
   },

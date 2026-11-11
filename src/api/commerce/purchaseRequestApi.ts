@@ -76,6 +76,7 @@ export const mapApiPurchaseRequestToUi = (
   return {
     id: apiPR.id,
     requestNo: apiPR.requestNo || '',
+    purchaseRequestManualNo: apiPR.purchaseRequestManualNo || '',
     requestDate:
       apiPR.requestDate ||
       (apiPR.createdAt ? apiPR.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]),
@@ -110,9 +111,10 @@ export const mapUiToCreatePayload = (
   data: {
     supplierId?: string;
     requestNo?: string;
+    purchaseRequestManualNo?: string;
     requestDate?: string;
     requestedBy: string;
-    department: string;
+    department?: string;
     requiredDate?: string;
     priority: string;
     status?: string;
@@ -124,12 +126,13 @@ export const mapUiToCreatePayload = (
     // Only a real supplier id is sent; a name alone is never turned into one.
     supplierId: data.supplierId && UUID_RE.test(data.supplierId) ? data.supplierId : undefined,
     requestNo: data.requestNo?.trim() || undefined,
-    requestDate: data.requestDate || new Date().toISOString().split('T')[0],
+    purchaseRequestManualNo: data.purchaseRequestManualNo?.trim() || undefined,
+    requestDate: data.requestDate || undefined,
     requestedBy: data.requestedBy.trim(),
-    department: data.department.trim(),
+    department: data.department?.trim() || undefined,
     requiredDate: data.requiredDate || undefined,
     priority: data.priority,
-    status: data.status || 'Pending Approval',
+    status: data.status || undefined,
     items: items.map((it) => ({
       productId: ensureValidUuid(it.productId),
       productName: it.productName.trim(),
@@ -159,6 +162,7 @@ export const sanitizeCommercePurchaseRequestUpdatePayload = (
 ): UpdatePurchaseRequestPayload => {
   const allowedKeys: (keyof UpdatePurchaseRequestPayload)[] = [
     'supplierId',
+    'purchaseRequestManualNo',
     'department',
     'requiredDate',
     'priority',
@@ -202,6 +206,7 @@ export const mapUiToUpdatePayload = (
 ): UpdatePurchaseRequestPayload => {
   const payload: UpdatePurchaseRequestPayload = {};
 
+  if (req.purchaseRequestManualNo && req.purchaseRequestManualNo.trim()) payload.purchaseRequestManualNo = req.purchaseRequestManualNo.trim();
   if (req.department && req.department.trim()) payload.department = req.department.trim();
   if (req.requiredDate) payload.requiredDate = req.requiredDate;
   if (req.priority) payload.priority = req.priority;

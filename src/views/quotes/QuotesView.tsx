@@ -80,6 +80,7 @@ export interface Quotation {
   id: string;
   estimateNumber: string;
   referenceNumber: string;
+  quotationManualNumber?: string;
   date: string;
   expiryDate: string;
   organizationId?: string;
@@ -325,6 +326,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       id: item.id,
       estimateNumber: item.estimateNumber || 'EST-0000',
       referenceNumber: item.referenceNumber || '',
+      quotationManualNumber: item.quotationManualNumber || '',
       date: formatIsoDate(item.date),
       expiryDate: formatIsoDate(item.expiryDate),
       organizationId: item.organizationId,
@@ -530,6 +532,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const [isActionStatusSubmenuOpen, setIsActionStatusSubmenuOpen] = useState(false);
   const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
   const [newEstimateNumber, setNewEstimateNumber] = useState('');
+  const [quotationManualNumber, setQuotationManualNumber] = useState('');
   const [duplicatedFromEstimateNo, setDuplicatedFromEstimateNo] = useState<string | null>(null);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -680,6 +683,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     setDuplicatedFromEstimateNo(null);
     setFormErrors({});
     setNewEstimateNumber(nextPredictedEstimateNumber);
+    setQuotationManualNumber('');
     setItemsList([createDefaultQuoteItem()]);
     setIsCreateModalOpen(true);
     navigate('/quotes/new');
@@ -689,6 +693,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     setEditingQuoteId(null);
     setDuplicatedFromEstimateNo(null);
     setNewEstimateNumber('');
+    setQuotationManualNumber('');
     setFormErrors({});
     setIsCreateModalOpen(false);
     navigate('/quotes');
@@ -1212,10 +1217,12 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       setEditingQuoteId(quote.id);
       setDuplicatedFromEstimateNo(null);
       setNewEstimateNumber(quote.estimateNumber);
+      setQuotationManualNumber(quote.quotationManualNumber || '');
     } else {
       setEditingQuoteId(null);
       setDuplicatedFromEstimateNo(quote.estimateNumber || null);
       setNewEstimateNumber('');
+      setQuotationManualNumber('');
     }
 
     if (quote.customerId) {
@@ -1409,6 +1416,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       if (editingQuoteId) {
         // Edit existing quote
         const updatePayload = {
+          quotationManualNumber: quotationManualNumber.trim() || undefined,
           createdDate: createdDate ? ddmmyyyyToIso(createdDate) : undefined,
           date: estimateDate ? ddmmyyyyToIso(estimateDate) : new Date().toISOString().split('T')[0],
           expiryDate: expiryDate ? ddmmyyyyToIso(expiryDate) : new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
@@ -1450,6 +1458,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
         // Create new quote (or duplicate)
         const payload: CreateQuoteRequest = {
           estimateNumber: newEstimateNumber.trim() || undefined,
+          quotationManualNumber: quotationManualNumber.trim() || undefined,
           createdDate: createdDate ? ddmmyyyyToIso(createdDate) : undefined,
           date: estimateDate ? ddmmyyyyToIso(estimateDate) : new Date().toISOString().split('T')[0],
           expiryDate: expiryDate ? ddmmyyyyToIso(expiryDate) : new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
@@ -1645,9 +1654,15 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
             {/* Left: Quotation Number, Date & Reference Details */}
             <div className="text-left space-y-1.5 text-xs sm:text-sm shrink-0">
               <div className="flex items-center gap-2">
-                <span className="text-slate-500 font-medium w-36">{singularTerm} Number:</span>
+                <span className="text-slate-500 font-medium w-36">{singularTerm} Serial Number:</span>
                 <span className="font-bold text-slate-900">{activeQuote.estimateNumber}</span>
               </div>
+              {activeQuote.quotationManualNumber && (
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-500 font-medium w-36">{singularTerm} Number:</span>
+                  <span className="font-bold text-slate-900">{activeQuote.quotationManualNumber}</span>
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <span className="text-slate-500 font-medium w-36">{singularTerm} Date:</span>
                 <span className="font-semibold text-slate-800">{activeQuote.date}</span>
@@ -2171,7 +2186,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
                       <div className="space-y-2">
                         <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
-                          <label className="text-[12px] font-bold text-slate-800">Quotation Number</label>
+                          <label className="text-[12px] font-bold text-slate-800">Quotation Serial Number</label>
                           <input
                             type="text"
                             value={newEstimateNumber || nextPredictedEstimateNumber}
@@ -2179,6 +2194,17 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                             disabled
                             placeholder="Auto-generated"
                             className="w-full max-w-[240px] h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 outline-none shadow-2xs font-mono cursor-not-allowed select-none"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                          <label className="text-[12px] font-bold text-slate-800">Quotation Number</label>
+                          <input
+                            type="text"
+                            value={quotationManualNumber}
+                            onChange={(e) => setQuotationManualNumber(e.target.value)}
+                            placeholder="Enter quotation number"
+                            className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
                           />
                         </div>
 

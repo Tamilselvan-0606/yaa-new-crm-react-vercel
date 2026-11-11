@@ -68,6 +68,14 @@ import { Modal } from '../../../components/common/Modal';
 import { toast } from "../../../utils/toast";
 import { downloadTableReport } from '../../../utils/printUtils';
 
+/** YYYY-MM-DD in the user's local time zone (toISOString() would shift the day for UTC+ zones such as IST). */
+const toLocalISO = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
 type ReportCategory = 'transaction' | 'sales' | 'collections' | 'inventory' | 'purchase' | 'expense' | 'tax';
 
 type ReportId =
@@ -285,12 +293,8 @@ export const SaleManagementReportsView: React.FC = () => {
 
   const [activeReport, setActiveReport] = useState<ReportId>('bill_wise_profit');
   const [timeRange, setTimeRange] = useState<'today' | 'this_week' | 'this_month' | 'this_year' | 'all' | 'custom'>('this_month');
-  const [customStartDate, setCustomStartDate] = useState(
-    new Date().toISOString().split('T')[0]
-  );
-  const [customEndDate, setCustomEndDate] = useState(
-    new Date().toISOString().split('T')[0]
-  );
+  const [customStartDate, setCustomStartDate] = useState(toLocalISO(new Date()));
+  const [customEndDate, setCustomEndDate] = useState(toLocalISO(new Date()));
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedPartyFilter, setSelectedPartyFilter] = useState('ALL');
 
@@ -326,25 +330,26 @@ export const SaleManagementReportsView: React.FC = () => {
   const isWithinDateRange = (dateStr?: string) => {
     if (!dateStr || timeRange === 'all') return true;
     const now = new Date();
-    const todayStr = now.toISOString().split('T')[0];
+    const todayStr = toLocalISO(now);
+    const day = dateStr.split('T')[0];
 
-    if (timeRange === 'today') return dateStr.startsWith(todayStr);
+    if (timeRange === 'today') return day === todayStr;
     if (timeRange === 'this_week') {
-      const weekAgo = new Date(Date.now() - 7 * 86400000);
-      return new Date(dateStr) >= weekAgo;
+      const weekAgo = toLocalISO(new Date(Date.now() - 7 * 86400000));
+      return day >= weekAgo && day <= todayStr;
     }
     if (timeRange === 'this_month') {
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      return new Date(dateStr) >= monthStart;
+      const monthStart = toLocalISO(new Date(now.getFullYear(), now.getMonth(), 1));
+      return day >= monthStart && day <= todayStr;
     }
     if (timeRange === 'this_year') {
-      const yearStart = new Date(now.getFullYear(), 0, 1);
-      return new Date(dateStr) >= yearStart;
+      const yearStart = toLocalISO(new Date(now.getFullYear(), 0, 1));
+      return day >= yearStart && day <= todayStr;
     }
     if (timeRange === 'custom') {
       const start = customStartDate <= customEndDate ? customStartDate : customEndDate;
       const end = customStartDate <= customEndDate ? customEndDate : customStartDate;
-      return dateStr >= start && dateStr <= end;
+      return day >= start && day <= end;
     }
     return true;
   };
@@ -454,7 +459,7 @@ export const SaleManagementReportsView: React.FC = () => {
         paidAmount: r.refundStatus === 'Refunded' ? r.returnAmount : 0,
         balance: r.refundStatus === 'Pending' ? r.returnAmount : 0,
         status: r.returnStatus,
-        paymentMode: r.refundMethod || 'Store Credit',
+        paymentMode: r.refundMethod || '—',
       });
     });
 
@@ -521,22 +526,22 @@ export const SaleManagementReportsView: React.FC = () => {
     if (timeRange === 'custom') {
       return `From ${formatToDDMMYYYY(customStartDate)} to ${formatToDDMMYYYY(customEndDate)}`;
     }
-    const today = new Date().toISOString().split('T')[0];
+    const today = toLocalISO(new Date());
     if (timeRange === 'today') {
       return `For Today (${formatToDDMMYYYY(today)})`;
     }
     if (timeRange === 'this_week') {
-      const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+      const weekAgo = toLocalISO(new Date(Date.now() - 7 * 86400000));
       return `From ${formatToDDMMYYYY(weekAgo)} to ${formatToDDMMYYYY(today)}`;
     }
     if (timeRange === 'this_month') {
       const now = new Date();
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+      const monthStart = toLocalISO(new Date(now.getFullYear(), now.getMonth(), 1));
       return `From ${formatToDDMMYYYY(monthStart)} to ${formatToDDMMYYYY(today)}`;
     }
     if (timeRange === 'this_year') {
       const now = new Date();
-      const yearStart = new Date(now.getFullYear(), 0, 1).toISOString().split('T')[0];
+      const yearStart = toLocalISO(new Date(now.getFullYear(), 0, 1));
       return `From ${formatToDDMMYYYY(yearStart)} to ${formatToDDMMYYYY(today)}`;
     }
     return 'All Available Records';
@@ -566,35 +571,40 @@ export const SaleManagementReportsView: React.FC = () => {
     switch (activeReport) {
       // 1. BILL-WISE PROFIT
       case 'bill_wise_profit': {
+        // Cost comes only from real data: the line's own purchase price, else the unit cost on the
+        // stock record (API). When a cost is not available the profit is shown as "—" (never guessed).
+        const billCost = (s: (typeof filteredSales)[number]): number | null => {
+          if (!s.items || s.items.length === 0) return null;
+          let total = 0;
+          for (const item of s.items) {
+            const own = Number(item.purchasePrice) || 0;
+            const stockCost = Number(stocks.find((st) => st.productId === item.productId)?.unitCost) || 0;
+            const unit = own > 0 ? own : stockCost;
+            if (unit <= 0) return null;
+            total += unit * item.quantity;
+          }
+          return total;
+        };
         const rows = filteredSales.map((s, idx) => {
-          const cost = (s.items && s.items.length > 0)
-            ? s.items.reduce((acc, item) => {
-                const itemCost = item.purchasePrice ?? stocks.find((st) => st.productId === item.productId)?.unitCost ?? (item.unitPrice * 0.7);
-                return acc + (itemCost * item.quantity);
-              }, 0)
-            : (s.subtotal * 0.7);
-          const profit = s.grandTotal - cost;
+          const cost = billCost(s);
           return {
             id: s.id,
             cells: [
               formatToDDMMYYYY(s.saleDate),
               s.invoiceNo || String(idx + 1),
-              s.customerName || 'Walk-in Customer',
+              s.customerName || '—',
               formatCurrency(s.grandTotal),
-              formatCurrency(profit),
+              cost === null ? '—' : formatCurrency(s.grandTotal - cost),
             ],
           };
         });
         const totalSale = filteredSales.reduce((acc, s) => acc + s.grandTotal, 0);
-        const totalProfit = filteredSales.reduce((acc, s) => {
-          const cost = (s.items && s.items.length > 0)
-            ? s.items.reduce((c, item) => {
-                const itemCost = item.purchasePrice ?? stocks.find((st) => st.productId === item.productId)?.unitCost ?? (item.unitPrice * 0.7);
-                return c + (itemCost * item.quantity);
-              }, 0)
-            : (s.subtotal * 0.7);
-          return acc + (s.grandTotal - cost);
-        }, 0);
+        const totalProfit = apiSummary
+          ? apiSummary.grossProfit
+          : filteredSales.reduce((acc, s) => {
+              const cost = billCost(s);
+              return cost === null ? acc : acc + (s.grandTotal - cost);
+            }, 0);
         return {
           title: 'Bill wise profit & loss report',
           columns: [
@@ -621,7 +631,7 @@ export const SaleManagementReportsView: React.FC = () => {
             t.type,
             t.refNo,
             t.partyName,
-            t.paymentMode || 'N/A',
+            t.paymentMode || '—',
             formatCurrency(t.totalAmount),
             formatCurrency(t.paidAmount),
             formatCurrency(t.balance),
@@ -755,7 +765,7 @@ export const SaleManagementReportsView: React.FC = () => {
             t.type,
             t.refNo,
             t.partyName,
-            t.paymentMode || 'Cash',
+            t.paymentMode || '—',
             t.type === 'Sale' || t.type === 'Purchase Return' ? formatCurrency(t.totalAmount) : '₹ 0.00',
             t.type === 'Purchase' || t.type === 'Sales Return' ? formatCurrency(t.totalAmount) : '₹ 0.00',
             t.status,
@@ -877,7 +887,7 @@ export const SaleManagementReportsView: React.FC = () => {
           const key = s.customerId || s.customerName;
           const current = customerMap.get(key) || {
             name: s.customerName,
-            phone: s.customerPhone || 'N/A',
+            phone: s.customerPhone || '—',
             count: 0,
             total: 0,
             paid: 0,
@@ -930,7 +940,7 @@ export const SaleManagementReportsView: React.FC = () => {
             r.returnNo,
             r.invoiceNo,
             r.customerName,
-            r.items?.[0]?.reason || r.notes || 'Defective Goods',
+            r.items?.[0]?.reason || r.notes || '—',
             formatCurrency(r.returnAmount),
             r.refundStatus,
           ],
@@ -976,7 +986,7 @@ export const SaleManagementReportsView: React.FC = () => {
           return {
             id: s.id,
             cells: [
-              s.customerName || 'Customer',
+              s.customerName || '—',
               s.invoiceNo,
               formatToDDMMYYYY(s.saleDate),
               formatToDDMMYYYY(s.dueDate || s.saleDate),
@@ -1219,8 +1229,8 @@ export const SaleManagementReportsView: React.FC = () => {
           cells: [
             st.sku,
             st.productName,
-            st.category || 'General',
-            st.unit || 'Units',
+            st.category || '—',
+            st.unit || '—',
             `${st.inStock}`,
             formatCurrency(st.unitCost || 0),
             formatCurrency(st.unitPrice || 0),
@@ -1252,9 +1262,9 @@ export const SaleManagementReportsView: React.FC = () => {
 
       // 11. LOW STOCK & REORDER ALERT
       case 'low_stock_summary': {
-        const lowItems = stocks.filter((st) => st.inStock <= (st.reorderLevel || 10));
+        const lowItems = stocks.filter((st) => typeof st.reorderLevel === 'number' && st.reorderLevel > 0 && st.inStock <= st.reorderLevel);
         const rows = lowItems.map((st) => {
-          const reorder = st.reorderLevel || 10;
+          const reorder = st.reorderLevel || 0;
           const deficit = Math.max(0, reorder - st.inStock);
           const estCost = deficit * (st.unitCost || 0);
           return {
@@ -1262,7 +1272,7 @@ export const SaleManagementReportsView: React.FC = () => {
             cells: [
               st.sku,
               st.productName,
-              st.category || 'General',
+              st.category || '—',
               `${st.inStock}`,
               `${reorder}`,
               `${deficit}`,
@@ -1271,9 +1281,9 @@ export const SaleManagementReportsView: React.FC = () => {
             ],
           };
         });
-        const totalDeficitUnits = lowItems.reduce((acc, s) => acc + Math.max(0, (s.reorderLevel || 10) - s.inStock), 0);
+        const totalDeficitUnits = lowItems.reduce((acc, s) => acc + Math.max(0, (s.reorderLevel || 0) - s.inStock), 0);
         const totalRestockInvestment = lowItems.reduce(
-          (acc, s) => acc + Math.max(0, (s.reorderLevel || 10) - s.inStock) * (s.unitCost || 0),
+          (acc, s) => acc + Math.max(0, (s.reorderLevel || 0) - s.inStock) * (s.unitCost || 0),
           0
         );
         return {
@@ -1358,7 +1368,7 @@ export const SaleManagementReportsView: React.FC = () => {
       case 'category_stock': {
         const catMap = new Map<string, { count: number; units: number; val: number }>();
         stocks.forEach((st) => {
-          const cat = st.category || 'General';
+          const cat = st.category || '—';
           const cur = catMap.get(cat) || { count: 0, units: 0, val: 0 };
           cur.count += 1;
           cur.units += st.inStock;
@@ -1521,7 +1531,7 @@ export const SaleManagementReportsView: React.FC = () => {
             r.returnNo,
             r.purchaseNo,
             r.supplierName,
-            r.notes || 'Goods Returned to Vendor',
+            r.notes || '—',
             formatCurrency(r.returnAmount),
             r.refundStatus,
           ],
@@ -1551,11 +1561,11 @@ export const SaleManagementReportsView: React.FC = () => {
         const hsnMap = new Map<string, { desc: string; qty: number; taxable: number; tax: number }>();
         filteredSales.forEach((s) => {
           (s.items || []).forEach((item) => {
-            const hsn = item.sku || 'HSN-8471';
+            const hsn = (item as any).hsnCode || (item as any).hsn || '—';
             const cur = hsnMap.get(hsn) || { desc: item.productName, qty: 0, taxable: 0, tax: 0 };
             cur.qty += item.quantity;
             cur.taxable += item.total;
-            cur.tax += (item.total * (item.taxPercent || 18)) / 100;
+            cur.tax += (item.total * (item.taxPercent || 0)) / 100;
             hsnMap.set(hsn, cur);
           });
         });
@@ -1845,7 +1855,7 @@ export const SaleManagementReportsView: React.FC = () => {
             formatToDDMMYYYY(p.date || p.paymentDate || ''),
             p.receiptNo,
             p.partyName,
-            p.paymentType || p.paymentMethod || 'Cash',
+            p.paymentType || p.paymentMethod || '—',
             p.referenceNo || '—',
             p.invoiceNo || '—',
             formatCurrency(p.receivedAmount || p.amount || 0),
@@ -1855,7 +1865,7 @@ export const SaleManagementReportsView: React.FC = () => {
         const totalReceived = filteredPaymentIns.reduce((acc, p) => acc + (p.receivedAmount || p.amount || 0), 0);
         const paymentModeMap: Record<string, number> = {};
         filteredPaymentIns.forEach((p) => {
-          const mode = p.paymentType || p.paymentMethod || 'Cash';
+          const mode = p.paymentType || p.paymentMethod || '—';
           paymentModeMap[mode] = (paymentModeMap[mode] || 0) + (p.receivedAmount || p.amount || 0);
         });
         const topMode = Object.entries(paymentModeMap).sort((a, b) => b[1] - a[1])[0];
@@ -1976,7 +1986,7 @@ export const SaleManagementReportsView: React.FC = () => {
         const expensePayments = paymentOuts.filter((p) => isWithinDateRange(p.paymentDate));
         const categoryMap: Record<string, { count: number; total: number }> = {};
         expensePayments.forEach((p) => {
-          const cat = p.paymentType || p.paymentMode || 'General Expense';
+          const cat = p.paymentType || p.paymentMode || '—';
           if (!categoryMap[cat]) categoryMap[cat] = { count: 0, total: 0 };
           categoryMap[cat].count += 1;
           categoryMap[cat].total += p.amount;
@@ -2164,6 +2174,16 @@ export const SaleManagementReportsView: React.FC = () => {
         {
           title: currentReportData.title || currentReportMeta.label,
           subtitle: `Date Range: ${formattedDateRange} | Generated on ${new Date().toLocaleDateString('en-GB')}`,
+          // Header comes from the signed-in organisation's profile (API), not a built-in company name
+          companyName: companyProfile.companyName,
+          companyDetails: [
+            companyProfile.companyAddress,
+            companyProfile.companyGstin ? `GSTIN: ${companyProfile.companyGstin}` : "",
+            companyProfile.companyPhone ? `Phone: ${companyProfile.companyPhone}` : "",
+            companyProfile.companyEmail,
+          ]
+            .filter(Boolean)
+            .join(" | "),
           columns,
           data,
           metrics,

@@ -371,6 +371,7 @@ export const PurchaseReturnView: React.FC = () => {
   const [refundStatus, setRefundStatus] = useState<RefundStatusType>('Supplier Credit');
   const [returnStatus, setReturnStatus] = useState<string>('Requested');
   const [notes, setNotes] = useState('');
+  const [purchaseReturnManualNo, setPurchaseReturnManualNo] = useState('');
 
   // On-demand product search: calls products API when user is searching or opening product selector
   const handleProductSearch = useCallback(async (query = '') => {
@@ -874,6 +875,7 @@ export const PurchaseReturnView: React.FC = () => {
     setRefundStatus('Supplier Credit');
     setReturnStatus('Requested');
     setNotes('');
+    setPurchaseReturnManualNo('');
     setReturnItems([
       {
         id: `pr_ret_it_${Date.now()}_0`,
@@ -944,6 +946,7 @@ export const PurchaseReturnView: React.FC = () => {
     setRefundStatus((pret.refundStatus as RefundStatusType) || 'Supplier Credit');
     setReturnStatus(pret.returnStatus || 'Requested');
     setNotes(pret.notes || '');
+    setPurchaseReturnManualNo(pret.purchaseReturnManualNo || '');
     setIsCreateModalOpen(true);
   };
 
@@ -1009,6 +1012,7 @@ export const PurchaseReturnView: React.FC = () => {
         const updatePayload = mapUiToUpdatePayload({
           id: editingReturn.id,
           returnNo: editingReturn.returnNo,
+          purchaseReturnManualNo: purchaseReturnManualNo,
           purchaseId: effectivePurchaseId,
           purchaseNo: effectivePurchaseNo,
           supplierId: effectiveSupplierId,
@@ -1102,6 +1106,7 @@ export const PurchaseReturnView: React.FC = () => {
         // CREATE MODE
         const createPayload = mapUiToCreatePayload(
           {
+            purchaseReturnManualNo: purchaseReturnManualNo,
             purchaseId: effectivePurchaseId,
             purchaseNo: effectivePurchaseNo,
             supplierId: effectiveSupplierId,
@@ -1342,6 +1347,7 @@ export const PurchaseReturnView: React.FC = () => {
     );
     setRefundStatus((pret.refundStatus as RefundStatusType) || 'Supplier Credit');
     setReturnStatus('Requested');
+    setPurchaseReturnManualNo('');
     setNotes(pret.notes ? `Duplicated from ${pret.returnNo}. ${pret.notes}` : `Duplicated from ${pret.returnNo}`);
     setIsCreateModalOpen(true);
     toast.info(`Duplicated return details from ${pret.returnNo} into editor. Review and save when ready.`);
@@ -1750,7 +1756,7 @@ export const PurchaseReturnView: React.FC = () => {
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
             <CommonTableHead
                 columns={[
-                  { label: "RETURN NO & DATE", align: "left", minWidth: "160px" },
+                  { label: "RETURN NO & DATE", align: "center", minWidth: "160px" },
                   { label: "ORIGINAL PURCHASE", align: "left", minWidth: "150px" },
                   { label: "SUPPLIER", align: "left", minWidth: "180px" },
                   { label: "ITEMS RETURNED", align: "left", minWidth: "150px" },
@@ -1781,20 +1787,15 @@ export const PurchaseReturnView: React.FC = () => {
                 paginatedReturns.map((pret) => (
                   <tr key={pret.id} className="hover:bg-slate-50/80 transition-colors border-b border-slate-200 font-sans">
                     {/* 1. Return No & Date */}
-                    <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-[#33077C] text-white flex items-center justify-center font-bold text-xs tracking-wider shadow-xs shrink-0 select-none">
-                          PR
-                        </div>
-                        <div>
-                          <span
-                            onClick={() => handleOpenViewModal(pret)}
-                            className="font-bold text-[#33077C] hover:underline cursor-pointer block text-sm leading-snug"
-                          >
-                            {pret.returnNo}
-                          </span>
-                          <span className="text-xs text-slate-400 font-medium mt-0.5 block">{formatDate(pret.returnDate)}</span>
-                        </div>
+                    <td className="py-3.5 px-3 font-bold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                      <div className="flex flex-col items-center justify-center gap-1">
+                        <span
+                          onClick={() => handleOpenViewModal(pret)}
+                          className="cursor-pointer hover:underline"
+                        >
+                          {pret.returnNo}
+                        </span>
+                        <span className="text-xs text-slate-400 font-medium">{formatDate(pret.returnDate)}</span>
                       </div>
                     </td>
 
@@ -1996,6 +1997,18 @@ export const PurchaseReturnView: React.FC = () => {
                 readOnly
                 className="w-full h-11 px-4 bg-purple-50/70 border border-purple-200/90 rounded-xl text-xs sm:text-[13px] font-extrabold text-[#33077C] font-mono outline-none cursor-default"
                 placeholder="Auto-generated on save"
+              />
+            </div>
+
+            {/* Return No (manual entry) */}
+            <div>
+              <FormLabel>Return No</FormLabel>
+              <input
+                type="text"
+                value={purchaseReturnManualNo}
+                onChange={(e) => setPurchaseReturnManualNo(e.target.value)}
+                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-xl text-xs sm:text-[13px] font-semibold text-slate-800 outline-none transition-colors"
+                placeholder="Enter Return No"
               />
             </div>
 

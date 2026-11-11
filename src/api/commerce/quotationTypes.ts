@@ -1,4 +1,8 @@
-import { QuotationStatus, SaleProductItem, SaleQuotation } from '../../store/useSalesManagementStore';
+import {
+  QuotationStatus,
+  SaleProductItem,
+  SaleQuotation,
+} from "../../store/useSalesManagementStore";
 
 /**
  * Line item in API Quotation
@@ -49,7 +53,7 @@ export interface ApiQuotation {
   deletedAt?: string | null;
   customer?: ApiQuotationCustomer | null;
   quotationNo: string;
-  estimationManualNo?: string | null;
+  estimateManualNo?: string | null;
   referenceNo?: string | null;
   date: string;
   validUntil: string;
@@ -62,7 +66,7 @@ export interface ApiQuotation {
   shippingAddress?: string | null;
   items: ApiQuotationItem[];
   withGst?: boolean;
-  gstType?: 'intra_state' | 'inter_state' | string;
+  gstType?: "intra_state" | "inter_state" | string;
   notes?: string | null;
   terms?: string | null;
   quotationDate?: string;
@@ -81,7 +85,7 @@ export interface ApiQuotation {
   amount: number;
   balance: number;
   status: QuotationStatus | string;
-  convertedToType?: 'Invoice' | 'Order' | 'Proforma' | string | null;
+  convertedToType?: "Invoice" | "Order" | "Proforma" | string | null;
   convertedToId?: string | null;
   convertedToInvoiceNo?: string | null;
   convertedAt?: string | null;
@@ -112,13 +116,21 @@ export interface QuotationFilterParams {
   page_size?: number;
   pagination_required?: boolean | string;
   search?: string;
-  sortOrder?: 'asc' | 'desc';
+  sortOrder?: "asc" | "desc";
   status?: string;
   customerId?: string;
   branchId?: string;
   from?: string; // YYYY-MM-DD
-  to?: string;   // YYYY-MM-DD
-  period?: 'today' | 'this_week' | 'this_month' | 'last_month' | 'this_quarter' | 'this_year' | 'all' | string;
+  to?: string; // YYYY-MM-DD
+  period?:
+    | "today"
+    | "this_week"
+    | "this_month"
+    | "last_month"
+    | "this_quarter"
+    | "this_year"
+    | "all"
+    | string;
 }
 
 /**
@@ -141,7 +153,7 @@ export interface CreateQuotationItemPayload {
  */
 export interface CreateQuotationPayload {
   quotationNo?: string;
-  estimationManualNo?: string;
+  estimateManualNo?: string;
   referenceNo?: string;
   date?: string;
   validUntil?: string;
@@ -174,14 +186,20 @@ export type PatchQuotationPayload = Partial<CreateQuotationPayload>;
  * Payload for PATCH /commerce/quotations/{id}/status
  */
 export interface QuotationStatusUpdatePayload {
-  status: QuotationStatus | 'Open' | 'Converted' | 'Cancelled' | 'Expired' | string;
+  status:
+    | QuotationStatus
+    | "Open"
+    | "Converted"
+    | "Cancelled"
+    | "Expired"
+    | string;
 }
 
 /**
  * Payload for POST /commerce/quotations/{id}/convert
  */
 export interface ConvertQuotationPayload {
-  targetType: 'Invoice' | 'Order' | 'Proforma' | 'Challan' | 'DeliveryChallan';
+  targetType: "Invoice" | "Order" | "Proforma" | "Challan" | "DeliveryChallan";
   dueDate?: string;
 }
 
@@ -249,7 +267,13 @@ export interface ConvertQuotationResponse {
   data: {
     source: ApiQuotation;
     convertedTo: {
-      type: 'Invoice' | 'Order' | 'Proforma' | 'Challan' | 'DeliveryChallan' | string;
+      type:
+        | "Invoice"
+        | "Order"
+        | "Proforma"
+        | "Challan"
+        | "DeliveryChallan"
+        | string;
       id: string;
       documentNo: string;
     };

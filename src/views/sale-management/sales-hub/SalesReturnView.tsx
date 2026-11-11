@@ -42,6 +42,7 @@ import {
   Loader2,
   FileCheck2,
   Download,
+  Phone,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
@@ -206,7 +207,7 @@ export const SalesReturnView: React.FC = () => {
   });
   const [pendingFirm, setPendingFirm] = useState('ALL FIRMS');
   const [selectedFirm, setSelectedFirm] = useState('ALL FIRMS');
-  const [pendingTxType, setPendingTxType] = useState('All Transaction');
+  const [pendingTxType, setPendingTxType] = useState('Credit Note');
   const [selectedTxType, setSelectedTxType] = useState('All Transaction');
   const [pendingStatusFilter, setPendingStatusFilter] = useState('All');
   const [selectedStatusFilter, setSelectedStatusFilter] = useState('All');
@@ -1462,9 +1463,8 @@ export const SalesReturnView: React.FC = () => {
               {/* Royal Purple Header with Standard Icons */}
               <CommonTableHead
                 columns={[
-                  { label: "#", align: "center", width: "48px" },
-                  { label: "CUSTOMER NAME", align: "left", minWidth: "160px" },
                   { label: "REF NO.", align: "center", minWidth: "100px" },
+                  { label: "CUSTOMER NAME", align: "left", minWidth: "160px" },
                   { label: "DATE", align: "left", minWidth: "110px" },
                   { label: "CATEGORY / ITEM", align: "left", minWidth: "140px" },
                   { label: "TYPE", align: "left", minWidth: "100px" },
@@ -1491,14 +1491,23 @@ export const SalesReturnView: React.FC = () => {
                       ? rowCustomerId.slice(0, 8).toUpperCase()
                       : '');
 
+                  const resolvedPhone =
+                    row.originalSale?.customerPhone ||
+                    customers.find(
+                      (c) =>
+                        (rowCustomerId && c.id === rowCustomerId) ||
+                        (c.name && row.partyName && c.name.trim().toLowerCase() === row.partyName.trim().toLowerCase())
+                    )?.phone ||
+                    '';
+
                   return (
                     <tr
                       key={row.id || idx}
                       className="hover:bg-purple-50/30 transition-colors border-b border-slate-200 group"
                     >
-                      {/* # */}
-                      <td className="py-3.5 px-3 text-center text-slate-400 font-bold border-r border-slate-200 align-middle">
-                        {(safePage - 1) * pageSize + idx + 1}
+                      {/* REF NO. */}
+                      <td className="py-3.5 px-3 text-center text-slate-800 font-bold border-r border-slate-200 whitespace-nowrap align-middle">
+                        {row.refNo || '-'}
                       </td>
 
                       {/* PARTY NAME */}
@@ -1511,11 +1520,11 @@ export const SalesReturnView: React.FC = () => {
                             </span>
                           )}
                         </div>
-                      </td>
-
-                      {/* REF NO. */}
-                      <td className="py-3.5 px-3 text-center text-slate-800 font-bold border-r border-slate-200 whitespace-nowrap align-middle">
-                        {row.refNo || '-'}
+                        {resolvedPhone && (
+                          <div>
+                            <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight"><Phone className="w-3 h-3 text-[#33077C] shrink-0" />{resolvedPhone}</span>
+                          </div>
+                        )}
                       </td>
 
                       {/* DATE */}
@@ -1593,6 +1602,7 @@ export const SalesReturnView: React.FC = () => {
                               {
                                 label: 'View/Edit',
                                 variant: 'edit',
+                                hidden: !row.originalReturn,
                                 onClick: () => handleOpenEdit(row),
                               },
                               {
@@ -1605,6 +1615,7 @@ export const SalesReturnView: React.FC = () => {
                               {
                                 label: 'Duplicate',
                                 variant: 'duplicate',
+                                hidden: !row.originalReturn,
                                 onClick: () => handleDuplicate(row),
                               },
                               {

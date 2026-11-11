@@ -159,12 +159,13 @@ export const SaleManagementDashboardView: React.FC = () => {
             month: m.label,
             Sales: Number(res?.data?.totalSales || 0),
             Purchases: Number(res?.data?.totalPurchases || 0),
+            Profit: Number(res?.data?.grossProfit || 0),
           }))
-          .catch(() => ({ month: m.label, Sales: 0, Purchases: 0 })),
+          .catch(() => ({ month: m.label, Sales: 0, Purchases: 0, Profit: 0 })),
       ),
     ).then((rows) => {
       if (cancelled) return;
-      setMonthlyComparisonData(rows.map((r) => ({ ...r, Profit: Math.max(0, r.Sales - r.Purchases) })));
+      setMonthlyComparisonData(rows);
     });
     return () => {
       cancelled = true;
@@ -338,15 +339,11 @@ export const SaleManagementDashboardView: React.FC = () => {
     };
   }, [modulesData]);
 
-  // A loss or negative margin is shown as 0, never as a negative figure
-  const displayGrossMarginPercent = Math.max(
-    0,
-    Number(modulesData?.saleReport?.grossMarginPercent ?? reportAnalytics.grossProfitMargin) || 0,
-  );
-  const displayGrossProfit = Math.max(
-    0,
-    Number(modulesData?.saleReport?.grossProfit ?? reportAnalytics.grossProfit) || 0,
-  );
+  // Shown exactly as the API reports them (a loss stays a loss)
+  const displayGrossMarginPercent =
+    Number(modulesData?.saleReport?.grossMarginPercent ?? reportAnalytics.grossProfitMargin) || 0;
+  const displayGrossProfit =
+    Number(modulesData?.saleReport?.grossProfit ?? reportAnalytics.grossProfit) || 0;
 
   const paymentStatusDistribution = [
     { name: 'Fully Paid', value: paymentStatusCounts.paid, color: '#10B981' },
@@ -411,7 +408,7 @@ export const SaleManagementDashboardView: React.FC = () => {
                 Sale Management Operations
               </span>
               <span className="text-xs text-purple-200/90 font-medium">
-                {currentUser?.organization?.name || 'Yaa Creations'}
+                {currentUser?.organization?.name || ''}
               </span>
               {(activeSubOrgName !== 'All' || activeBranchName !== 'All') && (
                 <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-white/15 text-purple-100 border border-white/20">
@@ -1173,9 +1170,9 @@ export const SaleManagementDashboardView: React.FC = () => {
 
       {/* 3. Deep Dive Visuals */}
       {(activeModuleTab === 'all' || activeModuleTab === 'sales_hub' || activeModuleTab === 'reports') && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
           {/* Main Visual: Monthly Sales vs Purchases Comparative Performance (8 cols) */}
-          <div className="lg:col-span-8 bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs">
+          <div className="xl:col-span-8 min-w-0 bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
               <div>
                 <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
@@ -1255,7 +1252,7 @@ export const SaleManagementDashboardView: React.FC = () => {
           </div>
 
           {/* Payment Status Breakdown Donut Chart (4 cols) */}
-          <div className="lg:col-span-4 bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col justify-between">
+          <div className="xl:col-span-4 min-w-0 bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
@@ -1318,9 +1315,9 @@ export const SaleManagementDashboardView: React.FC = () => {
 
       {/* 3b. Purchase Dedicated Visuals */}
       {activeModuleTab === 'purchase' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
           {/* Purchase Spend & Procurement Trend (8 cols) */}
-          <div className="lg:col-span-8 bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs">
+          <div className="xl:col-span-8 min-w-0 bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
               <div>
                 <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
@@ -1380,7 +1377,7 @@ export const SaleManagementDashboardView: React.FC = () => {
           </div>
 
           {/* Vendor Orders & Payables Quick Status (4 cols) */}
-          <div className="lg:col-span-4 bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col justify-between">
+          <div className="xl:col-span-4 min-w-0 bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
@@ -1450,7 +1447,7 @@ export const SaleManagementDashboardView: React.FC = () => {
       )}
 
       {/* 4. Row 3: Module Cards (Inventory, Sales Hub, Purchase, Sale Report) */}
-      <div className={activeModuleTab === 'all' ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5' : 'grid grid-cols-1 gap-5'}>
+      <div className={activeModuleTab === 'all' ? 'grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-4 gap-5' : 'grid grid-cols-1 gap-5'}>
         {/* Module 1: INVENTORY CARD */}
         {(activeModuleTab === 'all' || activeModuleTab === 'inventory') && (
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs p-5 flex flex-col justify-between hover:border-purple-300 transition-colors">
@@ -1464,30 +1461,30 @@ export const SaleManagementDashboardView: React.FC = () => {
                 </div>
                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 flex items-center gap-1">
                   {loadingModules && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
-                  {modulesData?.inventory?.sections ?? 4} Sections
+                  {modulesData?.inventory?.sections ?? 0} Sections
                 </span>
               </div>
 
               <div className="mt-4 space-y-2.5">
-                <div className="flex items-center justify-between text-xs">
+                <div className="flex items-start justify-between gap-3 text-xs">
                   <span className="text-slate-500">Categories & Sub:</span>
-                  <span className="font-bold text-slate-900">
+                  <span className="font-bold text-slate-900 text-right">
                     {modulesData?.inventory?.categories ?? 0} Categories
                     {modulesData?.inventory?.subcategories !== undefined && (
                       <span className="text-slate-400 font-normal"> • {modulesData.inventory.subcategories} Sub</span>
                     )}
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-xs">
+                <div className="flex items-start justify-between gap-3 text-xs">
                   <span className="text-slate-500">Stock Valuation:</span>
-                  <span className="font-bold text-slate-900">
+                  <span className="font-bold text-slate-900 text-right">
                     ₹
                     {(
                       modulesData?.inventory?.stockValuation ?? 0
                     ).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-xs">
+                <div className="flex items-start justify-between gap-3 text-xs">
                   <span className="text-slate-500">Low Stock Alert:</span>
                   <span
                     className={`font-bold ${
@@ -1502,28 +1499,28 @@ export const SaleManagementDashboardView: React.FC = () => {
               </div>
             </div>
 
-            <div className="mt-5 pt-3 border-t border-slate-100 grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+            <div className="mt-5 pt-3 border-t border-slate-100 grid grid-cols-2 gap-1.5">
               <button
                 onClick={() => navigate('/sale-management/inventory/category')}
-                className="px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600 hover:text-purple-700 hover:bg-purple-50 rounded-lg transition-colors cursor-pointer"
+                className="px-2 py-1.5 text-center text-[11px] leading-tight break-words font-semibold text-slate-600 hover:text-purple-700 hover:bg-purple-50 rounded-lg transition-colors cursor-pointer"
               >
                 Category
               </button>
               <button
                 onClick={() => navigate('/sale-management/inventory/subcategory')}
-                className="px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600 hover:text-purple-700 hover:bg-purple-50 rounded-lg transition-colors cursor-pointer"
+                className="px-2 py-1.5 text-center text-[11px] leading-tight break-words font-semibold text-slate-600 hover:text-purple-700 hover:bg-purple-50 rounded-lg transition-colors cursor-pointer"
               >
                 Subcategory
               </button>
               <button
                 onClick={() => navigate('/sale-management/inventory/products')}
-                className="px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600 hover:text-purple-700 hover:bg-purple-50 rounded-lg transition-colors cursor-pointer"
+                className="px-2 py-1.5 text-center text-[11px] leading-tight break-words font-semibold text-slate-600 hover:text-purple-700 hover:bg-purple-50 rounded-lg transition-colors cursor-pointer"
               >
                 Products
               </button>
               <button
                 onClick={() => navigate('/sale-management/inventory/stocks')}
-                className="px-2 py-1.5 text-center text-[11px] font-semibold text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors cursor-pointer font-bold"
+                className="px-2 py-1.5 text-center text-[11px] leading-tight break-words font-semibold text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors cursor-pointer font-bold"
               >
                 Stocks →
               </button>
@@ -1544,27 +1541,27 @@ export const SaleManagementDashboardView: React.FC = () => {
                 </div>
                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 flex items-center gap-1">
                   {loadingModules && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
-                  {modulesData?.purchase?.sections ?? 6} Sections
+                  {modulesData?.purchase?.sections ?? 0} Sections
                 </span>
               </div>
 
               <div className="mt-4 space-y-2.5">
-                <div className="flex items-center justify-between text-xs">
+                <div className="flex items-start justify-between gap-3 text-xs">
                   <span className="text-slate-500">Suppliers / Vendors:</span>
-                  <span className="font-bold text-slate-900">
+                  <span className="font-bold text-slate-900 text-right">
                     {modulesData?.purchase?.suppliers ?? 0} Vendors
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-xs">
+                <div className="flex items-start justify-between gap-3 text-xs">
                   <span className="text-slate-500">Purchase Requests:</span>
-                  <span className="font-bold text-slate-900">
+                  <span className="font-bold text-slate-900 text-right">
                     {modulesData?.purchase?.purchaseRequests?.pending ?? 0} Pending (
                     {modulesData?.purchase?.purchaseRequests?.approved ?? 0} Approved)
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-xs">
+                <div className="flex items-start justify-between gap-3 text-xs">
                   <span className="text-slate-500">Payment Out Settled:</span>
-                  <span className="font-bold text-slate-900">
+                  <span className="font-bold text-slate-900 text-right">
                     ₹
                     {(
                       modulesData?.purchase?.paymentOutSettled ?? 0
@@ -1577,28 +1574,28 @@ export const SaleManagementDashboardView: React.FC = () => {
               </div>
             </div>
 
-            <div className="mt-5 pt-3 border-t border-slate-100 grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+            <div className="mt-5 pt-3 border-t border-slate-100 grid grid-cols-2 gap-1.5">
               <button
                 onClick={() => navigate('/sale-management/purchase/supplier')}
-                className="px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                className="px-2 py-1.5 text-center text-[11px] leading-tight break-words font-semibold text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
               >
                 Suppliers
               </button>
               <button
                 onClick={() => navigate('/sale-management/purchase/request')}
-                className="px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                className="px-2 py-1.5 text-center text-[11px] leading-tight break-words font-semibold text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
               >
                 Requests
               </button>
               <button
                 onClick={() => navigate('/sale-management/purchase/payment-out')}
-                className="px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                className="px-2 py-1.5 text-center text-[11px] leading-tight break-words font-semibold text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
               >
                 Payment Out
               </button>
               <button
                 onClick={() => navigate('/sale-management/purchase/purchase')}
-                className="px-2 py-1.5 text-center text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors cursor-pointer font-bold"
+                className="px-2 py-1.5 text-center text-[11px] leading-tight break-words font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors cursor-pointer font-bold"
               >
                 Purchase Bills →
               </button>
@@ -1619,27 +1616,27 @@ export const SaleManagementDashboardView: React.FC = () => {
                 </div>
                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 flex items-center gap-1">
                   {loadingModules && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
-                  {modulesData?.salesHub?.sections ?? 10} Sections
+                  {modulesData?.salesHub?.sections ?? 0} Sections
                 </span>
               </div>
 
               <div className="mt-4 space-y-2.5">
-                <div className="flex items-center justify-between text-xs">
+                <div className="flex items-start justify-between gap-3 text-xs">
                   <span className="text-slate-500">Active Customers:</span>
-                  <span className="font-bold text-slate-900">
+                  <span className="font-bold text-slate-900 text-right">
                     {modulesData?.salesHub?.activeCustomers ?? 0} Accounts
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-xs">
+                <div className="flex items-start justify-between gap-3 text-xs">
                   <span className="text-slate-500">Estimates / Quotes:</span>
-                  <span className="font-bold text-slate-900">
+                  <span className="font-bold text-slate-900 text-right">
                     {modulesData?.salesHub?.quotations?.open ?? 0} Open (
                     {modulesData?.salesHub?.quotations?.converted ?? 0} Converted)
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-xs">
+                <div className="flex items-start justify-between gap-3 text-xs">
                   <span className="text-slate-500">Sales Representatives:</span>
-                  <span className="font-bold text-slate-900">
+                  <span className="font-bold text-slate-900 text-right">
                     {modulesData?.salesHub?.salesRepresentatives?.active ?? 0} Active
                     {modulesData?.salesHub?.salesRepresentatives?.assigned !== undefined && (
                       <span className="text-slate-400 font-normal">
@@ -1652,28 +1649,28 @@ export const SaleManagementDashboardView: React.FC = () => {
               </div>
             </div>
 
-            <div className="mt-5 pt-3 border-t border-slate-100 grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+            <div className="mt-5 pt-3 border-t border-slate-100 grid grid-cols-2 gap-1.5">
               <button
                 onClick={() => navigate('/sale-management/sales/customer')}
-                className="px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
+                className="px-2 py-1.5 text-center text-[11px] leading-tight break-words font-semibold text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
               >
                 Customers
               </button>
               <button
                 onClick={() => navigate('/sale-management/sales/quotation')}
-                className="px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
+                className="px-2 py-1.5 text-center text-[11px] leading-tight break-words font-semibold text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
               >
                 Quotes
               </button>
               <button
                 onClick={() => navigate('/sale-management/sales/payment-in')}
-                className="px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
+                className="px-2 py-1.5 text-center text-[11px] leading-tight break-words font-semibold text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
               >
                 Payment-In
               </button>
               <button
                 onClick={() => navigate('/sale-management/sales/sale')}
-                className="px-2 py-1.5 text-center text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors cursor-pointer font-bold"
+                className="px-2 py-1.5 text-center text-[11px] leading-tight break-words font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors cursor-pointer font-bold"
               >
                 Sales Invoice →
               </button>
@@ -1699,23 +1696,23 @@ export const SaleManagementDashboardView: React.FC = () => {
               </div>
 
               <div className="mt-4 space-y-2.5">
-                <div className="flex items-center justify-between text-xs">
+                <div className="flex items-start justify-between gap-3 text-xs">
                   <span className="text-slate-500">Gross Margin:</span>
                   <span className="font-bold text-emerald-600">
                     {displayGrossMarginPercent}
                     % Profit
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-xs">
+                <div className="flex items-start justify-between gap-3 text-xs">
                   <span className="text-slate-500">Gross Profit (₹):</span>
-                  <span className="font-bold text-slate-900">
+                  <span className="font-bold text-slate-900 text-right">
                     ₹
                     {displayGrossProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-xs">
+                <div className="flex items-start justify-between gap-3 text-xs">
                   <span className="text-slate-500">Net Sales:</span>
-                  <span className="font-bold text-slate-900">
+                  <span className="font-bold text-slate-900 text-right">
                     ₹
                     {(
                       modulesData?.saleReport?.netSales ?? 0
@@ -1740,10 +1737,10 @@ export const SaleManagementDashboardView: React.FC = () => {
 
       {/* 5. Row 4: Inventory Low-Stock Alerts & Top Products Breakdown */}
       {(activeModuleTab === 'all' || activeModuleTab === 'inventory' || activeModuleTab === 'sales_hub') && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
           {/* Low Stock Watchlist (6 Cols) - Shown for All and Inventory */}
           {(activeModuleTab === 'all' || activeModuleTab === 'inventory') && (
-            <div className="lg:col-span-6 bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs">
+            <div className="xl:col-span-6 min-w-0 bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs">
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
@@ -1817,7 +1814,7 @@ export const SaleManagementDashboardView: React.FC = () => {
           )}
 
           {/* Top Selling Products / Category Distribution (6 Cols or 12 Cols for Sales Hub) */}
-          <div className={`${activeModuleTab === 'sales_hub' ? 'lg:col-span-12' : 'lg:col-span-6'} bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs`}>
+          <div className={`${activeModuleTab === 'sales_hub' ? 'xl:col-span-12' : 'xl:col-span-6'} bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs`}>
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">

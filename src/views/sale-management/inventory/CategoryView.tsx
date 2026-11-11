@@ -587,7 +587,6 @@ export const CategoryView: React.FC = () => {
           <table className="w-full text-left border-collapse border border-slate-200">
             <CommonTableHead
               columns={[
-                { label: "S.NO", align: "center", width: "60px" },
                 { label: "CATEGORY NAME", align: "left", minWidth: "200px" },
                 { label: "STATUS", align: "center", width: "120px" },
                 { label: "ACTIONS", align: "center", width: "90px" },
@@ -596,7 +595,7 @@ export const CategoryView: React.FC = () => {
             <tbody className="text-sm">
               {isLoading ? (
                 <tr>
-                  <td colSpan={4} className="py-16 text-center text-slate-500 border border-slate-200">
+                  <td colSpan={3} className="py-16 text-center text-slate-500 border border-slate-200">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <Loader2 className="w-6 h-6 animate-spin text-[#33077C]" />
                       <span className="text-xs font-medium">Fetching categories from Commerce API...</span>
@@ -605,13 +604,12 @@ export const CategoryView: React.FC = () => {
                 </tr>
               ) : pagedCategories.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={3} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     No categories found matching your criteria.
                   </td>
                 </tr>
               ) : (
                 pagedCategories.map((item, index) => {
-                  const sNo = (safePage - 1) * pageSize + index + 1;
                   const isDropdownOpen = activeDropdownId === item.id;
 
                   return (
@@ -619,11 +617,6 @@ export const CategoryView: React.FC = () => {
                       key={item.id}
                       className="hover:bg-slate-50/80 transition-colors"
                     >
-                      {/* S.NO */}
-                      <td className="py-3.5 sm:py-4 px-2 sm:px-3 text-center font-bold text-slate-800 text-xs sm:text-sm border border-slate-200">
-                        {sNo}
-                      </td>
-
                       {/* CATEGORY NAME */}
                       <td className="py-3.5 sm:py-4 px-3 sm:px-5 border border-slate-200">
                         <div className="flex items-center gap-2">

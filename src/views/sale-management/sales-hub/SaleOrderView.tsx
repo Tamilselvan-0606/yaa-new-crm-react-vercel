@@ -109,6 +109,7 @@ import {
 import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
 import {
   getConversionState,
+  resolveDocumentConvertedAt,
   resolveConvertedTarget,
 } from "../../../utils/salesDocumentWorkflow";
 import {
@@ -488,7 +489,7 @@ export interface SaleOrderTabItem {
     customerCompany: string;
     billingAddress: string;
     orderNo: string;
-    saleOrderManualNo: string;
+    salesOrderManualNo: string;
     referenceNo: string;
     orderDate: string;
     dueDate: string;
@@ -1229,7 +1230,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       customerCompany: "",
       billingAddress: "",
       orderNo: defaultNo, // Preview only; server-assigned on save
-      saleOrderManualNo: "",
+      salesOrderManualNo: "",
       referenceNo: "",
       orderDate: new Date().toISOString().split("T")[0],
       dueDate: new Date(Date.now() + 14 * 86400000).toISOString().split("T")[0],
@@ -1390,7 +1391,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         customerCompany: order.customerCompany || "",
         billingAddress: order.billingAddress || "",
         orderNo: order.orderNo,
-        saleOrderManualNo: order.saleOrderManualNo || "",
+        salesOrderManualNo: order.salesOrderManualNo || "",
         referenceNo: order.referenceNo || "1",
         orderDate: order.orderDate,
         dueDate: order.dueDate,
@@ -1679,10 +1680,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
         const orderPayloadRecord = {
           orderNo: form.orderNo,
-          saleOrderManualNo: form.saleOrderManualNo,
+          salesOrderManualNo: form.salesOrderManualNo,
           referenceNo: form.referenceNo,
           orderDate: form.orderDate,
-          dueDate: form.dueDate,
           customerId: resolvedCustomerId,
           partyName: form.partyName,
           customerPhone: form.customerPhone,
@@ -1690,12 +1690,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           customerCompany: form.customerCompany,
           billingAddress: form.billingAddress,
           stateOfSupply: form.stateOfSupply,
-          paymentType: form.paymentType,
           items: resolvedItems,
           withGst: currentCalculations.totalTax > 0,
-          gstType: form.stateOfSupply?.includes("Tamil Nadu")
-            ? ("intra_state" as const)
-            : ("inter_state" as const),
           roundOff: currentCalculations.roundOff,
           notes: form.notes,
           terms: form.terms,
@@ -2154,7 +2150,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         customerCompany: item.customerCompany || "",
         billingAddress: item.billingAddress || "",
         orderNo: "",
-        saleOrderManualNo: "",
+        salesOrderManualNo: "",
         referenceNo: "",
         orderDate: new Date().toISOString().split("T")[0],
         dueDate: new Date(Date.now() + 14 * 86400000)
@@ -2919,11 +2915,11 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                   </span>
                   <input
                     type="text"
-                    value={activeTab.formData.saleOrderManualNo || ""}
+                    value={activeTab.formData.salesOrderManualNo || ""}
                     onChange={(e) =>
                       updateActiveTabFormData((prev) => ({
                         ...prev,
-                        saleOrderManualNo: e.target.value,
+                        salesOrderManualNo: e.target.value,
                       }))
                     }
                     placeholder="Enter Sale Order No"
@@ -2976,7 +2972,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                   >
                     {STATE_OPTIONS.map((st) => (
                       <option key={st} value={st}>
-                        {st}
+                        {st.replace(/^[0-9]+-/, "")}
                       </option>
                     ))}
                   </select>
@@ -4161,7 +4157,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
     const excelRows = filteredOrders.map((o) => {
       const createdDt = formatDateTime(o.createdAt);
-      const convertedAt = (o as any).convertedAt || null;
+      const convertedAt = resolveDocumentConvertedAt("Order", o as any);
       const convertedDt = formatDateTime(convertedAt);
       return {
         date: isoToDdmmyyyy(o.orderDate),
@@ -4237,7 +4233,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
     const printRows = filteredOrders.map((o) => {
       const createdDt = formatDateTime(o.createdAt);
-      const convertedAt = (o as any).convertedAt || null;
+      const convertedAt = resolveDocumentConvertedAt("Order", o as any);
       const convertedDt = formatDateTime(convertedAt);
       return {
         orderNo: o.orderNo,
@@ -4630,7 +4626,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                     const isConvertOpen = activeConvertDropdownId === item.id;
                     const isActionOpen = activeDropdownId === item.id;
                     const createdDt = formatDateTime(item.createdAt);
-                    const convertedAt = (item as any).convertedAt || null;
+                    const convertedAt = resolveDocumentConvertedAt("Order", item as any);
                     const convertedDt = formatDateTime(convertedAt);
                     const resolvedCustomerCode =
                       (item as any).customerCode ||
@@ -4682,8 +4678,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                             )}
                           </div>
                           {item.customerPhone && (
-                            <div className="text-[11px] text-slate-400 font-normal">
-                              {item.customerPhone}
+                            <div>
+                              <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight"><Phone className="w-3 h-3 text-[#33077C] shrink-0" />{item.customerPhone}</span>
                             </div>
                           )}
                         </td>

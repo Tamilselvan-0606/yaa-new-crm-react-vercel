@@ -54,7 +54,7 @@ export interface ApiSaleOrder {
   deletedAt?: string | null;
   customer?: ApiSaleOrderCustomer | null;
   orderNo: string;
-  saleOrderManualNo?: string | null;
+  salesOrderManualNo?: string | null;
   referenceNo?: string | null;
   orderDate: string;
   dueDate: string;
@@ -206,7 +206,7 @@ export interface CreateSaleOrderItemPayload {
  */
 export interface CreateSaleOrderPayload {
   orderNo?: string;
-  saleOrderManualNo?: string;
+  salesOrderManualNo?: string;
   referenceNo?: string;
   orderDate?: string;
   dueDate?: string;

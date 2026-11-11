@@ -120,6 +120,7 @@ import {
 import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
 import {
   getConversionState,
+  resolveDocumentConvertedAt,
   resolveConvertedTarget,
 } from "../../../utils/salesDocumentWorkflow";
 import {
@@ -619,6 +620,15 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     right: number;
   } | null>(null);
 
+  // Convert dropdown (Convert ⌄ -> Convert to Sale Invoice)
+  const [activeConvertDropdownId, setActiveConvertDropdownId] = useState<
+    string | null
+  >(null);
+  const [convertDropdownPos, setConvertDropdownPos] = useState<{
+    top: number;
+    right: number;
+  } | null>(null);
+
   // Bulk Convert Modal State
   const [isBulkConvertModalOpen, setIsBulkConvertModalOpen] = useState(false);
   const [selectedBulkChallanIds, setSelectedBulkChallanIds] = useState<
@@ -816,12 +826,21 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         setActiveDropdownId(null);
         setDropdownPos(null);
       }
+      if (
+        !target.closest(".challan-convert-dropdown-container") &&
+        !target.closest(".challan-convert-dropdown-menu")
+      ) {
+        setActiveConvertDropdownId(null);
+        setConvertDropdownPos(null);
+      }
     };
     const handleScroll = () => {
       if (activeDropdownId) {
         setActiveDropdownId(null);
         setDropdownPos(null);
       }
+      setActiveConvertDropdownId(null);
+      setConvertDropdownPos(null);
     };
     window.addEventListener("mousedown", handleOutsideClick);
     window.addEventListener("scroll", handleScroll, true);
@@ -1717,20 +1736,16 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           deliveryChallanManualNo: form.deliveryChallanManualNo,
           referenceNo: form.referenceNo,
           invoiceDate: form.invoiceDate,
-          dueDate: form.dueDate,
           customerId: resolvedCustomerId,
           partyName: form.partyName,
           customerPhone: form.customerPhone,
           customerEmail: form.customerEmail,
           customerCompany: form.customerCompany,
           billingAddress: form.billingAddress,
-          shippingAddress: form.shippingAddress || form.billingAddress,
+          shippingAddress: form.shippingAddress,
           stateOfSupply: form.stateOfSupply,
           items: resolvedItems,
           withGst: currentCalculations.totalTax > 0,
-          gstType: form.stateOfSupply?.includes("Tamil Nadu")
-            ? ("intra_state" as const)
-            : ("inter_state" as const),
           roundOff: currentCalculations.roundOff,
           vehicleNo: form.vehicleNo,
           driverName: form.driverName,
@@ -2270,7 +2285,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
     const excelRows = challans.map((c) => {
       const createdDt = formatDateTime(c.createdAt);
-      const convertedAt = (c as any).convertedAt || null;
+      const convertedAt = resolveDocumentConvertedAt("Challan", c as any);
       const convertedDt = formatDateTime(convertedAt);
       return {
         date: isoToDdmmyyyy(c.invoiceDate),
@@ -2350,7 +2365,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
     const printRows = challans.map((c) => {
       const createdDt = formatDateTime(c.createdAt);
-      const convertedAt = (c as any).convertedAt || null;
+      const convertedAt = resolveDocumentConvertedAt("Challan", c as any);
       const convertedDt = formatDateTime(convertedAt);
       return {
         challanNo: c.challanNo,
@@ -2549,9 +2564,9 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   // =========================================================================
   if (viewMode === "form") {
     return (
-      <div className="min-h-screen bg-slate-50/50 flex flex-col font-sans -m-4 sm:-m-6 lg:-m-8">
+      <div className="min-h-screen bg-slate-50/70 pb-20 -m-3 sm:-m-6 p-3 sm:p-6 flex flex-col font-sans animate-in fade-in duration-150">
         {/* 1. TOP TABS BAR (CRM THEME) */}
-        <div className="bg-slate-100 px-4 pt-3 pb-0 flex items-center justify-between border-b border-slate-200">
+        <div className="flex items-center justify-between border-b border-slate-200/90 pb-2 mb-4">
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
             {tabs.map((tab) => {
               const isActive = tab.id === activeTabId;
@@ -2753,8 +2768,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                 </div>
 
                 {/* Challan No (manual entry) */}
-                <div className="flex items-center justify-end gap-3">
-                  <label className="text-xs font-bold text-slate-600 w-28 text-right">
+                <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
+                  <label className="font-medium text-slate-600 w-24 sm:w-auto text-right">
                     Challan No
                   </label>
                   <input
@@ -2767,13 +2782,13 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                       }))
                     }
                     placeholder="Enter Challan No"
-                    className="w-40 sm:w-48 h-9 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors"
+                    className="w-40 sm:w-48 h-9 px-3 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors"
                   />
                 </div>
 
                 {/* Challan Date */}
-                <div className="flex items-center justify-end gap-3">
-                  <label className="text-xs font-bold text-slate-600 w-28 text-right">
+                <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
+                  <label className="font-medium text-slate-600 w-24 sm:w-auto text-right">
                     Challan Date
                   </label>
                   <input
@@ -2788,7 +2803,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                         invoiceDate: e.target.value,
                       }));
                     }}
-                    className={`w-40 sm:w-48 h-9 px-2.5 bg-white border hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors ${fe.errors.invoiceDate ? "border-rose-400" : "border-slate-200"}`}
+                    className={`w-40 sm:w-48 h-9 px-3 bg-white border hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors ${fe.errors.invoiceDate ? "border-rose-400" : "border-slate-200"}`}
                   />
                 </div>
                 {(fe.errors.invoiceDate || fe.errors.dueDate) && (
@@ -2798,8 +2813,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                 )}
 
                 {/* State of supply */}
-                <div className="flex items-center justify-end gap-3">
-                  <label className="text-xs font-bold text-slate-600 w-28 text-right">
+                <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
+                  <label className="font-medium text-slate-600 w-24 sm:w-auto text-right">
                     State of supply
                   </label>
                   <select
@@ -2810,11 +2825,11 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                         stateOfSupply: e.target.value,
                       }))
                     }
-                    className="w-40 sm:w-48 h-9 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none cursor-pointer transition-colors"
+                    className="w-40 sm:w-48 h-9 px-3 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none cursor-pointer transition-colors"
                   >
                     {STATE_OPTIONS.map((st) => (
                       <option key={st} value={st}>
-                        {st}
+                        {st.replace(/^[0-9]+-/, "")}
                       </option>
                     ))}
                   </select>
@@ -4341,7 +4356,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                   const challanStages = getChallanStages(item);
                   const isActionOpen = activeDropdownId === item.id;
                   const createdDt = formatDateTime(item.createdAt);
-                  const convertedAt = (item as any).convertedAt || null;
+                  const convertedAt = resolveDocumentConvertedAt("Challan", item as any);
                   const convertedDt = formatDateTime(convertedAt);
                   const resolvedCustomerCode =
                     (item as any).customerCode ||
@@ -4391,8 +4406,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                           )}
                         </div>
                         {item.customerPhone && (
-                          <div className="text-[11px] text-slate-400 font-normal">
-                            {item.customerPhone}
+                          <div>
+                            <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight"><Phone className="w-3 h-3 text-[#33077C] shrink-0" />{item.customerPhone}</span>
                           </div>
                         )}
                       </td>
@@ -4488,20 +4503,63 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                                 <span>Converted</span>
                               </button>
                             ) : (
-                              <button
-                                type="button"
-                                disabled={
-                                  item.status === "Cancelled" || isActionLoading
-                                }
-                                onClick={() =>
-                                  handleConvertExistingToSale(item)
-                                }
-                                className="text-xs sm:text-[13px] font-semibold text-[#2563EB] hover:text-[#1D4ED8] bg-transparent hover:bg-blue-50/60 flex items-center justify-center gap-1 px-1.5 py-1 rounded transition-colors cursor-pointer select-none disabled:opacity-40"
-                                title="Convert to Sale Invoice"
-                              >
-                                <span>Convert</span>
-                                <ChevronDown className="w-3.5 h-3.5 stroke-[2.5]" />
-                              </button>
+                              <div className="relative inline-block text-left challan-convert-dropdown-container">
+                                <button
+                                  type="button"
+                                  disabled={
+                                    item.status === "Cancelled" || isActionLoading
+                                  }
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (activeConvertDropdownId === item.id) {
+                                      setActiveConvertDropdownId(null);
+                                      setConvertDropdownPos(null);
+                                    } else {
+                                      const rect =
+                                        e.currentTarget.getBoundingClientRect();
+                                      setConvertDropdownPos({
+                                        top: rect.bottom + 4,
+                                        right: window.innerWidth - rect.right,
+                                      });
+                                      setActiveConvertDropdownId(item.id);
+                                      setActiveDropdownId(null);
+                                      setDropdownPos(null);
+                                    }
+                                  }}
+                                  className="text-xs sm:text-[13px] font-semibold text-[#2563EB] hover:text-[#1D4ED8] bg-transparent hover:bg-blue-50/60 flex items-center justify-center gap-1 px-1.5 py-1 rounded transition-colors cursor-pointer select-none disabled:opacity-40"
+                                  title="Convert to next sales stage"
+                                >
+                                  <span>Convert</span>
+                                  <ChevronDown className="w-3.5 h-3.5 stroke-[2.5]" />
+                                </button>
+
+                                {activeConvertDropdownId === item.id &&
+                                  convertDropdownPos && (
+                                    <div
+                                      style={{
+                                        position: "fixed",
+                                        top: `${convertDropdownPos.top}px`,
+                                        right: `${convertDropdownPos.right}px`,
+                                        zIndex: 9999,
+                                      }}
+                                      className="challan-convert-dropdown-menu w-56 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setActiveConvertDropdownId(null);
+                                          setConvertDropdownPos(null);
+                                          handleConvertExistingToSale(item);
+                                        }}
+                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2.5"
+                                      >
+                                        <ShoppingCart className="w-3.5 h-3.5 text-slate-500" />
+                                        <span>Convert to Sale Invoice</span>
+                                      </button>
+                                    </div>
+                                  )}
+                              </div>
                             )}
                           </div>
 

@@ -805,6 +805,7 @@ export const PurchaseOrderView: React.FC = () => {
   const [formData, setFormData] = useState<{
     purchaseNo: string;
     purchaseInvoiceNo: string;
+    purchaseBillManualNo: string;
     supplierId: string;
     supplierName: string;
     purchaseDate: string;
@@ -823,6 +824,7 @@ export const PurchaseOrderView: React.FC = () => {
   }>({
     purchaseNo: "",
     purchaseInvoiceNo: "",
+    purchaseBillManualNo: "",
     supplierId: "",
     supplierName: "",
     purchaseDate: new Date().toISOString().split("T")[0],
@@ -1486,6 +1488,7 @@ export const PurchaseOrderView: React.FC = () => {
     setFormData({
       purchaseNo: nextPoNo,
       purchaseInvoiceNo: "",
+      purchaseBillManualNo: "",
       supplierId: "",
       supplierName: "",
       purchaseDate: new Date().toISOString().split("T")[0],
@@ -1559,6 +1562,7 @@ export const PurchaseOrderView: React.FC = () => {
     setFormData({
       purchaseNo: po.purchaseNo,
       purchaseInvoiceNo: po.purchaseInvoiceNo || "",
+      purchaseBillManualNo: po.purchaseBillManualNo || "",
       supplierId: po.supplierId,
       supplierName: po.supplierName,
       purchaseDate: po.purchaseDate,
@@ -1590,6 +1594,7 @@ export const PurchaseOrderView: React.FC = () => {
       purchaseInvoiceNo: po.purchaseInvoiceNo
         ? `${po.purchaseInvoiceNo}-COPY`
         : "",
+      purchaseBillManualNo: "",
       supplierId: po.supplierId,
       supplierName: po.supplierName,
       purchaseDate: new Date().toISOString().split("T")[0],
@@ -2188,12 +2193,6 @@ export const PurchaseOrderView: React.FC = () => {
         value: b.batchNo,
         label: b.batchNo + (b.expDate ? ` (Exp: ${b.expDate})` : ""),
       }));
-
-      // Option to type custom batch
-      options.push({
-        value: "__enter_custom_batch__",
-        label: "+ Enter Custom Batch...",
-      });
 
       return options;
     },
@@ -2871,6 +2870,7 @@ export const PurchaseOrderView: React.FC = () => {
         // UPDATE existing purchase order via Work API
         const payload = mapUiToUpdatePurchaseOrderPayload(
           {
+            purchaseBillManualNo: formData.purchaseBillManualNo,
             dueDate: formData.dueDate,
             expectedDeliveryDate: formData.dueDate,
             discount: calculatedTotals.discount,
@@ -2979,6 +2979,7 @@ export const PurchaseOrderView: React.FC = () => {
         const payload = mapUiToCreatePurchaseOrderPayload(
           {
             supplierId: targetSupplierId,
+            purchaseBillManualNo: formData.purchaseBillManualNo,
             dueDate: formData.dueDate,
             expectedDeliveryDate: formData.dueDate,
             discount: calculatedTotals.discount,
@@ -3906,16 +3907,17 @@ export const PurchaseOrderView: React.FC = () => {
                 </div>
 
                 <div>
-                  <FormLabel>Supplier Bill / Invoice #</FormLabel>
+                  <FormLabel>Purchase Bill No</FormLabel>
                   <input
                     type="text"
-                    value={formData.purchaseInvoiceNo}
+                    value={formData.purchaseBillManualNo}
                     onChange={(e) =>
                       setFormData((prev) => ({
                         ...prev,
-                        purchaseInvoiceNo: e.target.value,
+                        purchaseBillManualNo: e.target.value,
                       }))
                     }
+                    placeholder="Enter Purchase Bill No"
                     className={FORM_INPUT_CLS}
                   />
                 </div>
@@ -6195,7 +6197,7 @@ export const PurchaseOrderView: React.FC = () => {
                   columns={[
                     {
                       label: "PURCHASE NO & DATE",
-                      align: "left",
+                      align: "center",
                       minWidth: "160px",
                     },
                     { label: "SUPPLIER", align: "left", minWidth: "180px" },
@@ -6256,15 +6258,12 @@ export const PurchaseOrderView: React.FC = () => {
                           className="hover:bg-slate-50/80 transition-colors border-b border-slate-200 font-sans"
                         >
                           {/* 1. Purchase No & Date */}
-                          <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
-                            <div className="flex items-center gap-3">
-                              <div className="w-10 h-10 rounded-full bg-[#33077C] text-white flex items-center justify-center font-bold text-xs tracking-wider shadow-xs shrink-0 select-none">
-                                PO
-                              </div>
-                              <div>
+                          <td className="py-3.5 px-3 font-bold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                            <div className="flex flex-col items-center justify-center gap-1">
+                              <div className="flex flex-col items-center">
                                 <span
                                   onClick={() => handleOpenViewModal(po)}
-                                  className="font-bold text-[#33077C] hover:underline cursor-pointer block text-sm leading-snug"
+                                  className="cursor-pointer hover:underline"
                                 >
                                   {po.purchaseNo}
                                 </span>

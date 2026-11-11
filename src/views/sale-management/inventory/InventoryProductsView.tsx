@@ -171,7 +171,7 @@ export const defaultProductFormValues: ProductFormValues = {
   taxRate: "None",
   openingStock: "",
   atPrice: "",
-  asOfDate: new Date().toISOString().split("T")[0],
+  asOfDate: "",
   minStockAlert: "",
   location: "",
   isBatchTracking: false,
@@ -1759,7 +1759,7 @@ export const InventoryProductsView: React.FC = () => {
       taxRate: prod.taxRate || "None",
       openingStock: prod.openingStock || "",
       atPrice: initialAtPrice,
-      asOfDate: prod.asOfDate || new Date().toISOString().split("T")[0],
+      asOfDate: prod.asOfDate || "",
       minStockAlert: prod.minStockAlert || "",
       location: prod.location || "",
       isBatchTracking:
@@ -2132,8 +2132,8 @@ export const InventoryProductsView: React.FC = () => {
       // Existing products keep their code; a new product gets one from the server.
       const finalCode = (data.productCode || "").trim();
       const finalStatus = (
-        editingProduct ? editingProduct.status : "Active"
-      ) as "Active" | "Inactive";
+        editingProduct ? editingProduct.status : undefined
+      ) as "Active" | "Inactive" | undefined;
 
       const imageBase64Data = (
         itemImageState ||
@@ -2718,7 +2718,7 @@ export const InventoryProductsView: React.FC = () => {
           category:
             item.category && item.category !== "---"
               ? item.category.trim()
-              : original.category || "General",
+              : original.category || "",
           hsnCode:
             item.hsnCode && item.hsnCode !== "---" ? item.hsnCode.trim() : "",
         });
@@ -2731,7 +2731,7 @@ export const InventoryProductsView: React.FC = () => {
           category:
             item.category && item.category !== "---"
               ? item.category.trim()
-              : original.category || "General",
+              : original.category || "",
           purchasePrice: Number(item.purchasePrice) || 0,
           purchasePriceTaxType: item.purchasePriceTaxType || "Excluded",
           salePrice: Number(item.salePrice) || 0,
@@ -2747,9 +2747,7 @@ export const InventoryProductsView: React.FC = () => {
           id: item.id,
           openingStock: Number(item.openingStock) || 0,
           atPrice: Number(item.atPrice) || 0,
-          asOfDate: item.asOfDate
-            ? item.asOfDate.split("T")[0]
-            : new Date().toISOString().split("T")[0],
+          asOfDate: (item.asOfDate || original.asOfDate || "").split("T")[0],
           minStockAlert: Number(item.minStockAlert) || 0,
           location: item.location?.trim() || "",
         });
@@ -3509,7 +3507,6 @@ export const InventoryProductsView: React.FC = () => {
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[980px]">
             <CommonTableHead
               columns={[
-                { label: "S.NO", align: "center", width: "48px" },
                 { label: "ITEM CODE", align: "left", minWidth: "120px" },
                 { label: "ITEM NAME", align: "left", minWidth: "160px" },
                 { label: "CATEGORY", align: "left", minWidth: "140px" },
@@ -3525,7 +3522,7 @@ export const InventoryProductsView: React.FC = () => {
               {isLoading ? (
                 <tr>
                   <td
-                    colSpan={10}
+                    colSpan={9}
                     className="py-16 text-center text-slate-400 font-medium"
                   >
                     <div className="flex flex-col items-center justify-center gap-2">
@@ -3539,7 +3536,7 @@ export const InventoryProductsView: React.FC = () => {
               ) : pagedProducts.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={10}
+                    colSpan={9}
                     className="py-12 text-center text-slate-400 font-medium"
                   >
                     <div className="flex flex-col items-center justify-center gap-1.5">
@@ -3560,7 +3557,6 @@ export const InventoryProductsView: React.FC = () => {
                 </tr>
               ) : (
                 pagedProducts.map((item, index) => {
-                  const sNo = (safePage - 1) * pageSize + index + 1;
                   const isDropdownOpen = activeDropdownId === item.id;
                   const hasLiveStock =
                     item.currentStock !== undefined ||
@@ -3583,11 +3579,6 @@ export const InventoryProductsView: React.FC = () => {
                         isSelected ? "bg-purple-50/50" : ""
                       }`}
                     >
-                      {/* S.NO */}
-                      <td className="py-4 px-3 font-semibold text-slate-600 text-center border-r border-slate-200">
-                        {sNo}
-                      </td>
-
                       {/* ITEM CODE */}
                       <td className="py-4 px-5 font-semibold text-slate-800 border-r border-slate-200 whitespace-nowrap">
                         <div className="flex items-center gap-1.5">

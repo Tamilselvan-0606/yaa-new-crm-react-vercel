@@ -24,6 +24,7 @@ export interface ApiPurchaseOrder {
   subOrganizationId?: string | null;
   branchId?: string | null;
   poNo: string;
+  purchaseBillManualNo?: string | null;
   supplierId: string;
   orderDate?: string;
   expectedDeliveryDate?: string | null;
@@ -97,6 +98,7 @@ export interface CreatePurchaseOrderItemPayload {
 }
 
 export interface CreatePurchaseOrderPayload {
+  purchaseBillManualNo?: string;
   supplierId: string;
   expectedDeliveryDate?: string;
   discountAmount?: number;
@@ -106,6 +108,7 @@ export interface CreatePurchaseOrderPayload {
 }
 
 export interface UpdatePurchaseOrderPayload {
+  purchaseBillManualNo?: string;
   expectedDeliveryDate?: string;
   discountAmount?: number;
   notes?: string;

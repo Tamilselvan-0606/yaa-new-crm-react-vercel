@@ -34,6 +34,7 @@ export interface InvoicePaymentApiItem {
 
 export interface InvoiceApiItem {
   referenceNumber?: string | null;
+  invoiceManualNumber?: string | null;
   id: string;
   invoiceNumber: string;
   invoiceDate: string;
@@ -174,6 +175,7 @@ export interface CreateInvoiceItemPayload {
 
 export interface CreateInvoiceRequest {
   invoiceNumber?: string;
+  invoiceManualNumber?: string;
   /** Shown as the created date; defaults to now on the server. */
   createdDate?: string;
   /** Proforma invoice this invoice is created from; the server marks it Converted. */
@@ -197,6 +199,7 @@ export interface CreateInvoiceRequest {
 }
 
 export interface UpdateInvoiceRequest {
+  invoiceManualNumber?: string;
   createdDate?: string;
   dueDate?: string;
   notes?: string;

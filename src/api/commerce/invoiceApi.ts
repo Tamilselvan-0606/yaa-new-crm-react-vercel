@@ -152,7 +152,7 @@ export const mapApiInvoiceToSaleTransaction = (apiInv: ApiSalesInvoice): SaleTra
   return {
     id: apiInv.id,
     invoiceNo: apiInv.invoiceNo || '',
-    saleInvoiceManualNo: apiInv.saleInvoiceManualNo || '',
+    salesInvoiceManualNo: apiInv.salesInvoiceManualNo || '',
     invoiceStatus: normalizedInvoiceStatus,
     referenceNo: apiInv.referenceNo || undefined,
     saleDate: saleDateStr,
@@ -191,7 +191,7 @@ export const mapApiInvoiceToSaleTransaction = (apiInv: ApiSalesInvoice): SaleTra
     salesRepresentativeName: (apiInv as any).salesRepresentativeName || (apiInv as any).salesRepresentative || apiInv.salesperson || undefined,
     salesRepresentativeId: (apiInv as any).salesRepresentativeId || undefined,
     notes: apiInv.notes || undefined,
-    convertedAt: (apiInv as any).convertedAt || (apiInv as any).convertedDate || (apiInv as any).converted_at || undefined,
+    convertedAt: (apiInv as any).convertedAt || (apiInv as any).convertedDate || (apiInv as any).converted_at || (apiInv.sourceType || apiInv.sourceId ? ((apiInv as any).createdAt || undefined) : undefined),
     createdAt: apiInv.createdAt || new Date().toISOString(),
     updatedAt: apiInv.updatedAt || new Date().toISOString(),
   };
@@ -238,10 +238,11 @@ export const mapSaleTransactionToInvoicePayload = (
   if (sale.invoiceNo && sale.invoiceNo.trim()) {
     payload.invoiceNo = sale.invoiceNo.trim();
   }
-  if (sale.saleInvoiceManualNo && String(sale.saleInvoiceManualNo).trim()) {
-    payload.saleInvoiceManualNo = String(sale.saleInvoiceManualNo).trim();
+  if (sale.salesInvoiceManualNo && String(sale.salesInvoiceManualNo).trim()) {
+    payload.salesInvoiceManualNo = String(sale.salesInvoiceManualNo).trim();
   }
-  if (sale.invoiceStatus) {
+  // Only send explicit user-driven states (draft / cancelled); never the implicit "Generated"
+  if (sale.invoiceStatus && sale.invoiceStatus !== "Generated" && sale.invoiceStatus !== "Invoiced") {
     payload.invoiceStatus = sale.invoiceStatus;
   }
   if (sale.referenceNo && sale.referenceNo.trim()) {
@@ -283,7 +284,8 @@ export const mapSaleTransactionToInvoicePayload = (
   if (typeof sale.otherCharges === 'number' && !isNaN(sale.otherCharges)) {
     payload.otherCharges = sale.otherCharges;
   }
-  if (sale.paymentMethod) {
+  // Payment method only when the user actually entered a payment
+  if (sale.paymentMethod && Number(sale.paidAmount) > 0) {
     payload.paymentMethod = sale.paymentMethod;
   }
   if (Array.isArray(sale.paymentSplits) && sale.paymentSplits.length > 0) {
@@ -292,7 +294,7 @@ export const mapSaleTransactionToInvoicePayload = (
   if (sale.paymentTerms && sale.paymentTerms.trim()) {
     payload.paymentTerms = sale.paymentTerms.trim();
   }
-  if (sale.saleStatus) {
+  if (sale.saleStatus && sale.saleStatus !== "Confirmed") {
     payload.saleStatus = sale.saleStatus;
   }
   if (sale.salesperson && sale.salesperson.trim()) {

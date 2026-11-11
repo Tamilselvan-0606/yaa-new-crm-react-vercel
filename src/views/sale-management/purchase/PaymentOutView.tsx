@@ -339,7 +339,7 @@ export const PaymentOutView: React.FC = () => {
           setSelectedPayment(livePayment);
         }
       } catch (err) {
-        console.warn('Could not fetch latest payment voucher audit data from API:', err);
+        console.warn('Could not fetch latest payment out audit data from API:', err);
       } finally {
         setIsLoadingHistory(false);
       }
@@ -383,6 +383,7 @@ export const PaymentOutView: React.FC = () => {
     reValidateMode: 'onChange',
     defaultValues: {
       paymentNo: '',
+      paymentOutManualNo: '',
       paymentDate: new Date().toISOString().split('T')[0],
       supplierId: '',
       purchaseId: '',
@@ -406,10 +407,10 @@ export const PaymentOutView: React.FC = () => {
   const watchPurchaseId = watch('purchaseId');
   const watchReceiptImage = watch('receiptImage');
 
-  // Active pool of records: only the payment vouchers returned by the API
+  // Active pool of records: only the payment outs returned by the API
   const activePool = livePayments;
 
-  // Computed next preview number based on currently loaded payment vouchers
+  // Computed next preview number based on currently loaded payment outs
   const computedPreviewNo = useMemo(() => {
     return getNextPaymentOutNumber(livePayments);
   }, [livePayments]);
@@ -440,6 +441,7 @@ export const PaymentOutView: React.FC = () => {
     setEditingPaymentId(po.id);
     reset({
       paymentNo: po.paymentNo,
+      paymentOutManualNo: po.paymentOutManualNo || '',
       paymentDate: po.paymentDate,
       supplierId: po.supplierId || '',
       purchaseId: po.purchaseId || '',
@@ -460,6 +462,7 @@ export const PaymentOutView: React.FC = () => {
     const nextNo = ''; // server generates the payment number on save
     reset({
       paymentNo: nextNo,
+      paymentOutManualNo: '',
       paymentDate: new Date().toISOString().split('T')[0],
       supplierId: po.supplierId || '',
       purchaseId: po.purchaseId || '',
@@ -467,7 +470,7 @@ export const PaymentOutView: React.FC = () => {
       paymentMode: po.paymentMode || 'Bank Transfer',
       referenceNo: po.referenceNo ? `${po.referenceNo}-COPY` : '',
       receiptImage: po.receiptImage || '',
-      notes: po.notes ? `[Duplicate of ${po.paymentNo}] ${po.notes}` : `Duplicate of voucher ${po.paymentNo}`,
+      notes: po.notes ? `[Duplicate of ${po.paymentNo}] ${po.notes}` : `Duplicate of payment out ${po.paymentNo}`,
     });
     setActiveDropdownId(null);
     setIsFormModalOpen(true);
@@ -537,6 +540,7 @@ export const PaymentOutView: React.FC = () => {
     const nextNo = ''; // server generates the payment number on save
     reset({
       paymentNo: nextNo,
+      paymentOutManualNo: '',
       paymentDate: new Date().toISOString().split('T')[0],
       supplierId: '',
       purchaseId: '',
@@ -645,12 +649,13 @@ export const PaymentOutView: React.FC = () => {
           paymentMode: data.paymentMode,
           amount: numAmount,
           referenceNo: data.referenceNo,
+          paymentOutManualNo: data.paymentOutManualNo,
           notes: data.notes,
         });
 
         const res = await workPaymentOutApi.updatePaymentOut(editingPaymentId, updatePayload);
         if (!res?.data) {
-          throw new Error((res as any)?.error?.message || 'Failed to update payment voucher');
+          throw new Error((res as any)?.error?.message || 'Failed to update payment out');
         }
         const updatedItem = mapApiPaymentOutToUi(res.data);
         if (data.purchaseId) {
@@ -667,7 +672,7 @@ export const PaymentOutView: React.FC = () => {
         // The bill balance used for the amount limit must be re-read from the API next time
         hasLoadedFormMasterDataRef.current = false;
         setLivePayments((prev) => prev.map((p) => (p.id === editingPaymentId ? updatedItem : p)));
-        toast.success(`Payment voucher ${updatedItem.paymentNo} updated successfully!`);
+        toast.success(`Payment out ${updatedItem.paymentNo} updated successfully!`);
       } else {
         // POST /work/payments-out
         const createPayload = mapUiToCreatePaymentOutPayload({
@@ -677,12 +682,13 @@ export const PaymentOutView: React.FC = () => {
           paymentMode: data.paymentMode,
           amount: numAmount,
           referenceNo: data.referenceNo,
+          paymentOutManualNo: data.paymentOutManualNo,
           notes: data.notes,
         });
 
         const res = await workPaymentOutApi.createPaymentOut(createPayload);
         if (!res?.data) {
-          throw new Error((res as any)?.error?.message || 'Failed to record payment voucher');
+          throw new Error((res as any)?.error?.message || 'Failed to record payment out');
         }
         const createdItem = mapApiPaymentOutToUi(res.data);
         if (data.purchaseId) {
@@ -718,7 +724,7 @@ export const PaymentOutView: React.FC = () => {
             mapped = true;
           }
         }
-        if (!mapped) toast.error(getApiErrorMessage(err, 'Failed to save payment voucher. Your entries have been kept; please try again.'));
+        if (!mapped) toast.error(getApiErrorMessage(err, 'Failed to save payment out. Your entries have been kept; please try again.'));
     } finally {
       setIsSubmittingForm(false);
     }
@@ -729,7 +735,7 @@ export const PaymentOutView: React.FC = () => {
     setActiveDropdownId(null);
     setDropdownPos(null);
     if (po.status === 'Cancelled') {
-      toast.info(`Payment voucher ${po.paymentNo} is already cancelled.`);
+      toast.info(`Payment out ${po.paymentNo} is already cancelled.`);
       return;
     }
     setDeleteTargetPayment(po);
@@ -748,13 +754,13 @@ export const PaymentOutView: React.FC = () => {
       setLivePayments((prev) =>
         prev.map((p) => (p.id === deleteTargetPayment.id ? { ...p, status: 'Cancelled' } : p))
       );
-      toast.success(`Payment voucher "${deleteTargetPayment.paymentNo}" cancelled successfully.`);
+      toast.success(`Payment out "${deleteTargetPayment.paymentNo}" cancelled successfully.`);
       setIsDeleteModalOpen(false);
       setDeleteTargetPayment(null);
       fetchPaymentsOut(true);
     } catch (err: any) {
       console.error('API cancel failed:', err);
-      const errMsg = getApiErrorMessage(err, 'Failed to cancel payment voucher');
+      const errMsg = getApiErrorMessage(err, 'Failed to cancel payment out');
       setDeletePaymentError(errMsg);
       toast.error(errMsg);
     } finally {
@@ -924,7 +930,7 @@ export const PaymentOutView: React.FC = () => {
       subtitle: `Total Payments: ${filteredPayments.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
-        { header: 'Voucher #', key: 'paymentNo', align: 'center', width: 16 },
+        { header: 'Payment Out #', key: 'paymentNo', align: 'center', width: 16 },
         { header: 'Payment Date', key: 'paymentDate', align: 'center', width: 14 },
         { header: 'Supplier Name', key: 'supplierName', align: 'left', width: 24 },
         { header: 'Linked Bill #', key: 'purchaseNo', align: 'left', width: 18 },
@@ -936,7 +942,7 @@ export const PaymentOutView: React.FC = () => {
       data: excelRows,
       summaryRow: {
         sNo: 'TOTAL',
-        paymentNo: `${filteredPayments.length} Vouchers`,
+        paymentNo: `${filteredPayments.length} Payment Outs`,
         amount: grandDisbursed,
       },
     });
@@ -949,7 +955,7 @@ export const PaymentOutView: React.FC = () => {
     const matchedSup = mergedSuppliers.find((s) => s.id === po.supplierId || s.name === po.supplierName);
 
     return {
-      docTypeTitle: 'PAYMENT-OUT VOUCHER',
+      docTypeTitle: 'PAYMENT OUT',
       docNo: po.paymentNo,
       docDate: po.paymentDate,
       status: po.status || 'Completed',
@@ -997,13 +1003,13 @@ export const PaymentOutView: React.FC = () => {
   const handleDownloadPaymentOut = async (po: PaymentOut) => {
     if (isDownloadingPayment) return;
     setIsDownloadingPayment(true);
-    const filename = `PaymentVoucher_${(po.paymentNo || 'voucher').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+    const filename = `PaymentOut_${(po.paymentNo || 'payment-out').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
     try {
       await downloadBusinessDocument(buildPaymentOutPrintOptions(po), filename);
       toast.success(`Downloaded ${filename}`);
     } catch (err) {
-      console.error('Failed to download payment voucher PDF:', err);
-      toast.error('Failed to download payment voucher PDF. Please try again.');
+      console.error('Failed to download payment out PDF:', err);
+      toast.error('Failed to download payment out PDF. Please try again.');
     } finally {
       setIsDownloadingPayment(false);
     }
@@ -1012,7 +1018,7 @@ export const PaymentOutView: React.FC = () => {
   // Print Table Report for Payment Out
   const handlePrintTableReport = () => {
     if (filteredPayments.length === 0) {
-      toast.info('No payment vouchers available to print.');
+      toast.info('No payment outs available to print.');
       return;
     }
 
@@ -1036,7 +1042,7 @@ export const PaymentOutView: React.FC = () => {
       title: 'Payment-Out & Vendor Disbursements Report',
       subtitle: `Total Payments: ${filteredPayments.length} | Period: ${appliedPeriod} | Mode: ${appliedPaymentMode}`,
       columns: [
-        { header: 'Voucher #', key: 'paymentNo', width: '15%' },
+        { header: 'Payment Out #', key: 'paymentNo', width: '15%' },
         { header: 'Date', key: 'paymentDate', width: '12%' },
         { header: 'Supplier Name', key: 'supplierName', width: '24%' },
         { header: 'Bill Ref #', key: 'purchaseNo', width: '15%' },
@@ -1048,7 +1054,7 @@ export const PaymentOutView: React.FC = () => {
       metrics: [
         { label: 'Total Paid Out', value: summary.totalDisbursed },
         { label: 'Today Paid', value: summary.todayPaid },
-        { label: 'Total Vouchers', value: filteredPayments.length },
+        { label: 'Total Payment Outs', value: filteredPayments.length },
       ],
       summaryRow: {
         paymentNo: 'Total',
@@ -1071,7 +1077,7 @@ export const PaymentOutView: React.FC = () => {
             </h1>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
-            Track outgoing payments, record vendor settlement vouchers, and clear purchase payables
+            Track outgoing payments, record vendor settlement payment outs, and clear purchase payables
           </p>
         </div>
 
@@ -1122,7 +1128,7 @@ export const PaymentOutView: React.FC = () => {
             <div className="text-xl font-bold text-slate-900">
               ₹{summary.totalDisbursed.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
             </div>
-            <div className="text-xs text-slate-400 mt-0.5">Across {summary.totalVouchers} payment vouchers</div>
+            <div className="text-xs text-slate-400 mt-0.5">Across {summary.totalVouchers} payment outs</div>
           </div>
         </div>
 
@@ -1179,7 +1185,7 @@ export const PaymentOutView: React.FC = () => {
       <SearchBar
         value={pendingSearch}
         onChange={(val) => setPendingSearch(val)}
-        placeholder="Search by voucher #, supplier..."
+        placeholder="Search by payment out #, supplier..."
         onSubmit={() => {
           const trimmed = pendingSearch.trim();
           const isSame =
@@ -1281,7 +1287,7 @@ export const PaymentOutView: React.FC = () => {
         rightSlot={
           <div className="flex items-center gap-3 pr-1 whitespace-nowrap">
             <span className="text-xs font-semibold text-slate-500">
-              Total Vouchers :{' '}
+              Total Payment Outs :{' '}
               <span className="text-[#33077C] font-bold">{summary.totalVouchers}</span>
             </span>
           </div>
@@ -1294,10 +1300,9 @@ export const PaymentOutView: React.FC = () => {
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
             <CommonTableHead
                 columns={[
-                  { label: "VOUCHER NO", align: "left", minWidth: "140px" },
+                  { label: "PAYMENT OUT NO", align: "center", minWidth: "140px" },
                   { label: "DATE", align: "left", minWidth: "120px" },
                   { label: "SUPPLIER / VENDOR", align: "left", minWidth: "180px" },
-                  { label: "AGAINST BILL", align: "center", minWidth: "130px" },
                   { label: "PAYMENT MODE", align: "center", minWidth: "130px" },
                   { label: "REFERENCE / UTR", align: "left", minWidth: "150px" },
                   { label: "AMOUNT PAID", align: "right", minWidth: "130px" },
@@ -1308,16 +1313,16 @@ export const PaymentOutView: React.FC = () => {
             <tbody className="text-sm">
               {isApiLoading ? (
                 <tr>
-                  <td colSpan={9} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <Loader2 className="w-8 h-8 mx-auto mb-2 text-[#33077C] animate-spin" />
                     <p className="font-semibold text-slate-600 text-sm">Fetching outward payments from Work API...</p>
                   </td>
                 </tr>
               ) : displayedPayments.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <CreditCard className="w-10 h-10 mx-auto mb-2 text-slate-300 stroke-[1.5]" />
-                    <p className="font-semibold text-slate-600 text-sm">No payment vouchers found</p>
+                    <p className="font-semibold text-slate-600 text-sm">No payment outs found</p>
                     <p className="text-xs text-slate-400 mt-1">Record a new payment out when settling supplier dues</p>
                   </td>
                 </tr>
@@ -1328,11 +1333,11 @@ export const PaymentOutView: React.FC = () => {
                       key={po.id}
                       className="hover:bg-purple-50/20 transition-colors border-b border-slate-200"
                     >
-                      {/* 1. Voucher No */}
-                      <td className="py-3.5 px-5 border border-slate-200">
-                        <span className="font-semibold text-slate-800 text-xs">
-                          {po.paymentNo}
-                        </span>
+                      {/* 1. Payment Out No */}
+                      <td className="py-3.5 px-3 font-bold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                        <div className="flex flex-col items-center justify-center gap-1">
+                          <span>{po.paymentNo}</span>
+                        </div>
                       </td>
 
                       {/* 2. Date */}
@@ -1347,17 +1352,6 @@ export const PaymentOutView: React.FC = () => {
                       {/* 3. Supplier */}
                       <td className="py-3.5 px-5 border border-slate-200">
                         <span className="font-semibold text-slate-800 text-xs">{po.supplierName}</span>
-                      </td>
-
-                      {/* 4. Against Bill */}
-                      <td className="py-3 px-4 border border-slate-200 text-center">
-                        {po.purchaseNo ? (
-                          <span className="inline-block px-2.5 py-0.5 rounded-md bg-purple-50 text-[#33077C] font-semibold text-[11px] border border-purple-100">
-                            {po.purchaseNo}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 text-xs italic">Direct / Advance</span>
-                        )}
                       </td>
 
                       {/* 5. Payment Mode */}
@@ -1411,7 +1405,7 @@ export const PaymentOutView: React.FC = () => {
                             sharePos={sharePos}
                             setSharePos={setSharePos}
                             getShareData={() => formatPaymentOutShare(po)}
-                            title="Share Payment Voucher"
+                            title="Share Payment Out"
                           />
 
                           {/* 3-dots Actions Dropdown */}
@@ -1433,12 +1427,12 @@ export const PaymentOutView: React.FC = () => {
                                 onClick: () => handleDuplicatePayment(po),
                               },
                               {
-                                label: 'Print Voucher',
+                                label: 'Print Payment Out',
                                 variant: 'print',
                                 onClick: () => handlePrintPaymentOut(po),
                               },
                               {
-                                label: 'Download Voucher',
+                                label: 'Download Payment Out',
                                 variant: 'download',
                                 onClick: () => handleDownloadPaymentOut(po),
                               },
@@ -1448,7 +1442,7 @@ export const PaymentOutView: React.FC = () => {
                                 onClick: () => handleOpenHistory(po),
                               },
                               po.status !== 'Cancelled' && {
-                                label: 'Cancel Voucher',
+                                label: 'Cancel Payment Out',
                                 variant: 'delete',
                                 danger: true,
                                 dividerBefore: true,
@@ -1555,13 +1549,13 @@ export const PaymentOutView: React.FC = () => {
           setIsFormModalOpen(false);
           setEditingPaymentId(null);
         }}
-        title={editingPaymentId ? 'Edit Payment Out Voucher' : 'Record Payment Out'}
+        title={editingPaymentId ? 'Edit Payment Out' : 'Record Payment Out'}
         subtitle={
           editingPaymentId
-            ? 'Configure payment voucher profile, invoice settlement, and payment details'
+            ? 'Configure payment out profile, invoice settlement, and payment details'
             : (
               <span className="flex items-center gap-1.5 flex-wrap">
-                <span>Configure vendor disbursement voucher, payment mode, and settlement details</span>
+                <span>Configure vendor disbursement payment out, payment mode, and settlement details</span>
                 <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-purple-50 text-purple-700 border border-purple-200">
                   {computedPreviewNo}
                 </span>
@@ -1593,8 +1587,8 @@ export const PaymentOutView: React.FC = () => {
         }
       >
         <form noValidate onSubmit={handleSubmit(onSubmitPayment)} className="space-y-4.5 p-0.5 sm:p-2">
-          {/* Row 1: 3 Fields (Supplier / Vendor, Bill No, Voucher No) */}
-          {/* Row 1: 3 Fields (Supplier / Vendor, Bill No, Voucher No) */}
+          {/* Row 1: 3 Fields (Supplier / Vendor, Bill No, Payment Out No) */}
+          {/* Row 1: 3 Fields (Supplier / Vendor, Bill No, Payment Out No) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
             {/* Field 1: Supplier / Vendor */}
             <div>
@@ -1641,9 +1635,9 @@ export const PaymentOutView: React.FC = () => {
               <FormError message={errors.purchaseId?.message} />
             </div>
 
-            {/* Field 3: Voucher / Payment No */}
+            {/* Field 3: Payment Out No */}
             <div>
-              <FormLabel>Voucher / Payment No</FormLabel>
+              <FormLabel>Payment Out No</FormLabel>
               <input
                 type="text"
                 readOnly
@@ -1652,6 +1646,18 @@ export const PaymentOutView: React.FC = () => {
                 placeholder="Auto-generated on save"
               />
               <FormError message={errors.paymentNo?.message} />
+            </div>
+
+            {/* Field 3b: Payment Out No (manual entry) */}
+            <div>
+              <FormLabel>Payment Out No</FormLabel>
+              <input
+                type="text"
+                {...register('paymentOutManualNo')}
+                className={getFormInputCls(!!errors.paymentOutManualNo)}
+                placeholder="Enter Payment Out No"
+              />
+              <FormError message={errors.paymentOutManualNo?.message} />
             </div>
           </div>
 
@@ -1833,8 +1839,8 @@ export const PaymentOutView: React.FC = () => {
       <Modal
         isOpen={isDetailModalOpen}
         onClose={() => setIsDetailModalOpen(false)}
-        title={selectedPayment ? `Payment Voucher: ${selectedPayment.paymentNo}` : 'Payment Voucher Details'}
-        subtitle="Voucher amount, supplier, payment mode, and reference details"
+        title={selectedPayment ? `Payment Out: ${selectedPayment.paymentNo}` : 'Payment Out Details'}
+        subtitle="Payment out amount, supplier, payment mode, and reference details"
         maxWidth="3xl"
         headerGradient={true}
         showBackIcon={true}
@@ -1843,10 +1849,10 @@ export const PaymentOutView: React.FC = () => {
       >
         {selectedPayment && (
           <div className="space-y-5 p-2 sm:p-4 max-h-[75vh] overflow-y-auto">
-            {/* Header Voucher Card */}
+            {/* Header Payment Out Card */}
             <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex items-center justify-between">
               <div>
-                <span className="text-xs font-bold text-[#33077C] uppercase tracking-wider">Payment Out Voucher</span>
+                <span className="text-xs font-bold text-[#33077C] uppercase tracking-wider">Payment Out</span>
                 <div className="text-lg font-bold font-mono text-slate-900">{selectedPayment.paymentNo}</div>
                 <div className="text-xs text-slate-500 mt-0.5">Date: {formatDate(selectedPayment.paymentDate)}</div>
               </div>
@@ -1926,7 +1932,7 @@ export const PaymentOutView: React.FC = () => {
                 className="h-10 px-5 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 whitespace-nowrap"
               >
                 <Printer className="w-4 h-4" />
-                <span>Print Voucher</span>
+                <span>Print Payment Out</span>
               </button>
               <button
                 type="button"
@@ -1935,7 +1941,7 @@ export const PaymentOutView: React.FC = () => {
                 className="h-10 px-5 rounded-lg bg-[#EA580C] hover:bg-[#C2410C] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 whitespace-nowrap"
               >
                 {isDownloadingPayment ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                <span>{isDownloadingPayment ? 'Generating...' : 'Download Voucher'}</span>
+                <span>{isDownloadingPayment ? 'Generating...' : 'Download Payment Out'}</span>
               </button>
             </div>
           </div>
@@ -1946,7 +1952,7 @@ export const PaymentOutView: React.FC = () => {
       <Modal
         isOpen={isHistoryModalOpen}
         onClose={() => setIsHistoryModalOpen(false)}
-        title="Payment Voucher History & Audit Trail"
+        title="Payment Out History & Audit Trail"
         subtitle={
           isLoadingHistory
             ? 'Syncing live history from Work API...'
@@ -1961,7 +1967,7 @@ export const PaymentOutView: React.FC = () => {
         {selectedPayment && (
           <HistoryTimelineView
             isLoading={isLoadingHistory}
-            eyebrow="Voucher No"
+            eyebrow="Payment Out No"
             title={selectedPayment.paymentNo}
             subtitle={
               <>
@@ -1981,7 +1987,7 @@ export const PaymentOutView: React.FC = () => {
             ]}
             events={[
               {
-                title: "Payment Voucher Recorded",
+                title: "Payment Out Recorded",
                 at: selectedPayment.createdAt || selectedPayment.paymentDate,
                 tone: "primary",
                 description: `Payment disbursed to ${selectedPayment.supplierName}.`,
@@ -1998,7 +2004,7 @@ export const PaymentOutView: React.FC = () => {
                 title: `Status: ${selectedPayment.status}`,
                 at: selectedPayment.updatedAt && selectedPayment.updatedAt !== selectedPayment.createdAt ? selectedPayment.updatedAt : undefined,
                 tone: selectedPayment.status === "Completed" ? "success" : selectedPayment.status === "Cancelled" || selectedPayment.status === "Failed" ? "danger" : "warning",
-                description: selectedPayment.status === "Cancelled" ? "This voucher was cancelled and no longer counts toward settlement." : "Current state of the payment voucher.",
+                description: selectedPayment.status === "Cancelled" ? "This payment out was cancelled and no longer counts toward settlement." : "Current state of the payment out.",
               },
               ...(selectedPayment.notes
                 ? [{ title: "Remarks", tone: "info" as const, description: `"${selectedPayment.notes}"` }]
@@ -2021,7 +2027,7 @@ export const PaymentOutView: React.FC = () => {
           }
         }}
         onConfirm={handleConfirmDeletePayment}
-        entityName="Payment Voucher"
+        entityName="Payment Out"
         recordName={deleteTargetPayment?.paymentNo}
         isLoading={isDeletingPayment}
         error={deletePaymentError}

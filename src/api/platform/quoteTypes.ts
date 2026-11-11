@@ -17,6 +17,7 @@ export interface QuoteApiItem {
   id: string;
   estimateNumber: string;
   referenceNumber: string;
+  quotationManualNumber?: string | null;
   date: string; // ISO string: '2026-10-06T00:00:00.000Z' or date string
   expiryDate: string;
   organizationId: string;
@@ -139,6 +140,7 @@ export interface CreateQuoteRequest {
   /** Shown as the created date; defaults to now on the server. */
   createdDate?: string;
   referenceNumber?: string;
+  quotationManualNumber?: string;
   date: string; // YYYY-MM-DD
   expiryDate: string; // YYYY-MM-DD
   organizationId?: string;
@@ -163,6 +165,7 @@ export interface UpdateQuoteRequest {
   date?: string;
   expiryDate?: string;
   referenceNumber?: string;
+  quotationManualNumber?: string;
   items?: CreateQuoteItemPayload[];
 }
 

@@ -38,7 +38,7 @@ export interface ExtendedSaleOrderItem extends SaleProductItem {
 export interface SaleOrderRecord {
   id: string;
   orderNo: string;
-  saleOrderManualNo?: string;
+  salesOrderManualNo?: string;
   referenceNo?: string;
   orderDate: string;
   dueDate: string;
@@ -161,7 +161,7 @@ export const mapApiSaleOrderToSaleOrderRecord = (apiO: ApiSaleOrder): SaleOrderR
   return {
     id: apiO.id,
     orderNo: apiO.orderNo || '',
-    saleOrderManualNo: apiO.saleOrderManualNo || '',
+    salesOrderManualNo: apiO.salesOrderManualNo || '',
     referenceNo: apiO.referenceNo || undefined,
     orderDate: orderDateStr,
     dueDate: dueDateStr,
@@ -248,17 +248,14 @@ export const mapSaleOrderRecordToPayload = (
   if (!isCreate && order.orderNo && order.orderNo.trim()) {
     payload.orderNo = order.orderNo.trim();
   }
-  if (order.saleOrderManualNo && String(order.saleOrderManualNo).trim()) {
-    payload.saleOrderManualNo = String(order.saleOrderManualNo).trim();
+  if (order.salesOrderManualNo && String(order.salesOrderManualNo).trim()) {
+    payload.salesOrderManualNo = String(order.salesOrderManualNo).trim();
   }
   if (order.referenceNo && order.referenceNo.trim()) {
     payload.referenceNo = order.referenceNo.trim();
   }
   if (order.orderDate) {
     payload.orderDate = order.orderDate.includes('T') ? order.orderDate.split('T')[0] : order.orderDate;
-  }
-  if (order.dueDate) {
-    payload.dueDate = order.dueDate.includes('T') ? order.dueDate.split('T')[0] : order.dueDate;
   }
   if (order.customerId && UUID_REGEX.test(order.customerId)) {
     payload.customerId = order.customerId;
@@ -281,17 +278,11 @@ export const mapSaleOrderRecordToPayload = (
   if (typeof order.withGst === 'boolean') {
     payload.withGst = order.withGst;
   }
-  if (order.gstType) {
-    payload.gstType = order.gstType;
-  }
   if (typeof order.roundOff === 'number' && !isNaN(order.roundOff)) {
     payload.roundOff = Number(order.roundOff.toFixed(2));
   }
   if (typeof order.advanceAmount === 'number' && !isNaN(order.advanceAmount) && order.advanceAmount >= 0) {
     payload.advanceAmount = order.advanceAmount;
-  }
-  if (order.paymentType && order.paymentType.trim()) {
-    payload.paymentType = order.paymentType.trim();
   }
   if (order.notes && order.notes.trim()) {
     payload.notes = order.notes.trim();

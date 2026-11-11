@@ -19,6 +19,7 @@ export interface ApiPurchaseReturnItem {
 export interface ApiPurchaseReturn {
   id: string;
   returnNo: string;
+  purchaseReturnManualNo?: string | null;
   purchaseId: string;
   purchaseNo: string;
   supplierId: string;
@@ -100,6 +101,7 @@ export interface PurchaseReturnDeleteResponse {
 
 export interface CreatePurchaseReturnPayload {
   returnNo?: string;
+  purchaseReturnManualNo?: string;
   purchaseId?: string;
   purchaseNo?: string;
   supplierId: string;
@@ -126,6 +128,7 @@ export interface CreatePurchaseReturnPayload {
 }
 
 export interface UpdatePurchaseReturnPayload {
+  purchaseReturnManualNo?: string;
   returnDate?: string;
   items?: Array<{
     productId?: string;

@@ -1107,8 +1107,8 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     setOrgSubGstRate(sub.gstRate !== undefined && sub.gstRate !== null ? String(sub.gstRate) : String(apiPlans.find((p) => p.id === sub.planId)?.gstRate ?? ''));
     setOrgSubAmountWithGst(sub.amountWithGst ? String(sub.amountWithGst) : '');
     setOrgSubBonusMonths(sub.bonusMonths ? String(sub.bonusMonths) : '');
-    setOrgSubStartDate(sub.startDate);
-    setOrgSubEndDate(sub.endDate);
+    setOrgSubStartDate((sub.startDate || '').split('T')[0]);
+    setOrgSubEndDate((sub.endDate || '').split('T')[0]);
     setOrgSubAutoRenew(sub.autoRenew);
     setOrgSubNotes(sub.notes || '');
     setOrgSubErrors({});
@@ -1208,7 +1208,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
       ['amount', Number(orgSubAmount) > 0 ? String(orgSubAmount) : '', [required('Fee Amount is required')]],
       ['discount', orgSubDiscount, [nonNegativeAmount('Discount'), (v) => (Number(v) > Number(orgSubAmount) ? 'Discount cannot exceed the fee amount' : null)]],
       ['gstRate', orgSubGstRate, [required('GST Rate is required')]],
-      ['bonusMonths', orgSubBonusMonths, [(v) => (v.trim() === '' || /^d{1,3}$/.test(v.trim()) ? null : 'Bonus Month must be a whole number')]],
+      ['bonusMonths', orgSubBonusMonths, [(v) => (v.trim() === '' || /^\d{1,3}$/.test(v.trim()) ? null : 'Bonus Month must be a whole number')]],
       ['startDate', orgSubStartDate, [required('Start Date is required')]],
       ['endDate', orgSubEndDate, [required('Next Renewal Date is required')]],
       ['contactPerson', orgSubContactPerson, [required('Contact Person is required'), alphabetsOnly('Contact Person')]],
@@ -1233,8 +1233,11 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
         endDate: orgSubEndDate || undefined,
         autoRenew: orgSubAutoRenew,
         notes: orgSubNotes || undefined,
-        discount: orgSubDiscount.trim() === '' ? undefined : Number(orgSubDiscount),
+        discountAmount: orgSubDiscount.trim() === '' ? undefined : Number(orgSubDiscount),
         gstRate: orgSubGstRate === '' ? undefined : Number(orgSubGstRate),
+        gstAmount: orgSubGstRate === ''
+          ? undefined
+          : Math.round(Math.max(0, Number(orgSubAmount || 0) - Number(orgSubDiscount || 0)) * Number(orgSubGstRate) ) / 100,
         amountWithGst: orgSubAmountWithGst.trim() === '' ? undefined : Number(orgSubAmountWithGst),
         bonusMonths: orgSubBonusMonths.trim() === '' ? undefined : Number(orgSubBonusMonths),
       });
@@ -1300,7 +1303,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
       plan: item.planName || 'Plan',
       billingCycle: (item.billingCycle as BillingCycle) || 'Monthly',
       amount: item.amount,
-      discount: item.discount,
+      discount: item.discountAmount,
       gstRate: item.gstRate,
       amountWithGst: item.amountWithGst,
       bonusMonths: item.bonusMonths,

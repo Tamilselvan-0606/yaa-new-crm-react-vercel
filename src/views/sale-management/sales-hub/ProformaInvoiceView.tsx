@@ -5,6 +5,7 @@ import { CustomerSearchableSelect } from "../../../components/common/paginated-s
 import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
 import {
   getConversionState,
+  resolveDocumentConvertedAt,
   resolveConvertedTarget,
 } from "../../../utils/salesDocumentWorkflow";
 import { getNextProformaNumber } from "../../../utils/documentNumbering";
@@ -126,6 +127,7 @@ import {
   DeliveryChallanRecord,
   mapDeliveryChallanRecordToPayload,
 } from "../../../api/commerce/deliveryChallanApi";
+import { commerceInvoiceApi } from "../../../api/commerce/invoiceApi";
 import {
   syncConvertedOrderToStorage,
   syncConvertedInvoiceToStorage,
@@ -491,7 +493,7 @@ export interface ProformaTabItem {
     customerCompany: string;
     billingAddress: string;
     proformaNo: string;
-    proformaManualNo: string;
+    proformaInvoiceManualNo: string;
     referenceNo: string;
     date: string;
     validUntil: string;
@@ -1324,7 +1326,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       customerCompany: "",
       billingAddress: "",
       proformaNo: defaultNo,
-      proformaManualNo: "",
+      proformaInvoiceManualNo: "",
       referenceNo: "",
       date: todayIso,
       validUntil: validUntilIso,
@@ -1562,7 +1564,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       customerCompany: proforma.customerCompany || "",
       billingAddress: proforma.billingAddress || "",
       proformaNo: proforma.proformaNo,
-      proformaManualNo: proforma.proformaManualNo || "",
+      proformaInvoiceManualNo: proforma.proformaInvoiceManualNo || "",
       referenceNo: proforma.referenceNo || "",
       date: proforma.date,
       validUntil: proforma.validUntil,
@@ -2111,7 +2113,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       const newProforma: SaleProformaInvoice = {
         id: proformaId,
         proformaNo: editingProforma ? formData.proformaNo || "" : "",
-        proformaManualNo: formData.proformaManualNo?.trim() || undefined,
+        proformaInvoiceManualNo: formData.proformaInvoiceManualNo?.trim() || undefined,
         referenceNo: formData.referenceNo || "",
         date: formData.date,
         validUntil: formData.validUntil,
@@ -2991,6 +2993,62 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     }
   };
 
+  // Where each converted proforma went: the server does not report the destination on the proforma, so look
+  // for the sale order / challan / invoice that references this proforma number.
+  const [downstreamByProforma, setDownstreamByProforma] = useState<
+    Record<string, { type: "Order" | "Challan" | "Invoice"; no: string }>
+  >({});
+  useEffect(() => {
+    const needs = liveProformas.some(
+      (p) =>
+        p.status === "Converted" &&
+        p.proformaNo &&
+        !resolveConvertedTarget(p) &&
+        !downstreamByProforma[p.proformaNo],
+    );
+    if (!needs) return;
+    let cancelled = false;
+    (async () => {
+      const found: Record<
+        string,
+        { type: "Order" | "Challan" | "Invoice"; no: string }
+      > = {};
+      const take = (
+        type: "Order" | "Challan" | "Invoice",
+        ref?: string | null,
+        no?: string | null,
+      ) => {
+        const key = (ref || "").trim();
+        if (key && no && !found[key]) found[key] = { type, no };
+      };
+      const params: any = { page_no: 1, page_size: 100 };
+      const [orders, challans, invoices] = await Promise.allSettled([
+        commerceSaleOrderApi.getOrders(params),
+        commerceDeliveryChallanApi.getChallans(params),
+        commerceInvoiceApi.getInvoices(params),
+      ]);
+      if (orders.status === "fulfilled")
+        (orders.value?.data || []).forEach((o: any) =>
+          take("Order", o.referenceNo, o.orderNo),
+        );
+      if (challans.status === "fulfilled")
+        (challans.value?.data || []).forEach((c: any) =>
+          take("Challan", c.referenceNo, c.challanNo),
+        );
+      if (invoices.status === "fulfilled")
+        (invoices.value?.data || []).forEach((i: any) =>
+          take("Invoice", i.referenceNo, i.invoiceNo),
+        );
+      if (!cancelled && Object.keys(found).length > 0) {
+        setDownstreamByProforma((prev) => ({ ...prev, ...found }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveProformas]);
+
   // Displayed Proforma Invoices: Live API data merged with local cache and cross-module lineage
   const displayProformas = useMemo(() => {
     const combined = liveProformas.map((item) => ({
@@ -3298,11 +3356,11 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                   </span>
                   <input
                     type="text"
-                    value={formData.proformaManualNo}
+                    value={formData.proformaInvoiceManualNo}
                     onChange={(e) =>
                       setFormData({
                         ...formData,
-                        proformaManualNo: e.target.value,
+                        proformaInvoiceManualNo: e.target.value,
                       })
                     }
                     placeholder="Enter Proforma No"
@@ -3360,7 +3418,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                   >
                     {STATE_OPTIONS.map((st) => (
                       <option key={st} value={st}>
-                        {st}
+                        {st.replace(/^[0-9]+-/, "")}
                       </option>
                     ))}
                   </select>
@@ -4095,9 +4153,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                       {row.batch}
                                     </option>
                                   )}
-                                <option value="__custom__">
-                                  + Enter custom batch...
-                                </option>
                               </select>
                             );
                           }
@@ -4739,7 +4794,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 
     const excelRows = displayProformas.map((p) => {
       const createdDt = formatDateTime(p.createdAt || p.date);
-      const convertedAt = (p as any).convertedAt || null;
+      const convertedAt = resolveDocumentConvertedAt("Proforma", p as any);
       const convertedDt = formatDateTime(convertedAt);
       return {
         proformaNo: p.proformaNo,
@@ -4820,7 +4875,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 
     const printRows = displayProformas.map((p) => {
       const createdDt = formatDateTime(p.createdAt || p.date);
-      const convertedAt = (p as any).convertedAt || null;
+      const convertedAt = resolveDocumentConvertedAt("Proforma", p as any);
       const convertedDt = formatDateTime(convertedAt);
       return {
         proformaNo: p.proformaNo,
@@ -5174,7 +5229,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                   const isConvertOpen = activeConvertDropdownId === item.id;
                   const isActionOpen = activeDropdownId === item.id;
                   const createdDt = formatDateTime(item.createdAt || item.date);
-                  const convertedAt = (item as any).convertedAt || null;
+                  const convertedAt = resolveDocumentConvertedAt("Proforma", item as any);
                   const convertedDt = formatDateTime(convertedAt);
                   const resolvedCustomerCode =
                     (item as any).customerCode ||
@@ -5208,17 +5263,25 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                       className="hover:bg-purple-50/40 transition-colors border-b border-slate-200"
                     >
                       {/* 1. Proforma Invoice Code (from backend) */}
-                      <td className="py-3.5 px-3 sm:px-4 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                      <td className="py-3.5 px-3 font-bold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap align-middle">
                         <div className="flex flex-col items-center justify-center gap-1">
-                          <span className="inline-flex items-center px-2 py-0.5 rounded bg-purple-50 text-[#33077C] border border-purple-200/80 font-mono text-xs font-bold">
-                            {item.proformaNo || "—"}
-                          </span>
+                          <span>{item.proformaNo || "—"}</span>
                           <DocumentLineageBadges
                             docRef={item.proformaNo}
                             currentType="Proforma"
                             sourceDocNo={item.referenceNo}
-                            targetDocNo={resolveConvertedTarget(item)?.no}
-                            targetDocType={resolveConvertedTarget(item)?.type}
+                            targetDocNo={
+                              resolveConvertedTarget(item)?.no ||
+                              (item.status === "Converted"
+                                ? downstreamByProforma[item.proformaNo]?.no
+                                : undefined)
+                            }
+                            targetDocType={
+                              resolveConvertedTarget(item)?.type ||
+                              (item.status === "Converted"
+                                ? downstreamByProforma[item.proformaNo]?.type
+                                : undefined)
+                            }
                             className="justify-center"
                           />
                         </div>
@@ -5237,8 +5300,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                           )}
                         </div>
                         {item.customerPhone && (
-                          <div className="text-[11px] text-slate-400 font-normal mt-0.5">
-                            {item.customerPhone}
+                          <div>
+                            <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight"><Phone className="w-3 h-3 text-[#33077C] shrink-0" />{item.customerPhone}</span>
                           </div>
                         )}
                       </td>

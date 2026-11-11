@@ -370,6 +370,7 @@ export const PurchaseRequestView: React.FC = () => {
 
   // Form Items State
   const [requestItems, setRequestItems] = useState<PurchaseRequestItem[]>([]);
+  const [purchaseRequestManualNo, setPurchaseRequestManualNo] = useState('');
   const [requestDate, setRequestDate] = useState(new Date().toISOString().split('T')[0]);
   const [requiredDate, setRequiredDate] = useState(new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0]);
 
@@ -425,9 +426,10 @@ export const PurchaseRequestView: React.FC = () => {
       const extra = collectErrors([
         ['requestedBy', checkRequiredText(values.requestedBy, 'name of the person requesting', 2)],
         ['department', checkRequiredSelection(values.department, 'department')],
+        ['supplierId', checkRequiredSelection(values.supplierId, 'supplier')],
       ]);
       const errs: any = { ...(base.errors || {}) };
-      for (const k of ['requestedBy', 'department']) {
+      for (const k of ['requestedBy', 'department', 'supplierId']) {
         if (extra[k]) errs[k] = { type: 'validate', message: extra[k] };
         else delete errs[k];
       }
@@ -564,6 +566,7 @@ export const PurchaseRequestView: React.FC = () => {
   // Open Create Modal
   const handleOpenCreateModal = () => {
     setEditingRequest(null); resetLineErrors();
+    setPurchaseRequestManualNo('');
     reset({
       requestNo: '',
       requestedBy: getLoggedInUserName(),
@@ -582,6 +585,7 @@ export const PurchaseRequestView: React.FC = () => {
   // Open Edit Modal
   const handleOpenEditModal = (req: PurchaseRequest) => {
     setEditingRequest(req); resetLineErrors();
+    setPurchaseRequestManualNo(req.purchaseRequestManualNo || '');
     reset({
       requestNo: req.requestNo,
       requestedBy: req.requestedBy || '',
@@ -615,6 +619,7 @@ export const PurchaseRequestView: React.FC = () => {
   // Duplicate Request: Populates the form with existing fields & items so the user can review/edit before saving
   const handleDuplicateRequest = (req: PurchaseRequest) => {
     setEditingRequest(null); resetLineErrors();
+    setPurchaseRequestManualNo('');
     reset({
       requestNo: '',
       requestedBy: req.requestedBy || getLoggedInUserName(),
@@ -739,6 +744,7 @@ export const PurchaseRequestView: React.FC = () => {
         const updatePayload = mapUiToUpdatePayload({
           ...editingRequest,
           requestNo: data.requestNo,
+          purchaseRequestManualNo,
           requestedBy: data.requestedBy,
           department: data.department,
           requiredDate: requiredDate,
@@ -774,6 +780,7 @@ export const PurchaseRequestView: React.FC = () => {
           {
             supplierId: data.supplierId || undefined,
             requestNo: data.requestNo,
+            purchaseRequestManualNo,
             requestDate,
             requestedBy: data.requestedBy,
             department: data.department,
@@ -1436,7 +1443,7 @@ export const PurchaseRequestView: React.FC = () => {
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
             <CommonTableHead
               columns={[
-                { label: "REQUEST NO.", align: "left", minWidth: "140px" },
+                { label: "REQUEST NO.", align: "center", minWidth: "140px" },
                 { label: "DATE", align: "left", minWidth: "120px" },
                 { label: "REQUESTED BY", align: "left", minWidth: "160px" },
                 { label: "DEPARTMENT", align: "left", minWidth: "140px" },
@@ -1467,13 +1474,10 @@ export const PurchaseRequestView: React.FC = () => {
                 paginatedRequests.map((req) => (
                   <tr key={req.id} className="hover:bg-slate-50/80 transition-colors border-b border-slate-200 font-sans">
                     {/* 1. Request No */}
-                    <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-[#33077C] text-white flex items-center justify-center font-bold text-xs tracking-wider shadow-xs shrink-0 select-none">
-                          PR
-                        </div>
+                    <td className="py-3.5 px-3 font-bold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                      <div className="flex flex-col items-center justify-center gap-1">
                         <span
-                          className="font-bold text-[#33077C] text-xs sm:text-[14px] cursor-pointer hover:underline"
+                          className="cursor-pointer hover:underline"
                           onClick={() => handleOpenViewModal(req)}
                         >
                           {req.requestNo}
@@ -1711,6 +1715,19 @@ export const PurchaseRequestView: React.FC = () => {
 
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                Purchase Request No
+              </label>
+              <input
+                type="text"
+                value={purchaseRequestManualNo}
+                onChange={(e) => setPurchaseRequestManualNo(e.target.value)}
+                placeholder="Enter Purchase Request No"
+                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Request Date <span className="text-rose-500">*</span>
               </label>
               <input
@@ -1801,7 +1818,7 @@ export const PurchaseRequestView: React.FC = () => {
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500">
-                  Select Supplier
+                  Select Supplier <span className="text-rose-500">*</span>
                 </label>
                 {isLoadingSuppliers && (
                   <span className="text-[11px] text-purple-600 font-semibold animate-pulse">

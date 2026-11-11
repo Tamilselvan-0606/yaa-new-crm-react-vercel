@@ -51,7 +51,7 @@ export interface SalePaymentRecord {
 export interface SaleTransaction {
   id: string;
   invoiceNo: string;
-  saleInvoiceManualNo?: string;
+  salesInvoiceManualNo?: string;
   invoiceStatus?: 'Draft' | 'Generated' | 'Invoiced';
   referenceNo?: string;
   saleDate: string;
@@ -106,7 +106,7 @@ export type QuotationStatus = 'Open' | 'Converted' | 'Expired' | 'Cancelled';
 export interface SaleQuotation {
   id: string;
   quotationNo: string;
-  estimationManualNo?: string;
+  estimateManualNo?: string;
   referenceNo?: string;
   date: string; // ISO format e.g. "2026-10-01"
   validUntil: string;
@@ -425,6 +425,7 @@ export interface PurchaseRequestItem {
 export interface PurchaseRequest {
   id: string;
   requestNo: string;
+  purchaseRequestManualNo?: string;
   requestDate: string;
   requestedBy: string;
   department: string;
@@ -498,6 +499,7 @@ export interface PurchaseOrder {
   purchaseNo: string;
   poNo?: string;
   purchaseInvoiceNo?: string;
+  purchaseBillManualNo?: string;
   supplierId: string;
   supplierName: string;
   supplierCode?: string;
@@ -581,6 +583,7 @@ export interface PurchaseReturnItem {
 export interface PurchaseReturn {
   id: string;
   returnNo: string;
+  purchaseReturnManualNo?: string;
   purchaseNo: string;
   purchaseId: string;
   supplierId: string;
@@ -603,6 +606,7 @@ export type PaymentOutMode = 'Cash' | 'UPI' | 'Card' | 'Bank Transfer' | 'Cheque
 export interface PaymentOut {
   id: string;
   paymentNo: string;
+  paymentOutManualNo?: string;
   paymentDate: string;
   supplierId: string;
   supplierName: string;

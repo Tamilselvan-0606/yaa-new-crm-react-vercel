@@ -33,6 +33,7 @@ import {
   Loader2,
   FileCheck2,
   Download,
+  Phone,
 } from "lucide-react";
 import {
   useSalesManagementStore,
@@ -702,21 +703,21 @@ export const PaymentInView: React.FC = () => {
     const inv = sales.find((s) => s.id === invId);
     if (inv) {
       setSelectedInvoiceNo(inv.invoiceNo);
-      if (!selectedCustomerId) {
+      // Keep customer, amount and remarks in sync with the chosen invoice
+      if (selectedCustomerId !== inv.customerId) {
         setSelectedCustomerId(inv.customerId);
         const cust = customers.find((c) => c.id === inv.customerId);
         if (cust) {
           setSelectedCustomerObj(cust);
           setFormPartyQuery(cust.name);
         } else {
+          setSelectedCustomerObj(null);
           setFormPartyQuery(inv.customerName);
         }
       }
-      if (!formReceivedAmount || Number(formReceivedAmount) <= 0) {
-        const bal = inv.balance > 0 ? inv.balance : inv.grandTotal;
-        setFormReceivedAmount(String(bal));
-      }
-      if (!formDescription) {
+      const bal = inv.balance > 0 ? inv.balance : inv.grandTotal;
+      setFormReceivedAmount(String(bal));
+      if (!formDescription || /^Payment against Invoice /.test(formDescription)) {
         setFormDescription(`Payment against Invoice ${inv.invoiceNo}`);
       }
     }
@@ -1390,7 +1391,6 @@ export const PaymentInView: React.FC = () => {
             description: formDescription.trim() || undefined,
             notes: formDescription.trim() || undefined,
             imageAttachment: imageAttachment || undefined,
-            status: formStatus || "Completed",
             invoiceNo: selectedInvoiceNo || undefined,
             invoiceId:
               selectedInvoiceId && UUID_REGEX.test(selectedInvoiceId)
@@ -2006,14 +2006,14 @@ export const PaymentInView: React.FC = () => {
                 <CommonTableHead
                   columns={[
                     {
-                      label: "CUSTOMER NAME",
-                      align: "left",
-                      minWidth: "180px",
-                    },
-                    {
                       label: "PAYMENT IN S.NO.",
                       align: "center",
                       minWidth: "120px",
+                    },
+                    {
+                      label: "CUSTOMER NAME",
+                      align: "left",
+                      minWidth: "180px",
                     },
                     { label: "DATE", align: "left", minWidth: "110px" },
                     {
@@ -2057,6 +2057,13 @@ export const PaymentInView: React.FC = () => {
                         key={item.id}
                         className="hover:bg-purple-50/30 transition-colors border-b border-slate-200"
                       >
+                        {/* Receipt No */}
+                        <td className="py-3.5 px-3 font-bold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                          <div className="flex flex-col items-center justify-center gap-1">
+                            <span>{item.receiptNo}</span>
+                          </div>
+                        </td>
+
                         {/* Party Name */}
                         <td className="py-4 px-5 font-semibold text-slate-900 border-r border-slate-200 break-words align-middle">
                           <div className="flex items-center gap-2 flex-wrap">
@@ -2075,21 +2082,17 @@ export const PaymentInView: React.FC = () => {
                             </div>
                           )}
                           {item.customerPhone && (
-                            <div className="text-xs text-slate-400 font-normal">
-                              {item.customerPhone}
+                            <div>
+                              <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight"><Phone className="w-3 h-3 text-[#33077C] shrink-0" />{item.customerPhone}</span>
                             </div>
                           )}
                           {item.invoiceNo && (
-                            <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#33077C] mt-1 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200/60">
-                              <FileCheck2 className="w-3 h-3" />
-                              <span>Inv #{item.invoiceNo}</span>
+                            <div className="inline-flex items-center text-[11px] font-semibold text-[#33077C] mt-1 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200/60 whitespace-nowrap">
+                              {String(item.invoiceNo)
+                                .replace(/^s*(inv(oice)?s*)?#?s*/i, (m) => (/^s*inv-/i.test(m + "x") ? m : ""))
+                                .trim()}
                             </div>
                           )}
-                        </td>
-
-                        {/* Receipt No */}
-                        <td className="py-4 px-4 font-extrabold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap align-middle">
-                          #{item.receiptNo}
                         </td>
 
                         {/* Date */}
@@ -2355,7 +2358,14 @@ export const PaymentInView: React.FC = () => {
                     className={FORM_SELECT_CLS}
                   >
                     <option value="">No Linked Invoice</option>
-                    {sales.map((s) => (
+                    {sales
+                      .filter(
+                        (s) =>
+                          !selectedCustomerId ||
+                          s.customerId === selectedCustomerId ||
+                          s.id === selectedInvoiceId,
+                      )
+                      .map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.invoiceNo} - {s.customerName} (Bal: ₹{s.balance})
                       </option>
@@ -2386,16 +2396,6 @@ export const PaymentInView: React.FC = () => {
                     <FormLabel required className="mb-0">
                       Payment Mode
                     </FormLabel>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setIsAddPaymentTypeOpen(true);
-                      }}
-                      className="text-xs font-semibold text-[#4309A2] hover:underline cursor-pointer"
-                    >
-                      + Add Type
-                    </button>
                   </div>
                   <select
                     value={formPaymentType}

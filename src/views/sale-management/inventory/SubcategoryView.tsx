@@ -685,7 +685,6 @@ export const SubcategoryView: React.FC = () => {
           <table className="w-full text-left border-collapse border border-slate-200">
             <CommonTableHead
               columns={[
-                { label: "S.NO", align: "center", width: "60px" },
                 { label: "CODE", align: "center", width: "110px" },
                 { label: "CATEGORY", align: "left", minWidth: "160px" },
                 { label: "SUBCATEGORY", align: "left", minWidth: "180px" },
@@ -696,7 +695,7 @@ export const SubcategoryView: React.FC = () => {
             <tbody className="divide-y divide-slate-200 text-xs sm:text-[13px] text-slate-700">
               {isLoading ? (
                 <tr>
-                  <td colSpan={6} className="py-16 text-center text-slate-400 font-medium">
+                  <td colSpan={5} className="py-16 text-center text-slate-400 font-medium">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <Loader2 className="w-7 h-7 text-[#33077C] animate-spin" />
                       <span className="text-xs text-slate-500 font-semibold">Loading subcategories...</span>
@@ -705,7 +704,7 @@ export const SubcategoryView: React.FC = () => {
                 </tr>
               ) : pagedSubcategories.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-slate-400 font-medium">
+                  <td colSpan={5} className="py-12 text-center text-slate-400 font-medium">
                     <div className="flex flex-col items-center justify-center gap-1.5">
                       <Layers className="w-8 h-8 text-slate-300 stroke-[1.5]" />
                       <span className="text-sm font-semibold text-slate-600">No subcategories found</span>
@@ -719,7 +718,6 @@ export const SubcategoryView: React.FC = () => {
                 </tr>
               ) : (
                 pagedSubcategories.map((item, index) => {
-                  const sNo = (safePage - 1) * pageSize + index + 1;
                   const isDropdownOpen = activeDropdownId === item.id;
 
                   return (
@@ -727,11 +725,6 @@ export const SubcategoryView: React.FC = () => {
                       key={item.id}
                       className="hover:bg-purple-50/30 transition-colors border-b border-slate-200"
                     >
-                      {/* 1. S.NO */}
-                      <td className="py-3 sm:py-4 px-2 sm:px-3 font-semibold text-slate-600 text-center border-r border-slate-200">
-                        {sNo}
-                      </td>
-
                       {/* CODE */}
                       <td className="py-3 sm:py-4 px-2 sm:px-3 text-center border-r border-slate-200 whitespace-nowrap">
                         <span className="font-mono text-[11px] font-semibold text-slate-600">{item.code || "—"}</span>

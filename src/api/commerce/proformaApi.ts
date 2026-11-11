@@ -37,7 +37,7 @@ export interface ExtendedProformaItem extends SaleProductItem {
 export interface SaleProformaInvoice {
   id: string;
   proformaNo: string;
-  proformaManualNo?: string;
+  proformaInvoiceManualNo?: string;
   referenceNo?: string;
   date: string;
   validUntil: string;
@@ -154,7 +154,7 @@ export const mapApiProformaToSaleProforma = (apiP: ApiProformaInvoice): SaleProf
   return {
     id: apiP.id,
     proformaNo: apiP.proformaNo || (apiP as any).proformaNumber || (apiP as any).proformaCode || (apiP as any).code || (apiP as any).documentNo || '',
-    proformaManualNo: apiP.proformaManualNo || '',
+    proformaInvoiceManualNo: apiP.proformaInvoiceManualNo || '',
     referenceNo: apiP.referenceNo || '',
     date: dateFormatted,
     validUntil: validUntilFormatted,
@@ -234,8 +234,8 @@ export const mapSaleProformaToPayload = (
   if (!isCreate && proforma.proformaNo && proforma.proformaNo.trim()) {
     payload.proformaNo = proforma.proformaNo.trim();
   }
-  if (proforma.proformaManualNo && String(proforma.proformaManualNo).trim()) {
-    payload.proformaManualNo = String(proforma.proformaManualNo).trim();
+  if (proforma.proformaInvoiceManualNo && String(proforma.proformaInvoiceManualNo).trim()) {
+    payload.proformaInvoiceManualNo = String(proforma.proformaInvoiceManualNo).trim();
   }
   if (proforma.referenceNo && proforma.referenceNo.trim()) {
     payload.referenceNo = proforma.referenceNo.trim();
@@ -267,9 +267,6 @@ export const mapSaleProformaToPayload = (
   }
   if (typeof proforma.withGst === 'boolean') {
     payload.withGst = proforma.withGst;
-  }
-  if (proforma.gstType) {
-    payload.gstType = proforma.gstType;
   }
   if (typeof proforma.roundOff === 'number') {
     payload.roundOff = proforma.roundOff;

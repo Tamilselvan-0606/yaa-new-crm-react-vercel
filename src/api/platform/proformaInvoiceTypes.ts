@@ -19,6 +19,7 @@ export interface ProformaInvoiceApiItem {
   id: string;
   proformaNumber: string;
   referenceNumber?: string | null;
+  proformaManualNumber?: string | null;
   invoiceDate: string; // ISO string: '2026-10-06T00:00:00.000Z'
   dueDate: string;
   organizationId: string;
@@ -140,6 +141,7 @@ export interface CreateProformaItemPayload {
 
 export interface CreateProformaRequest {
   proformaNumber?: string;
+  proformaManualNumber?: string;
   /** Shown as the created date; defaults to now on the server. */
   createdDate?: string;
   invoiceDate: string; // YYYY-MM-DD
@@ -160,6 +162,7 @@ export interface CreateProformaRequest {
 }
 
 export interface UpdateProformaRequest {
+  proformaManualNumber?: string;
   createdDate?: string;
   status?: ProformaInvoiceStatus | string;
   invoiceDate?: string;

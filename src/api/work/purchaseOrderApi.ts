@@ -159,6 +159,7 @@ export const mapApiPurchaseOrderToUi = (
     purchaseNo: apiPo.poNo || '',
     poNo: apiPo.poNo,
     purchaseInvoiceNo: apiPo.poNo || '',
+    purchaseBillManualNo: apiPo.purchaseBillManualNo || '',
     supplierId: apiPo.supplierId,
     supplierName: apiPo.supplier?.name || 'Unknown Supplier',
     supplierCode: '',
@@ -216,6 +217,7 @@ export const mapApiPurchaseOrderToUi = (
 export const mapUiToCreatePurchaseOrderPayload = (
   formData: {
     supplierId: string;
+    purchaseBillManualNo?: string;
     dueDate?: string;
     expectedDeliveryDate?: string;
     discount?: number;
@@ -252,6 +254,10 @@ export const mapUiToCreatePurchaseOrderPayload = (
     payload.expectedDeliveryDate = deliveryDate;
   }
 
+  if (formData.purchaseBillManualNo && formData.purchaseBillManualNo.trim()) {
+    payload.purchaseBillManualNo = formData.purchaseBillManualNo.trim();
+  }
+
   if (Number(formData.paidAmount) > 0) {
     payload.paidAmount = Number(formData.paidAmount);
   }
@@ -269,6 +275,7 @@ export const mapUiToCreatePurchaseOrderPayload = (
  */
 export const mapUiToUpdatePurchaseOrderPayload = (
   formData: {
+    purchaseBillManualNo?: string;
     dueDate?: string;
     expectedDeliveryDate?: string;
     discount?: number;

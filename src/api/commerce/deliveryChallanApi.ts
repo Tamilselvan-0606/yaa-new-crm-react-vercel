@@ -260,9 +260,6 @@ export const mapDeliveryChallanRecordToPayload = (
   if (challan.invoiceDate) {
     payload.invoiceDate = challan.invoiceDate.includes('T') ? challan.invoiceDate.split('T')[0] : challan.invoiceDate;
   }
-  if (challan.dueDate) {
-    payload.dueDate = challan.dueDate.includes('T') ? challan.dueDate.split('T')[0] : challan.dueDate;
-  }
   if (challan.customerId && challan.customerId.trim()) {
     payload.customerId = challan.customerId.trim();
   }
@@ -283,9 +280,6 @@ export const mapDeliveryChallanRecordToPayload = (
   }
   if (typeof challan.withGst === 'boolean') {
     payload.withGst = challan.withGst;
-  }
-  if (challan.gstType) {
-    payload.gstType = challan.gstType;
   }
   if (typeof challan.roundOff === 'number' && !isNaN(challan.roundOff)) {
     payload.roundOff = Number(challan.roundOff.toFixed(2));

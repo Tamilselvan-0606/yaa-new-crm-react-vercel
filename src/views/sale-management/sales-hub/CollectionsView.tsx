@@ -2193,9 +2193,11 @@ export const CollectionsView: React.FC = () => {
                                 </span>
                               )}
                             </div>
-                            <span className="text-[11px] text-slate-500 font-mono mt-0.5">
-                              {item.customerPhone}
-                            </span>
+                            {item.customerPhone && item.customerPhone !== "N/A" && (
+                              <div>
+                                <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight"><Phone className="w-3 h-3 text-[#33077C] shrink-0" />{item.customerPhone}</span>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>

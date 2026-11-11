@@ -119,6 +119,8 @@ import {
   normalizeCommercePaymentType,
   quotationApi,
   commerceSaleOrderApi,
+  commerceDeliveryChallanApi,
+  commerceProformaApi,
   clientProductApi,
 } from "../../../api";
 import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
@@ -939,6 +941,7 @@ export const SalesView: React.FC = () => {
 
       setFormData({
         invoiceNo: "",
+        salesInvoiceManualNo: "",
         referenceNo: convertData.sourceNo || convertData.referenceNo || "",
         saleDate: new Date().toISOString().split("T")[0],
         dueDate:
@@ -1545,7 +1548,7 @@ export const SalesView: React.FC = () => {
   // Form State for Create / Edit
   const [formData, setFormData] = useState<{
     invoiceNo: string;
-    saleInvoiceManualNo: string;
+    salesInvoiceManualNo: string;
     invoiceStatus: "Draft" | "Generated" | "Invoiced";
     referenceNo: string;
     saleDate: string;
@@ -1582,7 +1585,7 @@ export const SalesView: React.FC = () => {
     notes: string;
   }>({
     invoiceNo: "",
-    saleInvoiceManualNo: "",
+    salesInvoiceManualNo: "",
     invoiceStatus: "Draft",
     referenceNo: "",
     saleDate: new Date().toISOString().split("T")[0],
@@ -1937,7 +1940,7 @@ export const SalesView: React.FC = () => {
 
     setFormData({
       invoiceNo: "",
-      saleInvoiceManualNo: "",
+      salesInvoiceManualNo: "",
       referenceNo: "",
       saleDate: new Date().toISOString().split("T")[0],
       dueDate: new Date(Date.now() + 15 * 86400000).toISOString().split("T")[0],
@@ -2017,7 +2020,7 @@ export const SalesView: React.FC = () => {
 
     setFormData({
       invoiceNo: sale.invoiceNo,
-      saleInvoiceManualNo: sale.saleInvoiceManualNo || "",
+      salesInvoiceManualNo: sale.salesInvoiceManualNo || "",
       referenceNo: sale.referenceNo || "",
       saleDate: sale.saleDate,
       dueDate: sale.dueDate,
@@ -2074,7 +2077,7 @@ export const SalesView: React.FC = () => {
       .split("T")[0];
     setFormData({
       invoiceNo: "",
-      saleInvoiceManualNo: "",
+      salesInvoiceManualNo: "",
       referenceNo: "",
       saleDate: today,
       dueDate,
@@ -3210,7 +3213,7 @@ export const SalesView: React.FC = () => {
       const salePayload: SaleTransaction = {
         id: isEdit ? editingSale!.id : `sale_${Date.now()}`,
         invoiceNo: isEdit ? formData.invoiceNo : "",
-        saleInvoiceManualNo: formData.saleInvoiceManualNo.trim() || undefined,
+        salesInvoiceManualNo: (formData.salesInvoiceManualNo || "").trim() || undefined,
         invoiceStatus: "Generated",
         referenceNo: formData.referenceNo || undefined,
         saleDate: formData.saleDate,
@@ -3261,7 +3264,18 @@ export const SalesView: React.FC = () => {
         updatedAt: new Date().toISOString(),
       };
 
-      const apiPayload = mapSaleTransactionToInvoicePayload(salePayload);
+      // Only send values the user actually entered (no silent defaults)
+      const apiPayload = mapSaleTransactionToInvoicePayload({
+        ...salePayload,
+        dueDate: "",
+        paymentTerms: "",
+        shippingAddress: formData.shippingAddress || "",
+        shippingCharges: Number(formData.shippingCharges) || (undefined as any),
+        otherCharges: Number(formData.otherCharges) || (undefined as any),
+        // On create the payment is recorded right after as Payment In receipt(s); sending the splits
+        // here as well would make the backend count the same money twice (paid = 2x total).
+        ...(isEdit ? {} : { paymentSplits: [] }),
+      });
 
       let savedApiSale: SaleTransaction;
       if (isEdit) {
@@ -3536,6 +3550,13 @@ export const SalesView: React.FC = () => {
         if (srcType === "Proforma" || refNo.startsWith("PRO-")) {
           const proformaId = srcId || "";
           const proformaNo = srcInfo?.sourceNo || refNo;
+          if (proformaId && UUID_REGEX.test(proformaId)) {
+            try {
+              await commerceProformaApi.updateStatus(proformaId, "Converted");
+            } catch (pfErr) {
+              console.warn("Backend proforma status update notice:", pfErr);
+            }
+          }
           syncProformaStatusInStorage(proformaId || proformaNo, "Converted", {
             type: "Invoice",
             documentNo: savedApiSale.invoiceNo,
@@ -3563,6 +3584,14 @@ export const SalesView: React.FC = () => {
         if (srcType === "Challan" || refNo.startsWith("DC-")) {
           const challanId = srcId || "";
           const challanNo = srcInfo?.sourceNo || refNo;
+          // Mark the source delivery challan as Converted in the backend
+          if (challanId && UUID_REGEX.test(challanId)) {
+            try {
+              await commerceDeliveryChallanApi.updateStatus(challanId, "Converted");
+            } catch (dcErr) {
+              console.warn("Backend challan status update notice:", dcErr);
+            }
+          }
           recordDocumentConversion({
             fromType: "Challan",
             fromId: challanId || undefined,
@@ -3577,6 +3606,9 @@ export const SalesView: React.FC = () => {
           dispatch(
             baseApi.util.invalidateTags([
               { type: "DeliveryChallan", id: "LIST" },
+              ...(challanId && UUID_REGEX.test(challanId)
+                ? [{ type: "DeliveryChallan" as const, id: challanId }]
+                : []),
             ]),
           );
         }
@@ -3655,7 +3687,7 @@ export const SalesView: React.FC = () => {
       const salePayload: SaleTransaction = {
         id: isEdit ? editingSale!.id : `sale_${Date.now()}`,
         invoiceNo: isEdit ? formData.invoiceNo : "",
-        saleInvoiceManualNo: formData.saleInvoiceManualNo.trim() || undefined,
+        salesInvoiceManualNo: (formData.salesInvoiceManualNo || "").trim() || undefined,
         invoiceStatus: formData.invoiceStatus || "Draft",
         referenceNo: formData.referenceNo || undefined,
         saleDate: formData.saleDate,
@@ -3699,7 +3731,15 @@ export const SalesView: React.FC = () => {
         updatedAt: new Date().toISOString(),
       };
 
-      const apiPayload = mapSaleTransactionToInvoicePayload(salePayload);
+      // Only send values the user actually entered (no silent defaults)
+      const apiPayload = mapSaleTransactionToInvoicePayload({
+        ...salePayload,
+        dueDate: "",
+        paymentTerms: "",
+        shippingAddress: formData.shippingAddress || "",
+        shippingCharges: Number(formData.shippingCharges) || (undefined as any),
+        otherCharges: Number(formData.otherCharges) || (undefined as any),
+      });
 
       let savedApiSale: SaleTransaction;
       if (isEdit) {
@@ -3911,7 +3951,7 @@ export const SalesView: React.FC = () => {
       targetSale = {
         ...editingSale,
         invoiceNo: formData.invoiceNo,
-        saleInvoiceManualNo: formData.saleInvoiceManualNo.trim() || undefined,
+        salesInvoiceManualNo: (formData.salesInvoiceManualNo || "").trim() || undefined,
         invoiceStatus: "Generated",
         referenceNo: formData.referenceNo,
         saleDate: formData.saleDate,
@@ -3959,7 +3999,7 @@ export const SalesView: React.FC = () => {
       targetSale = {
         id: `sale_${Date.now()}`,
         invoiceNo: formData.invoiceNo || "",
-        saleInvoiceManualNo: formData.saleInvoiceManualNo.trim() || undefined,
+        salesInvoiceManualNo: (formData.salesInvoiceManualNo || "").trim() || undefined,
         invoiceStatus: "Generated",
         referenceNo: formData.referenceNo,
         saleDate: formData.saleDate,
@@ -4907,7 +4947,7 @@ export const SalesView: React.FC = () => {
                 {/* Row 1, Col 2: Customer Name */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Customer Name <span className="text-slate-500">*</span>
+                    Customer Name
                   </label>
                   <input
                     type="text"
@@ -4950,11 +4990,11 @@ export const SalesView: React.FC = () => {
                   </label>
                   <input
                     type="text"
-                    value={formData.saleInvoiceManualNo}
+                    value={formData.salesInvoiceManualNo || ""}
                     onChange={(e) =>
                       setFormData({
                         ...formData,
-                        saleInvoiceManualNo: e.target.value,
+                        salesInvoiceManualNo: e.target.value,
                       })
                     }
                     placeholder="Enter Invoice No"
@@ -4962,29 +5002,10 @@ export const SalesView: React.FC = () => {
                   />
                 </div>
 
-                {/* Row 2, Col 1: Reference Number */}
-                <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Reference Number (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.referenceNo}
-                    onChange={(e) =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        referenceNo: e.target.value,
-                      }))
-                    }
-                    placeholder="Optional"
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                  />
-                </div>
-
                 {/* Row 2, Col 2: Date */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Date <span className="text-slate-500">*</span>
+                    Date
                   </label>
                   <div className="relative flex items-center">
                     <input
@@ -5029,7 +5050,7 @@ export const SalesView: React.FC = () => {
                 {/* Row 2, Col 3: Expiry Date */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Expiry Date <span className="text-slate-500">*</span>
+                    Expiry Date
                   </label>
                   <div className="relative flex items-center">
                     <input
@@ -5072,8 +5093,7 @@ export const SalesView: React.FC = () => {
                 {/* Row 3, Col 1: Email Communications */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Email Communications{" "}
-                    <span className="text-slate-500">*</span>
+                    Email Communications
                   </label>
                   <input
                     type="email"
@@ -5109,7 +5129,7 @@ export const SalesView: React.FC = () => {
                 {/* Row 3, Col 3: Address */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Address <span className="text-slate-500">*</span>
+                    Address
                   </label>
                   <input
                     type="text"
@@ -7188,8 +7208,8 @@ export const SalesView: React.FC = () => {
                   columns={[
                     {
                       label: "INVOICE S.NO.",
-                      align: "left",
-                      minWidth: "150px",
+                      align: "center",
+                      minWidth: "140px",
                     },
                     { label: "CUSTOMER", align: "left", minWidth: "180px" },
                     {
@@ -7282,30 +7302,20 @@ export const SalesView: React.FC = () => {
                           className="hover:bg-slate-50/80 transition-colors border-b border-slate-200 font-sans"
                         >
                           {/* 1. Invoice No. */}
-                          <td className="py-4 px-5 border border-slate-200 whitespace-nowrap align-middle">
-                            <div className="flex items-center gap-3">
-                              <div className="w-10 h-10 rounded-full bg-[#33077C] text-white flex items-center justify-center font-bold text-xs tracking-wider shadow-xs shrink-0 select-none">
-                                {initials}
-                              </div>
-                              <div className="flex flex-col">
-                                <span
-                                  className="font-bold text-[#33077C] text-xs sm:text-[14px] cursor-pointer hover:underline"
-                                  onClick={() => handleOpenViewInvoice(sale)}
-                                >
-                                  {sale.invoiceNo}
-                                </span>
-                                {sale.referenceNo && (
-                                  <span className="text-[11px] text-slate-400 font-medium mt-0.5">
-                                    Ref: {sale.referenceNo}
-                                  </span>
-                                )}
-                                <DocumentLineageBadges
-                                  docRef={sale.invoiceNo}
-                                  sourceDocNo={sale.referenceNo}
-                                  currentType="Invoice"
-                                  className="justify-start mt-1"
-                                />
-                              </div>
+                          <td className="py-3.5 px-3 font-bold text-slate-800 text-center border border-slate-200 whitespace-nowrap align-middle">
+                            <div className="flex flex-col items-center justify-center gap-1">
+                              <span
+                                className="cursor-pointer hover:underline"
+                                onClick={() => handleOpenViewInvoice(sale)}
+                              >
+                                {sale.invoiceNo}
+                              </span>
+                              <DocumentLineageBadges
+                                docRef={sale.invoiceNo}
+                                sourceDocNo={sale.referenceNo}
+                                currentType="Invoice"
+                                className="justify-center"
+                              />
                             </div>
                           </td>
 
@@ -7326,9 +7336,16 @@ export const SalesView: React.FC = () => {
                                     </span>
                                   )}
                                 </div>
-                                <span className="text-[10px] text-slate-400 font-medium block">
-                                  {sale.customerCompany || "Direct Customer"}
-                                </span>
+                                {sale.customerCompany && (
+                                  <span className="text-[10px] text-slate-400 font-medium block">
+                                    {sale.customerCompany}
+                                  </span>
+                                )}
+                                {sale.customerPhone && (
+                                  <div>
+                                    <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight"><Phone className="w-3 h-3 text-[#33077C] shrink-0" />{sale.customerPhone}</span>
+                                  </div>
+                                )}
                               </div>
                             </div>
                           </td>

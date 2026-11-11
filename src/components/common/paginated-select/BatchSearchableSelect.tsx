@@ -111,9 +111,9 @@ export const BatchSearchableSelect: React.FC<BatchSearchableSelectProps> = ({
 
   // Custom batch option
   const staticOptions: SearchableOption[] = useMemo(() => {
-    if (!allowCustomBatch) return [];
-    return [{ value: '__enter_custom_batch__', label: '+ Enter Custom Batch...' }];
-  }, [allowCustomBatch]);
+    // Custom batch entry is not offered anywhere: only existing batches can be picked.
+    return [];
+  }, []);
 
   return (
     <SearchableSelect

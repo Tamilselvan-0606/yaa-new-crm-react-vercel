@@ -40,6 +40,8 @@ export interface InvoicePaymentDetails {
 export interface SavedInvoice {
   id: string;
   invoiceNumber: string;
+  /** User-entered number (proformaManualNumber / invoiceManualNumber from the API). */
+  manualNumber?: string;
   invoiceDate: string;
   dueDate: string;
   referenceNumbers: string[];

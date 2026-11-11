@@ -466,7 +466,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
       purchasePrice: "",
       purchasePriceTaxType: "Excluded",
       taxRate: "None",
-      minStockAlert: "10",
+      minStockAlert: "",
       openingStock: "",
       location: "",
       batchNo: "",
@@ -695,7 +695,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
         purchasePrice: "",
         purchasePriceTaxType: "Excluded",
         taxRate: "None",
-        minStockAlert: "10",
+        minStockAlert: "",
         openingStock: "",
         location: "",
         batchNo: "",
@@ -977,7 +977,6 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
         if (data.expDate && data.expDate.trim()) payload.expDate = data.expDate.trim();
       }
 
-      payload.status = "Active";
 
       const res = await productApi.createProduct(payload as unknown as CreateProductPayload);
       if (res?.success && res.data) {

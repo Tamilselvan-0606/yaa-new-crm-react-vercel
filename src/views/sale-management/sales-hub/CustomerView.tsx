@@ -2621,10 +2621,11 @@ export const CustomerView: React.FC = () => {
                       {/* 3. Contact Info */}
                       <td className="py-3.5 px-3 align-middle">
                         <div className="space-y-0.5 text-xs">
-                          <p className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300">
-                            <Phone className="w-3 h-3 text-slate-400 flex-shrink-0" />
-                            {cust.phone}
-                          </p>
+                          {cust.phone && (
+                            <div>
+                              <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight"><Phone className="w-3 h-3 text-[#33077C] shrink-0" />{cust.phone}</span>
+                            </div>
+                          )}
                           <p className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400 truncate max-w-[170px]">
                             <Mail className="w-3 h-3 text-slate-400 flex-shrink-0" />
                             {cust.email}

@@ -503,6 +503,7 @@ export type ExpenseFormData = z.infer<typeof ExpenseSchema>;
 
 export const PaymentOutSchema = z.object({
   paymentNo: z.string().optional(),
+  paymentOutManualNo: z.string().trim().optional(),
   supplierId: z.string().min(1, "Supplier is required"),
   amount: z.union([
     z.number().positive("Payment amount must be greater than 0"),
@@ -526,7 +527,7 @@ export const PurchaseRequestSchema = z.object({
   requestedBy: z.string().trim().min(2, "Requester name is required"),
   department: z.string().min(1, "Department is required"),
   priority: z.enum(["Low", "Medium", "High", "Urgent"]),
-  supplierId: z.string().trim().optional(),
+  supplierId: z.string().trim().min(1, "Supplier is required"),
   supplierName: z.string().trim().optional(),
   notes: z.string().trim().optional(),
 });

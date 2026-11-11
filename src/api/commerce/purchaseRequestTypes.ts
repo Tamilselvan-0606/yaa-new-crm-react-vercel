@@ -24,6 +24,7 @@ export interface ApiPurchaseRequestSupplier {
 export interface ApiPurchaseRequest {
   id: string;
   requestNo: string;
+  purchaseRequestManualNo?: string | null;
   supplierId?: string | null;
   supplier?: ApiPurchaseRequestSupplier | null;
   requestDate: string;
@@ -116,9 +117,10 @@ export interface PurchaseRequestDeleteResponse {
 export interface CreatePurchaseRequestPayload {
   supplierId?: string;
   requestNo?: string;
+  purchaseRequestManualNo?: string;
   requestDate?: string;
   requestedBy: string;
-  department: string;
+  department?: string;
   requiredDate?: string;
   priority: string;
   status?: string;
@@ -140,6 +142,7 @@ export interface CreatePurchaseRequestPayload {
 export interface UpdatePurchaseRequestPayload {
   /** Only sent when the user picked a different supplier. */
   supplierId?: string;
+  purchaseRequestManualNo?: string;
   department?: string;
   requiredDate?: string;
   priority?: string;

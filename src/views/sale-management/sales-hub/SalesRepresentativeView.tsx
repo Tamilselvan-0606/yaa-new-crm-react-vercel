@@ -1309,10 +1309,16 @@ export const SalesRepresentativeView: React.FC = () => {
                             <span className="block font-bold text-slate-900 text-xs sm:text-[13px]">
                               {rep.name}
                             </span>
-                            <span className="text-[11px] text-slate-500 font-normal block mt-0.5">
-                              {rep.mobile}
-                              {rep.designation ? ` - ${rep.designation}` : ""}
-                            </span>
+                            {rep.mobile && (
+                              <div>
+                                <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight"><Phone className="w-3 h-3 text-[#33077C] shrink-0" />{rep.mobile}</span>
+                              </div>
+                            )}
+                            {rep.designation && (
+                              <span className="text-[11px] text-slate-500 font-normal block mt-0.5">
+                                {rep.designation}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </td>

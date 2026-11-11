@@ -1390,11 +1390,11 @@ export const SupplierView: React.FC = () => {
                                   toast.success(`Copied phone: ${sup.phone}`);
                                 }
                               }}
-                              className="flex items-center gap-1.5 text-slate-700 hover:text-[#33077C] transition-colors cursor-pointer group text-left"
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 hover:bg-purple-50 text-slate-800 hover:text-[#33077C] text-[11px] font-semibold font-mono tracking-tight transition-colors cursor-pointer text-left"
                               title={`Click to copy phone: ${sup.phone}`}
                             >
-                              <Phone className="w-3.5 h-3.5 text-slate-400 group-hover:text-[#33077C] shrink-0" />
-                              <span className="font-medium">{sup.phone}</span>
+                              <Phone className="w-3 h-3 text-[#33077C] shrink-0" />
+                              <span>{sup.phone}</span>
                             </button>
                           ) : null}
                           {sup.email ? (

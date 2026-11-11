@@ -205,15 +205,17 @@ export const useAutoCapitalizeFirstLetter = (enabled: boolean = true) => {
 };
 
 /**
- * Sale Management Auto-Capitalize Provider Component.
- * Automatically enables real-time first-letter capitalization whenever
- * the user is on any `/sale-management/*` route.
+ * Auto-Capitalize Provider Component.
+ * Enables real-time first-letter capitalization on every screen of the signed-in app:
+ * Sale Management (`/sale-management/*`) and Client Management (all other routes).
+ * Email, phone, password, number, date, URL and read-only fields are skipped by `isExcludedInput`.
+ * (Name kept for backwards compatibility; it is mounted once in App.tsx.)
  */
 export const SaleManagementAutoCapitalize: React.FC = () => {
-  const location = useLocation();
-  const isSaleManagement = location.pathname.startsWith('/sale-management');
+  // useLocation keeps this re-evaluating on navigation so the listener stays attached.
+  useLocation();
 
-  useAutoCapitalizeFirstLetter(isSaleManagement);
+  useAutoCapitalizeFirstLetter(true);
 
   return null;
 };

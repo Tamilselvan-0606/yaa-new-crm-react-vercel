@@ -87,7 +87,7 @@ export interface ApiSalesInvoice {
   deletedAt?: string | null;
   customer?: ApiSalesInvoiceCustomer | null;
   invoiceNo: string;
-  saleInvoiceManualNo?: string | null;
+  salesInvoiceManualNo?: string | null;
   invoiceStatus?: 'Draft' | 'Generated' | 'Invoiced' | string;
   referenceNo?: string | null;
   saleDate?: string | null;
@@ -256,7 +256,7 @@ export interface CommerceCreateInvoiceItemPayload {
  */
 export interface CreateInvoicePayload {
   invoiceNo?: string;
-  saleInvoiceManualNo?: string;
+  salesInvoiceManualNo?: string;
   invoiceStatus?: 'Draft' | 'Generated' | 'Invoiced';
   referenceNo?: string;
   saleDate: string;

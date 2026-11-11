@@ -240,6 +240,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
   // Column 1: Invoice Number & Description
   const [invoiceNumber, setInvoiceNumber] = useState(invoiceToEdit?.invoiceNumber || '');
+  const [manualNumber, setManualNumber] = useState(invoiceToEdit?.manualNumber || '');
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
   const [createdDate, setCreatedDate] = useState(new Date().toISOString().split('T')[0]);
   const [dueDate, setDueDate] = useState(() => {
@@ -975,6 +976,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const handleAddNewSaleReset = () => {
     setSaleMode('new');
     setInvoiceNumber('');
+    setManualNumber('');
     setInvoiceDate(new Date().toISOString().split('T')[0]);
     setInvoiceDescription('');
     setReferenceNumbers(['']);
@@ -1224,7 +1226,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               <div className="space-y-2">
                 <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
                   <label className="text-[12px] font-bold text-slate-800">
-                    {isProforma ? 'Proforma Number' : 'Invoice Number'}
+                    {isProforma ? 'Proforma Serial Number' : 'Invoice Serial Number'}
                   </label>
                   <input
                     type="text"
@@ -1233,6 +1235,19 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                     disabled
                     placeholder="Auto-generated"
                     className="w-full max-w-[240px] h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 outline-none shadow-2xs font-mono cursor-not-allowed select-none"
+                  />
+                </div>
+
+                <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                  <label className="text-[12px] font-bold text-slate-800">
+                    {isProforma ? 'Proforma Number' : 'Invoice Number'}
+                  </label>
+                  <input
+                    type="text"
+                    value={manualNumber}
+                    onChange={(e) => setManualNumber(e.target.value)}
+                    placeholder={isProforma ? 'Enter proforma number' : 'Enter invoice number'}
+                    className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
                   />
                 </div>
 
@@ -1855,6 +1870,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                         setIsSubmitting(true);
                         if (invoiceToEdit) {
                           const updatePayload: UpdateProformaRequest = {
+                            proformaManualNumber: manualNumber.trim() || undefined,
                             createdDate: createdDate || undefined,
                             invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
                             dueDate: dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
@@ -1883,6 +1899,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
                           const createPayload: CreateProformaRequest = {
                             proformaNumber: invoiceNumber.trim() || undefined,
+                            proformaManualNumber: manualNumber.trim() || undefined,
                             createdDate: createdDate || undefined,
                             sourceQuoteId: convertedFromQuoteId || undefined,
                             invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
@@ -1959,6 +1976,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
                       if (invoiceToEdit) {
                         const updatePayload: UpdateInvoiceRequest = {
+                          invoiceManualNumber: manualNumber.trim() || undefined,
                           createdDate: createdDate || undefined,
                           dueDate: dueDate || (invoiceDate ? new Date(new Date(invoiceDate).getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] : undefined),
                           notes: invoiceDescription || undefined,
@@ -1980,6 +1998,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                       } else {
                         const createPayload: CreateInvoiceRequest = {
                           invoiceNumber: invoiceNumber.trim() || undefined,
+                          invoiceManualNumber: manualNumber.trim() || undefined,
                           createdDate: createdDate || undefined,
                           sourceProformaId: convertedFromProformaId || undefined,
                           invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],

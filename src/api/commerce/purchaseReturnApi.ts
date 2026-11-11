@@ -74,6 +74,7 @@ export const mapApiPurchaseReturnToUi = (
   return {
     id: apiRet.id,
     returnNo: apiRet.returnNo || '',
+    purchaseReturnManualNo: apiRet.purchaseReturnManualNo || '',
     purchaseId: apiRet.purchaseId || '',
     purchaseNo: apiRet.purchaseNo || '',
     supplierId: apiRet.supplierId || '',
@@ -99,6 +100,7 @@ export const mapApiPurchaseReturnToUi = (
 export const mapUiToCreatePayload = (
   data: {
     returnNo?: string;
+    purchaseReturnManualNo?: string;
     purchaseId?: string;
     purchaseNo?: string;
     supplierId: string;
@@ -124,7 +126,7 @@ export const mapUiToCreatePayload = (
       returnQuantity: Math.max(0, Number(it.returnQuantity) || 0),
       unitPrice: Number(it.unitPrice) || 0,
       returnAmount: retAmt,
-      reason: it.reason || 'Damaged',
+      reason: it.reason || undefined,
       remarks: it.remarks?.trim() || undefined,
     };
   });
@@ -133,14 +135,15 @@ export const mapUiToCreatePayload = (
 
   const payload: CreatePurchaseReturnPayload = {
     returnNo: data.returnNo?.trim() || undefined,
+    purchaseReturnManualNo: data.purchaseReturnManualNo?.trim() || undefined,
     purchaseNo: data.purchaseNo?.trim() || undefined,
     supplierId: ensureValidUuid(data.supplierId),
     supplierName: data.supplierName?.trim() || undefined,
-    returnDate: data.returnDate || new Date().toISOString().split('T')[0],
+    returnDate: data.returnDate || undefined,
     items: lineItems,
     returnAmount: totalReturnAmount,
-    refundStatus: data.refundStatus || 'Supplier Credit',
-    returnStatus: data.returnStatus || 'Requested',
+    refundStatus: data.refundStatus || undefined,
+    returnStatus: data.returnStatus || undefined,
     notes: data.notes?.trim() || undefined,
   };
 
@@ -160,6 +163,9 @@ export const mapUiToUpdatePayload = (
 ): UpdatePurchaseReturnPayload => {
   const payload: UpdatePurchaseReturnPayload = {};
 
+  if (ret.purchaseReturnManualNo && ret.purchaseReturnManualNo.trim()) {
+    payload.purchaseReturnManualNo = ret.purchaseReturnManualNo.trim();
+  }
   if (ret.returnDate) payload.returnDate = ret.returnDate;
   if (ret.refundStatus) payload.refundStatus = ret.refundStatus;
   if (ret.returnStatus) payload.returnStatus = ret.returnStatus;
@@ -174,7 +180,7 @@ export const mapUiToUpdatePayload = (
       returnQuantity: Math.max(0, Number(it.returnQuantity) || 0),
       unitPrice: Number(it.unitPrice) || 0,
       returnAmount: Number(it.returnAmount) || 0,
-      reason: it.reason || 'Damaged',
+      reason: it.reason || undefined,
       remarks: it.remarks?.trim() || undefined,
     }));
   }

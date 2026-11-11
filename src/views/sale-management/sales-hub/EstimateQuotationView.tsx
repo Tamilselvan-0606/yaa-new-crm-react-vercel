@@ -520,7 +520,7 @@ export interface EstimateTabItem {
     customerCompany: string;
     billingAddress: string;
     quotationNo: string;
-    estimationManualNo: string;
+    estimateManualNo: string;
     referenceNo: string;
     date: string;
     validUntil: string;
@@ -733,7 +733,7 @@ export const EstimateQuotationView: React.FC = () => {
     customerCompany: "",
     billingAddress: "",
     quotationNo: "",
-    estimationManualNo: "",
+    estimateManualNo: "",
     referenceNo: "",
     date: new Date().toISOString().split("T")[0],
     validUntil: new Date(Date.now() + 30 * 86400000)
@@ -774,7 +774,7 @@ export const EstimateQuotationView: React.FC = () => {
         customerCompany: "",
         billingAddress: "",
         quotationNo: "",
-        estimationManualNo: "",
+        estimateManualNo: "",
         referenceNo: "",
         date: new Date().toISOString().split("T")[0],
         validUntil: new Date(Date.now() + 30 * 86400000)
@@ -1475,7 +1475,7 @@ export const EstimateQuotationView: React.FC = () => {
       customerCompany: "",
       billingAddress: "",
       quotationNo: defaultNo,
-      estimationManualNo: "",
+      estimateManualNo: "",
       referenceNo: "",
       date: new Date().toISOString().split("T")[0],
       validUntil: new Date(Date.now() + 30 * 86400000)
@@ -1647,7 +1647,7 @@ export const EstimateQuotationView: React.FC = () => {
       customerCompany: targetQuot.customerCompany || "",
       billingAddress: targetQuot.billingAddress || "",
       quotationNo: targetQuot.quotationNo || "",
-      estimationManualNo: targetQuot.estimationManualNo || "",
+      estimateManualNo: targetQuot.estimateManualNo || "",
       referenceNo: targetQuot.referenceNo || "",
       date: targetQuot.date || "",
       validUntil: targetQuot.validUntil || "",
@@ -2174,9 +2174,9 @@ export const EstimateQuotationView: React.FC = () => {
             isEditing && formData.quotationNo
               ? formData.quotationNo.trim()
               : undefined,
-          estimationManualNo:
-            formData.estimationManualNo && formData.estimationManualNo.trim()
-              ? formData.estimationManualNo.trim()
+          estimateManualNo:
+            formData.estimateManualNo && formData.estimateManualNo.trim()
+              ? formData.estimateManualNo.trim()
               : undefined,
           referenceNo:
             formData.referenceNo && formData.referenceNo.trim()
@@ -3843,11 +3843,11 @@ export const EstimateQuotationView: React.FC = () => {
                   </span>
                   <input
                     type="text"
-                    value={formData.estimationManualNo}
+                    value={formData.estimateManualNo}
                     onChange={(e) =>
                       setFormData({
                         ...formData,
-                        estimationManualNo: e.target.value,
+                        estimateManualNo: e.target.value,
                       })
                     }
                     placeholder="Enter Estimation No"
@@ -3904,7 +3904,7 @@ export const EstimateQuotationView: React.FC = () => {
                   >
                     {STATE_OPTIONS.map((st) => (
                       <option key={st} value={st}>
-                        {st}
+                        {st.replace(/^[0-9]+-/, "")}
                       </option>
                     ))}
                   </select>
@@ -4659,9 +4659,6 @@ export const EstimateQuotationView: React.FC = () => {
                                       {row.batch}
                                     </option>
                                   )}
-                                <option value="__custom__">
-                                  + Enter custom batch...
-                                </option>
                               </select>
                             );
                           }
@@ -5514,7 +5511,6 @@ export const EstimateQuotationView: React.FC = () => {
               columns={[
                 { label: "ESTIMATE S.NO.", align: "center", minWidth: "140px" },
                 { label: "CUSTOMER NAME", align: "left", minWidth: "200px" },
-                { label: "STATUS", align: "center", minWidth: "110px" },
                 {
                   label: "CREATED DATE & TIME",
                   align: "left",
@@ -5527,6 +5523,7 @@ export const EstimateQuotationView: React.FC = () => {
                 },
                 { label: "AMOUNT", align: "right", minWidth: "120px" },
                 { label: "BALANCE", align: "right", minWidth: "120px" },
+                { label: "STATUS", align: "center", minWidth: "110px" },
                 { label: "ACTIONS", align: "center", minWidth: "190px" },
               ]}
             />
@@ -5606,11 +5603,9 @@ export const EstimateQuotationView: React.FC = () => {
                       className="hover:bg-purple-50/30 transition-colors border-b border-slate-200"
                     >
                       {/* 1. Estimate / Quotation Code (from backend) */}
-                      <td className="py-3.5 px-3 sm:px-4 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                      <td className="py-3.5 px-3 font-bold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap align-middle">
                         <div className="flex flex-col items-center justify-center gap-1">
-                          <span className="inline-flex items-center px-3 py-1 rounded-lg bg-purple-50 text-[#33077C] border border-purple-300 font-mono text-sm sm:text-base font-extrabold tracking-tight shadow-2xs">
-                            {item.quotationNo || "—"}
-                          </span>
+                          <span>{item.quotationNo || "—"}</span>
                           <DocumentLineageBadges
                             docRef={item.quotationNo}
                             currentType="Estimate"
@@ -5634,32 +5629,10 @@ export const EstimateQuotationView: React.FC = () => {
                           )}
                         </div>
                         {item.customerPhone && (
-                          <div className="text-[11px] text-slate-400 font-normal mt-0.5">
-                            {item.customerPhone}
+                          <div>
+                            <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight"><Phone className="w-3 h-3 text-[#33077C] shrink-0" />{item.customerPhone}</span>
                           </div>
                         )}
-                      </td>
-
-                      {/* Status (kept next to the customer so it is visible without scrolling sideways) */}
-                      <td className="py-3.5 px-3 sm:px-4 text-center border-r border-slate-200 whitespace-nowrap align-middle">
-                        <div className="flex items-center justify-center">
-                          {item.status === "Open" ? (
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-600 border border-amber-200/80">
-                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                              Open
-                            </span>
-                          ) : item.status === "Converted" ? (
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                              Converted
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
-                              <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-                              {item.status}
-                            </span>
-                          )}
-                        </div>
                       </td>
 
                       {/* 3. Created Date & Time */}
@@ -5710,6 +5683,28 @@ export const EstimateQuotationView: React.FC = () => {
                         {item.balance.toLocaleString("en-IN", {
                           minimumFractionDigits: 2,
                         })}
+                      </td>
+
+                      {/* Status (placed just before the Actions column) */}
+                      <td className="py-3.5 px-3 sm:px-4 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                        <div className="flex items-center justify-center">
+                          {item.status === "Open" ? (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-600 border border-amber-200/80">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                              Open
+                            </span>
+                          ) : item.status === "Converted" ? (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              Converted
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                              {item.status}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* 7. Actions */}

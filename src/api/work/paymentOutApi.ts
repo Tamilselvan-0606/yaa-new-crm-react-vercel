@@ -40,6 +40,7 @@ export const mapApiPaymentOutToUi = (apiPout: ApiPaymentOut): PaymentOut => {
   return {
     id: apiPout.id,
     paymentNo: apiPout.paymentNo || '',
+    paymentOutManualNo: apiPout.paymentOutManualNo || '',
     paymentDate: paymentDateStr,
     supplierId: apiPout.supplierId,
     supplierName: apiPout.supplier?.name || 'Unknown Supplier',
@@ -64,6 +65,7 @@ export const mapApiPaymentOutToUi = (apiPout: ApiPaymentOut): PaymentOut => {
  * Maps UI form data into payload for POST /work/payments-out
  */
 export const mapUiToCreatePaymentOutPayload = (formData: {
+  paymentOutManualNo?: string;
   supplierId: string;
   purchaseOrderId?: string;
   paymentMode?: string;
@@ -80,6 +82,11 @@ export const mapUiToCreatePaymentOutPayload = (formData: {
 
   if (formData.purchaseOrderId && UUID_REGEX.test(formData.purchaseOrderId)) {
     payload.purchaseOrderId = formData.purchaseOrderId;
+  }
+
+  const manualNo = formData.paymentOutManualNo?.trim();
+  if (manualNo) {
+    payload.paymentOutManualNo = manualNo;
   }
 
   const ref = formData.referenceNo?.trim();
@@ -99,6 +106,7 @@ export const mapUiToCreatePaymentOutPayload = (formData: {
  * Maps UI form data into payload for PUT /work/payments-out/{id}
  */
 export const mapUiToUpdatePaymentOutPayload = (formData: {
+  paymentOutManualNo?: string;
   amount?: number | string;
   referenceNo?: string;
   paymentType?: string;
@@ -114,6 +122,11 @@ export const mapUiToUpdatePaymentOutPayload = (formData: {
   const pType = formData.paymentType || formData.paymentMode;
   if (pType) {
     payload.paymentType = pType;
+  }
+
+  const manualNo = formData.paymentOutManualNo?.trim();
+  if (manualNo) {
+    payload.paymentOutManualNo = manualNo;
   }
 
   const ref = formData.referenceNo?.trim();

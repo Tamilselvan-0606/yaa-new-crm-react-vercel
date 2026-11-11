@@ -185,6 +185,7 @@ const mapApiProformaToSavedInvoice =(api: ProformaInvoiceApiItem): SavedInvoice 
   return {
     id: api.id,
     invoiceNumber: api.proformaNumber || 'PI-0000',
+    manualNumber: api.proformaManualNumber || '',
     invoiceDate: formatDate(rawInvoiceDate),
     dueDate: rawDueDate ? formatDate(rawDueDate) : '',
     referenceNumbers: api.referenceNumber ? [api.referenceNumber] : [],
@@ -277,6 +278,7 @@ const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
   return {
     id: api.id,
     invoiceNumber: api.invoiceNumber || 'INV-0000',
+    manualNumber: api.invoiceManualNumber || '',
     invoiceDate: formatDate(rawInvoiceDate),
     dueDate: rawDueDate ? formatDate(rawDueDate) : '',
     referenceNumbers: api.referenceNumber ? [api.referenceNumber] : [],
@@ -1193,10 +1195,18 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
             <div className="text-left space-y-1.5 text-xs sm:text-sm shrink-0">
               <div className="flex items-center gap-2">
                 <span className="text-slate-500 font-medium w-48 shrink-0">
-                  {isProforma ? 'Proforma Invoice Number:' : 'Invoice Number:'}
+                  {isProforma ? 'Proforma Invoice Serial Number:' : 'Invoice Serial Number:'}
                 </span>
                 <span className="font-bold text-slate-900">{activeInvoice.invoiceNumber}</span>
               </div>
+              {activeInvoice.manualNumber && (
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-500 font-medium w-48 shrink-0">
+                    {isProforma ? 'Proforma Invoice Number:' : 'Invoice Number:'}
+                  </span>
+                  <span className="font-bold text-slate-900">{activeInvoice.manualNumber}</span>
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <span className="text-slate-500 font-medium w-48 shrink-0">
                   {isProforma ? 'Proforma Invoice Date:' : 'Invoice Date:'}
