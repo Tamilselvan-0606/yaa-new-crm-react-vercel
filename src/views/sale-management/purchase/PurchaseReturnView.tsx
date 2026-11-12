@@ -1473,16 +1473,30 @@ export const PurchaseReturnView: React.FC = () => {
     };
   };
 
-  const handlePrintDebitNote = (pret: PurchaseReturn) => {
-    printBusinessDocument(buildDebitNotePrintOptions(pret));
+  // Load the latest record (GET /purchase-returns/:id) so print / download use server data
+  const fetchLatestPurchaseReturn = async (pret: PurchaseReturn): Promise<PurchaseReturn> => {
+    if (!pret.id) return pret;
+    try {
+      const res = await commercePurchaseReturnApi.getPurchaseReturnById(pret.id);
+      if (res?.data) return { ...pret, ...mapApiPurchaseReturnToUi(res.data) };
+    } catch (err) {
+      console.warn('Could not fetch latest purchase return for print/download:', err);
+    }
+    return pret;
+  };
+
+  const handlePrintDebitNote = async (pret: PurchaseReturn) => {
+    const latest = await fetchLatestPurchaseReturn(pret);
+    printBusinessDocument(buildDebitNotePrintOptions(latest));
   };
 
   const handleDownloadPurchaseReturn = async (pret: PurchaseReturn) => {
     if (isDownloadingReturn) return;
     setIsDownloadingReturn(true);
-    const filename = `DebitNote_${(pret.returnNo || 'return').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
     try {
-      await downloadBusinessDocument(buildDebitNotePrintOptions(pret), filename);
+      const latest = await fetchLatestPurchaseReturn(pret);
+      const filename = `DebitNote_${(latest.returnNo || 'return').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+      await downloadBusinessDocument(buildDebitNotePrintOptions(latest), filename);
       toast.success(`Downloaded ${filename}`);
     } catch (err) {
       console.error('Failed to download debit note PDF:', err);

@@ -2192,14 +2192,29 @@ export const SalesView: React.FC = () => {
     };
   };
 
-  const handleDownloadSaleInvoice = async (sale: SaleTransaction) => {
+  // Load the latest record (GET /commerce/invoices/:id) so print / download use server data
+  const fetchLatestInvoice = async (
+    sale: SaleTransaction,
+  ): Promise<SaleTransaction> => {
+    if (!UUID_REGEX.test(sale.id)) return sale;
+    try {
+      const res = await commerceInvoiceApi.getInvoiceById(sale.id);
+      if (res?.data) return mapApiInvoiceToSaleTransaction(res.data);
+    } catch (err) {
+      console.warn("Could not fetch latest invoice for print/download:", err);
+    }
+    return sale;
+  };
+
+  const handleDownloadSaleInvoice = async (listSale: SaleTransaction) => {
     if (isDownloadingPdf) return;
     setIsDownloadingPdf(true);
-    const toastId = `dl-sale-${sale.id}`;
-    toast.loading(`Preparing PDF for Invoice ${sale.invoiceNo}...`, {
+    const toastId = `dl-sale-${listSale.id}`;
+    toast.loading(`Preparing PDF for Invoice ${listSale.invoiceNo}...`, {
       id: toastId,
     });
     try {
+      const sale = await fetchLatestInvoice(listSale);
       const options = mapSaleToDocumentPrintOptions(sale);
       await downloadBusinessDocument(
         options,
@@ -2276,7 +2291,8 @@ export const SalesView: React.FC = () => {
   };
 
   // Direct Print Invoice
-  const handlePrintSaleInvoice = (sale: SaleTransaction) => {
+  const handlePrintSaleInvoice = async (listSale: SaleTransaction) => {
+    const sale = await fetchLatestInvoice(listSale);
     const printWindow = window.open("", "_blank", "width=850,height=900");
     if (!printWindow) {
       toast.error("Unable to open print preview. Please allow popups.");
@@ -7083,11 +7099,6 @@ export const SalesView: React.FC = () => {
                       dotColor: "#33077C",
                     },
                     {
-                      label: "Completed",
-                      value: "Completed",
-                      dotColor: "#10b981",
-                    },
-                    {
                       label: "Cancelled",
                       value: "Cancelled",
                       dotColor: "#ef4444",
@@ -7161,45 +7172,6 @@ export const SalesView: React.FC = () => {
               <h3 className="text-base font-bold text-slate-800 tracking-tight">
                 Transactions
               </h3>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const searchInput = document.querySelector(
-                      'input[placeholder*="Search by invoice"]',
-                    ) as HTMLInputElement;
-                    searchInput?.focus();
-                  }}
-                  className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
-                  title="Search"
-                >
-                  <Search className="w-4.5 h-4.5 text-slate-500" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsSalesGraphModalOpen(true)}
-                  className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
-                  title="Sales Graph & Trends"
-                >
-                  <BarChart2 className="w-4.5 h-4.5 text-slate-500" />
-                </button>
-                <button
-                  type="button"
-                  onClick={handleExportExcel}
-                  className="p-1.5 rounded-lg hover:bg-emerald-50 transition-colors cursor-pointer"
-                  title="Export to Excel Report (.xls)"
-                >
-                  <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
-                </button>
-                <button
-                  type="button"
-                  onClick={handlePrintTableReport}
-                  className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
-                  title="Print Transactions Ledger"
-                >
-                  <Printer className="w-4.5 h-4.5 text-slate-600" />
-                </button>
-              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -7494,12 +7466,29 @@ export const SalesView: React.FC = () => {
                                     onClick: () => handleOpenEditModal(sale),
                                   },
                                   {
-                                    label: "Assign Sales Rep",
-                                    variant: "assign",
-                                    onClick: () =>
-                                      handleOpenAssignInvoiceModal(sale),
+                                    label: "Duplicate",
+                                    variant: "duplicate",
+                                    onClick: () => handleDuplicateSale(sale),
                                   },
-
+                                  {
+                                    label: "Print Invoice",
+                                    variant: "print",
+                                    onClick: () => handlePrintSaleInvoice(sale),
+                                  },
+                                  {
+                                    label: "Download Invoice",
+                                    variant: "download",
+                                    onClick: () =>
+                                      handleDownloadSaleInvoice(sale),
+                                  },
+                                  {
+                                    label: "View History",
+                                    variant: "view",
+                                    onClick: () => {
+                                      setSelectedSale(sale);
+                                      setIsPaymentHistoryModalOpen(true);
+                                    },
+                                  },
                                   {
                                     label: "Receive Payment",
                                     variant: "payment",
@@ -7507,6 +7496,12 @@ export const SalesView: React.FC = () => {
                                       sale.paymentStatus === "Paid" ||
                                       sale.balance <= 0,
                                     onClick: () => handleOpenAddPayment(sale),
+                                  },
+                                  {
+                                    label: "Assign Sales Rep",
+                                    variant: "assign",
+                                    onClick: () =>
+                                      handleOpenAssignInvoiceModal(sale),
                                   },
                                   {
                                     label: "Convert To Return",
@@ -7527,52 +7522,8 @@ export const SalesView: React.FC = () => {
                                         },
                                       );
                                       toast.info(
-                                        `Converting invoice ${sale.invoiceNo} to Sales Return / Credit Note`,
+                                        `Converting invoice ${sale.invoiceNo} to Sales Return`,
                                       );
-                                    },
-                                  },
-                                  {
-                                    label: "Preview Delivery Challan",
-                                    variant: "challan",
-                                    onClick: () => {
-                                      navigate(
-                                        "/sale-management/sales/delivery-challan",
-                                      );
-                                      toast.info(
-                                        `Opening Delivery Challan preview for ${sale.invoiceNo}`,
-                                      );
-                                    },
-                                  },
-                                  {
-                                    label: "Print Invoice",
-                                    variant: "print",
-                                    onClick: () => handlePrintSaleInvoice(sale),
-                                  },
-                                  {
-                                    label: "Download Invoice",
-                                    variant: "download",
-                                    onClick: () =>
-                                      handleDownloadSaleInvoice(sale),
-                                  },
-                                  {
-                                    label: "Duplicate",
-                                    variant: "duplicate",
-                                    onClick: () => handleDuplicateSale(sale),
-                                  },
-                                  {
-                                    label: "Preview",
-                                    variant: "preview",
-                                    onClick: () => {
-                                      setSelectedSale(sale);
-                                      setIsInvoiceModalOpen(true);
-                                    },
-                                  },
-                                  {
-                                    label: "View History",
-                                    variant: "view",
-                                    onClick: () => {
-                                      setSelectedSale(sale);
-                                      setIsPaymentHistoryModalOpen(true);
                                     },
                                   },
                                   {

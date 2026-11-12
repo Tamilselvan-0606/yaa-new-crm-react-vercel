@@ -1133,16 +1133,30 @@ export const PurchaseRequestView: React.FC = () => {
     };
   };
 
-  const handlePrintPurchaseRequest = (req: PurchaseRequest) => {
-    printBusinessDocument(buildPurchaseRequestPrintOptions(req));
+  // Load the latest record (GET /purchase-requests/:id) so print / download use server data
+  const fetchLatestPurchaseRequest = async (req: PurchaseRequest): Promise<PurchaseRequest> => {
+    if (!req.id) return req;
+    try {
+      const res = await commercePurchaseRequestApi.getPurchaseRequestById(req.id);
+      if (res?.data) return { ...req, ...mapApiPurchaseRequestToUi(res.data) };
+    } catch (err) {
+      console.warn('Could not fetch latest purchase request for print/download:', err);
+    }
+    return req;
+  };
+
+  const handlePrintPurchaseRequest = async (req: PurchaseRequest) => {
+    const latest = await fetchLatestPurchaseRequest(req);
+    printBusinessDocument(buildPurchaseRequestPrintOptions(latest));
   };
 
   const handleDownloadPurchaseRequest = async (req: PurchaseRequest) => {
     if (isDownloadingRequest) return;
     setIsDownloadingRequest(true);
-    const filename = `PurchaseRequest_${(req.requestNo || 'PR').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
     try {
-      await downloadBusinessDocument(buildPurchaseRequestPrintOptions(req), filename);
+      const latest = await fetchLatestPurchaseRequest(req);
+      const filename = `PurchaseRequest_${(latest.requestNo || 'PR').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+      await downloadBusinessDocument(buildPurchaseRequestPrintOptions(latest), filename);
       toast.success(`Downloaded ${filename}`);
     } catch (err) {
       console.error('Failed to download purchase request PDF:', err);

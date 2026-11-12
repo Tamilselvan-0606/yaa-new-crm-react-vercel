@@ -1751,6 +1751,10 @@ export const CustomerView: React.FC = () => {
               setIsFormModalOpen(false);
               setIsDuplicateModalOpen(false);
               setPendingSavePayload(null);
+              // Refetch the list so the server's view (code, totals, paging) is shown
+              evictApiCache(["Customer", "SalesRepresentative"]);
+              lastFetchKeyRef.current = null;
+              loadCustomers(true);
               return;
             }
           } catch (apiErr: any) {
@@ -2878,17 +2882,6 @@ export const CustomerView: React.FC = () => {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
                 <div>
-                  <FormLabel>Customer Code</FormLabel>
-                  <input
-                    type="text"
-                    readOnly
-                    value={editingCustomer?.customerCode || ""}
-                    placeholder="Auto-generated on save"
-                    className={`${FORM_INPUT_CLS} bg-slate-50 cursor-not-allowed`}
-                  />
-                </div>
-
-                <div>
                   <FormLabel required>Full Name / Contact Person</FormLabel>
                   <input
                     type="text"
@@ -2917,6 +2910,16 @@ export const CustomerView: React.FC = () => {
                     placeholder="e.g. Apex Global Logistics"
                     className={FORM_INPUT_CLS}
                   />
+                </div>
+
+                <div>
+                  <FormLabel>Gender</FormLabel>
+                  <select {...register("gender")} className={FORM_SELECT_CLS}>
+                    <option value="">Select Gender</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                    <option value="Other">Other</option>
+                  </select>
                 </div>
 
                 <div>
@@ -2993,16 +2996,6 @@ export const CustomerView: React.FC = () => {
                       <span>{errors.email.message}</span>
                     </p>
                   )}
-                </div>
-
-                <div>
-                  <FormLabel>Gender</FormLabel>
-                  <select {...register("gender")} className={FORM_SELECT_CLS}>
-                    <option value="">Select Gender</option>
-                    <option value="Male">Male</option>
-                    <option value="Female">Female</option>
-                    <option value="Other">Other</option>
-                  </select>
                 </div>
               </div>
             </div>

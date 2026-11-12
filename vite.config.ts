@@ -29,16 +29,6 @@ export default defineConfig(() => {
         '.ngrok-free.dev',
       ],
 
-      // Dev-only proxy: the browser calls same-origin /api/v1, Vite forwards it
-      // to the backend, so the backend's CORS allow-list doesn't apply.
-      proxy: {
-        '/api': {
-          target: 'https://api.dev.crm.yaacreations.com',
-          changeOrigin: true,
-          secure: true,
-        },
-      },
-
       hmr: process.env.DISABLE_HMR !== 'true',
 
       watch: process.env.DISABLE_HMR === 'true' ? null : {},

@@ -101,10 +101,7 @@ import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
-import {
-  printBusinessDocument,
-  printTableReport,
-} from "../../../utils/printUtils";
+import { printTableReport } from "../../../utils/printUtils";
 import {
   FormLabel,
   FORM_INPUT_CLS,
@@ -606,40 +603,6 @@ export const SupplierView: React.FC = () => {
     }
   };
 
-  // Duplicate Supplier Handler
-  const handleDuplicateSupplier = (sup: Supplier) => {
-    setEditingSupplier(null);
-    reset({
-      supplierCode: "",
-      name: `${sup.name} (Copy)`,
-      contactPerson: sup.contactPerson || sup.name,
-      phone: sup.phone,
-      whatsappNumber: sup.whatsappNumber || "",
-      email: sup.email ? `copy_${sup.email}` : "",
-      address: sup.address,
-      city: sup.city,
-      state: sup.state,
-      country: sup.country || "India",
-      pincode: sup.pincode,
-      gstNumber: sup.gstNumber || "",
-      panNumber: sup.panNumber || "",
-      paymentTerms: sup.paymentTerms,
-      creditLimit: sup.creditLimit,
-      bankName: sup.bankName || "",
-      accountNumber: sup.accountNumber || "",
-      ifscCode: sup.ifscCode || "",
-      branchName: sup.branchName || "",
-      status: "Active",
-      notes: sup.notes
-        ? `[Duplicate of ${sup.supplierCode}] ${sup.notes}`
-        : `Duplicate of ${sup.supplierCode}`,
-    });
-    setLocationDistrict(sup.district || "");
-    setLocationIds({ countryId: sup.countryId, stateId: sup.stateId, districtId: sup.districtId, cityId: sup.cityId });
-    setIsFormModalOpen(true);
-    toast.info(`Cloned details from "${sup.name}" into form.`);
-  };
-
   // Keystroke sanitizer: disallow typing non-numeric characters in number-only fields
   const handleNumberOnlyKeyDown = (
     e: React.KeyboardEvent<HTMLInputElement>,
@@ -935,76 +898,6 @@ export const SupplierView: React.FC = () => {
     toast.success(
       `Suppliers Excel report downloaded (${displaySuppliers.length} records)!`,
     );
-  };
-
-  // Print Supplier Statement / Profile via universal printUtils
-  const handlePrintSupplierStatement = (sup: Supplier) => {
-    printBusinessDocument({
-      docTypeTitle: "SUPPLIER STATEMENT / VENDOR PROFILE",
-      docNo: sup.supplierCode || sup.id.slice(0, 8).toUpperCase(),
-      docDate: new Date().toISOString().split("T")[0],
-      status: sup.status,
-      statusColor:
-        sup.status === "Active"
-          ? "emerald"
-          : sup.status === "Blocked"
-            ? "rose"
-            : "slate",
-      partyTitle: "Supplier / Vendor Details",
-      partyName: sup.name,
-      partyCompany: (sup as any).company || sup.name,
-      partyPhone: sup.phone || (sup as any).mobile,
-      partyEmail: sup.email,
-      partyAddress: (sup as any).billingAddress || sup.address,
-      partyGstin: sup.gstNumber,
-      extraMeta: [
-        { label: "Contact Person", value: sup.contactPerson || "N/A" },
-        { label: "Payment Terms", value: sup.paymentTerms || "Net 30 Days" },
-        {
-          label: "Credit Limit",
-          value: `₹${(sup.creditLimit || 0).toLocaleString("en-IN")}`,
-        },
-        ...(sup.bankName ? [{ label: "Bank Name", value: sup.bankName }] : []),
-        ...(sup.accountNumber
-          ? [{ label: "Account Number", value: sup.accountNumber }]
-          : []),
-        ...(sup.ifscCode ? [{ label: "IFSC Code", value: sup.ifscCode }] : []),
-      ],
-      columns: [
-        { header: "Metric", width: "50%" },
-        { header: "Financial Value (₹)", align: "right", width: "50%" },
-      ],
-      items: [
-        {
-          name: "Total Cumulative Purchases",
-          remarks: "Sum of all historical purchase bills from this supplier",
-          quantity: 1,
-          unitPrice: Number(sup.totalPurchase || 0),
-          total: Number(sup.totalPurchase || 0),
-        },
-        {
-          name: "Total Disbursed / Paid Amount",
-          remarks: "Total payments made to vendor",
-          quantity: 1,
-          unitPrice: Number(sup.paid || 0),
-          total: Number(sup.paid || 0),
-        },
-        {
-          name: "Outstanding Balance Payable",
-          remarks: "Current pending payment liability",
-          quantity: 1,
-          unitPrice: Number(sup.payable || 0),
-          total: Number(sup.payable || 0),
-        },
-      ],
-      subtotal: Number(sup.totalPurchase || 0),
-      grandTotal: Number(sup.totalPurchase || 0),
-      paidAmount: Number(sup.paid || 0),
-      balance: Number(sup.payable || 0),
-      paidAmountLabel: "Total Disbursed",
-      balanceLabel: "Net Payable Outstanding",
-      notes: sup.notes || "Vendor account maintained under active compliance.",
-    });
   };
 
   // Print Table Report for Suppliers
@@ -1496,17 +1389,6 @@ export const SupplierView: React.FC = () => {
                                 label: "Edit",
                                 variant: "edit",
                                 onClick: () => handleOpenEditModal(sup),
-                              },
-                              {
-                                label: "Print Statement",
-                                variant: "print",
-                                onClick: () =>
-                                  handlePrintSupplierStatement(sup),
-                              },
-                              {
-                                label: "Duplicate",
-                                variant: "duplicate",
-                                onClick: () => handleDuplicateSupplier(sup),
                               },
                               {
                                 label: "View History",

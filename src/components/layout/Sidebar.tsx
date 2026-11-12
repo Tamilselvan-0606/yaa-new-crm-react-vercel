@@ -210,7 +210,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       { id: 'sales-hub-challan', path: '/sale-management/sales/delivery-challan', label: 'Delivery Challan', icon: Truck },
       { id: 'sales-hub-sales', path: '/sale-management/sales/sale', label: 'Sales Invoice', icon: ShoppingCart },
       { id: 'sales-hub-payment-in', path: '/sale-management/sales/payment-in', label: 'Payment-In', icon: CreditCard },
-      { id: 'sales-hub-returns', path: '/sale-management/sales/return', label: 'Sales Return / Credit Note', icon: RotateCcw },
+      { id: 'sales-hub-returns', path: '/sale-management/sales/return', label: 'Sales Return', icon: RotateCcw },
       { id: 'sales-hub-collections', path: '/sale-management/sales/collections', label: 'Collections', icon: IndianRupee },
     ],
   };
@@ -298,7 +298,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       { id: 'billing-challan', path: '/sale-management/sales/delivery-challan', label: 'Delivery Challan', icon: Truck },
       { id: 'billing-sales-list', path: '/sale-management/sales/sale', label: 'Sales Invoice', icon: Receipt },
       { id: 'billing-payment-in', path: '/sale-management/sales/payment-in', label: 'Payment-In', icon: CreditCard },
-      { id: 'billing-sales-returns', path: '/sale-management/sales/return', label: 'Sales Return / Credit Note', icon: RotateCcw },
+      { id: 'billing-sales-returns', path: '/sale-management/sales/return', label: 'Sales Return', icon: RotateCcw },
       { id: 'billing-collections', path: '/sale-management/sales/collections', label: 'Collections', icon: IndianRupee },
     ],
   };

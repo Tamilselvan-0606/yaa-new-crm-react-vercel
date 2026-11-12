@@ -85,7 +85,10 @@ import {
   downloadTableReport,
   DocumentPrintOptions,
 } from "../../../utils/printUtils";
-import { SaleActionDropdown } from "../utils/SaleActionDropdown";
+import {
+  SaleActionDropdown,
+  ActionIconBadge,
+} from "../utils/SaleActionDropdown";
 import {
   DocumentSharePopover,
   formatEstimateQuotationShare,
@@ -3031,48 +3034,126 @@ export const EstimateQuotationView: React.FC = () => {
       }
     });
 
-  // Duplicate via Live API
-  const handleDuplicate = (item: SaleQuotation) =>
-    runOnce(async () => {
-      setActiveDropdownId(null);
-      if (
-        !item?.id ||
-        !(item.items || []).some((it) => Number(it.quantity) > 0)
-      ) {
-        toast.error("This estimate has no items to duplicate.");
-        return;
+  // Where each converted estimate went: when the server does not report the destination on the estimate, look for the
+  // proforma / sale order / challan / invoice that references this estimate number.
+  type EstimateTarget = {
+    type: "Proforma" | "Order" | "Challan" | "Invoice";
+    no: string;
+  };
+  const [downstreamByEstimate, setDownstreamByEstimate] = useState<
+    Record<string, EstimateTarget>
+  >({});
+  useEffect(() => {
+    const needs = liveQuotations.some(
+      (q) =>
+        q.status === "Converted" &&
+        q.quotationNo &&
+        !resolveConvertedTarget(q) &&
+        !downstreamByEstimate[q.quotationNo.trim().toLowerCase()],
+    );
+    if (!needs) return;
+    let cancelled = false;
+    (async () => {
+      const found: Record<string, EstimateTarget> = {};
+      const take = (
+        type: EstimateTarget["type"],
+        ref?: string | null,
+        no?: string | null,
+      ) => {
+        const key = (ref || "").trim().toLowerCase();
+        if (key && no && !found[key]) found[key] = { type, no };
+      };
+      const params: any = { page_no: 1, page_size: 100 };
+      const [proformas, orders, challans, invoices] = await Promise.allSettled([
+        commerceProformaApi.getProformas(params),
+        commerceSaleOrderApi.getOrders(params),
+        commerceDeliveryChallanApi.getChallans(params),
+        commerceInvoiceApi.getInvoices(params),
+      ]);
+      if (proformas.status === "fulfilled")
+        (proformas.value?.data || []).forEach((p: any) =>
+          take("Proforma", p.referenceNo, p.proformaNo),
+        );
+      if (orders.status === "fulfilled")
+        (orders.value?.data || []).forEach((o: any) =>
+          take("Order", o.referenceNo, o.orderNo),
+        );
+      if (challans.status === "fulfilled")
+        (challans.value?.data || []).forEach((c: any) =>
+          take("Challan", c.referenceNo, c.challanNo),
+        );
+      if (invoices.status === "fulfilled")
+        (invoices.value?.data || []).forEach((i: any) =>
+          take("Invoice", i.referenceNo, i.invoiceNo),
+        );
+      if (!cancelled && Object.keys(found).length > 0) {
+        setDownstreamByEstimate((prev) => ({ ...prev, ...found }));
       }
-      try {
-        const duplicatedPayload = mapSaleQuotationToPayload(
-          {
-            ...item,
-            quotationNo: undefined, // Let server auto-generate unique number
-            referenceNo: undefined, // Server auto-generates
-            date: new Date().toISOString().split("T")[0],
-            validUntil: new Date(Date.now() + 30 * 86400000)
-              .toISOString()
-              .split("T")[0],
-            status: "Open",
-          },
-          true,
-        );
-        const res = await quotationApi.createQuotation(duplicatedPayload);
-        const mapped = mapApiQuotationToSaleQuotation(res.data);
-        saveQuotation(mapped);
-        toast.success(`Duplicated as new Estimate ${mapped.quotationNo}!`);
-        await fetchQuotations(
-          1,
-          pageSize,
-          appliedSearch,
-          appliedStatus,
-          appliedPeriod,
-        );
-      } catch (err: any) {
-        toast.error(
-          getApiErrorMessage(err, "Failed to duplicate quotation on server"),
-        );
-      }
-    });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveQuotations]);
+
+  // Duplicate: open the New Estimate form prefilled with this estimate's reusable details.
+  // Nothing is saved (and no number is generated) until the user presses Save.
+  const handleDuplicate = (item: SaleQuotation) => {
+    setActiveDropdownId(null);
+    if (!item?.items || item.items.length === 0) {
+      toast.error("This estimate has no items to duplicate.");
+      return;
+    }
+    const stamp = Date.now();
+    const today = new Date().toISOString().split("T")[0];
+    const validUntil = new Date(stamp + 30 * 86400000)
+      .toISOString()
+      .split("T")[0];
+    const copiedItems: ExtendedEstimateItem[] = item.items.map((it, idx) => ({
+      ...it,
+      id: `row_${stamp}_${idx}`,
+      unit: (it as any).unit || "PCS",
+    })) as ExtendedEstimateItem[];
+    const dupData = {
+      customerId: item.customerId || "",
+      partyName: item.partyName || "",
+      customerPhone: item.customerPhone || "",
+      customerEmail: item.customerEmail || "",
+      customerCompany: item.customerCompany || "",
+      billingAddress: item.billingAddress || "",
+      quotationNo: computedPreviewNo,
+      estimateManualNo: "",
+      referenceNo: "",
+      date: today,
+      validUntil,
+      stateOfSupply: item.stateOfSupply || "",
+      items: copiedItems,
+      notes: item.notes || "",
+      terms: item.terms || "",
+    };
+    setValidUptoDays("30");
+    setFormData(dupData);
+    setEditingQuotation(null);
+    setEnableRoundOff(true);
+    setManualRoundOff(null);
+    setTabs([
+      {
+        id: "tab_1",
+        title: "New Estimate",
+        num: 1,
+        formData: dupData,
+        editingQuotation: null,
+        enableRoundOff: true,
+        manualRoundOff: null,
+        columnSettings: { ...columnSettings },
+      },
+    ]);
+    setActiveTabId("tab_1");
+    setViewMode("form");
+    toast.info(
+      `Duplicated ${item.quotationNo || "estimate"} into a new form. Save to create it.`,
+    );
+  };
 
   // Cancel / re-open an estimate (PATCH status). Guarded against double clicks.
   const handleUpdateQuotationStatus = (
@@ -3435,14 +3516,29 @@ export const EstimateQuotationView: React.FC = () => {
     };
   };
 
-  const handleDownloadQuotation = async (quot: SaleQuotation) => {
+  // Load the latest record (GET /commerce/quotations/:id) so print / download use server data
+  const fetchLatestQuotation = async (
+    quot: SaleQuotation,
+  ): Promise<SaleQuotation> => {
+    if (!quot.id) return quot;
+    try {
+      const res = await quotationApi.getQuotationById(quot.id);
+      if (res && res.data) return mapApiQuotationToSaleQuotation(res.data);
+    } catch (err) {
+      console.warn("Could not fetch latest quotation for print/download:", err);
+    }
+    return quot;
+  };
+
+  const handleDownloadQuotation = async (listQuot: SaleQuotation) => {
     if (isDownloadingPdf) return;
     setIsDownloadingPdf(true);
-    const toastId = `dl-quot-${quot.id}`;
-    toast.loading(`Preparing PDF for Quotation ${quot.quotationNo}...`, {
+    const toastId = `dl-quot-${listQuot.id}`;
+    toast.loading(`Preparing PDF for Quotation ${listQuot.quotationNo}...`, {
       id: toastId,
     });
     try {
+      const quot = await fetchLatestQuotation(listQuot);
       const options = mapQuotationToDocumentPrintOptions(quot);
       await downloadBusinessDocument(
         options,
@@ -3462,7 +3558,8 @@ export const EstimateQuotationView: React.FC = () => {
   };
 
   // Printable Document Generator
-  const handlePrintQuotation = (quot: SaleQuotation) => {
+  const handlePrintQuotation = async (listQuot: SaleQuotation) => {
+    const quot = await fetchLatestQuotation(listQuot);
     const printWindow = window.open("", "_blank");
     if (!printWindow) {
       toast.error("Unable to open print preview. Please allow popups.");
@@ -5609,8 +5706,22 @@ export const EstimateQuotationView: React.FC = () => {
                           <DocumentLineageBadges
                             docRef={item.quotationNo}
                             currentType="Estimate"
-                            targetDocNo={resolveConvertedTarget(item)?.no}
-                            targetDocType={resolveConvertedTarget(item)?.type}
+                            targetDocNo={
+                              resolveConvertedTarget(item)?.no ||
+                              (item.status === "Converted"
+                                ? downstreamByEstimate[
+                                    (item.quotationNo || "").trim().toLowerCase()
+                                  ]?.no
+                                : undefined)
+                            }
+                            targetDocType={
+                              resolveConvertedTarget(item)?.type ||
+                              (item.status === "Converted"
+                                ? downstreamByEstimate[
+                                    (item.quotationNo || "").trim().toLowerCase()
+                                  ]?.type
+                                : undefined)
+                            }
                             className="justify-center"
                           />
                         </div>
@@ -5630,7 +5741,10 @@ export const EstimateQuotationView: React.FC = () => {
                         </div>
                         {item.customerPhone && (
                           <div>
-                            <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight"><Phone className="w-3 h-3 text-[#33077C] shrink-0" />{item.customerPhone}</span>
+                            <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight">
+                              <Phone className="w-3 h-3 text-[#33077C] shrink-0" />
+                              {item.customerPhone}
+                            </span>
                           </div>
                         )}
                       </td>
@@ -5766,48 +5880,6 @@ export const EstimateQuotationView: React.FC = () => {
                                     className="quotation-convert-dropdown-menu w-56 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
                                     onClick={(e) => e.stopPropagation()}
                                   >
-                                    {!itemStages.isInvoiceConverted && (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          handleOpenConvertModal(
-                                            item,
-                                            "Invoice",
-                                          )
-                                        }
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-2.5"
-                                      >
-                                        <ShoppingCart className="w-3.5 h-3.5 text-slate-500" />
-                                        <span>Convert to Sale Invoice</span>
-                                      </button>
-                                    )}
-                                    {!itemStages.isChallanConverted && (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          handleOpenConvertModal(
-                                            item,
-                                            "Challan",
-                                          )
-                                        }
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-2.5"
-                                      >
-                                        <Truck className="w-3.5 h-3.5 text-slate-500" />
-                                        <span>Convert to Delivery Challan</span>
-                                      </button>
-                                    )}
-                                    {!itemStages.isOrderConverted && (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          handleOpenConvertModal(item, "Order")
-                                        }
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-2.5"
-                                      >
-                                        <FileCheck className="w-3.5 h-3.5 text-slate-500" />
-                                        <span>Convert to Sale Order</span>
-                                      </button>
-                                    )}
                                     {!itemStages.isProformaConverted && (
                                       <button
                                         type="button"
@@ -5817,10 +5889,54 @@ export const EstimateQuotationView: React.FC = () => {
                                             "Proforma",
                                           )
                                         }
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-2.5"
+                                        className="w-full text-left px-3 py-2 text-[13px] font-bold text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-3"
                                       >
-                                        <FileSpreadsheet className="w-3.5 h-3.5 text-slate-500" />
+                                        <ActionIconBadge variant="convert" />
                                         <span>Convert to Proforma</span>
+                                      </button>
+                                    )}
+                                    {!itemStages.isOrderConverted && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleOpenConvertModal(item, "Order")
+                                        }
+                                        className="w-full text-left px-3 py-2 text-[13px] font-bold text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-3"
+                                      >
+                                        <ActionIconBadge variant="order" />
+                                        <span>Convert to Sale Order</span>
+                                      </button>
+                                    )}
+
+                                    {!itemStages.isChallanConverted && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleOpenConvertModal(
+                                            item,
+                                            "Challan",
+                                          )
+                                        }
+                                        className="w-full text-left px-3 py-2 text-[13px] font-bold text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-3"
+                                      >
+                                        <ActionIconBadge variant="challan" />
+                                        <span>Convert to Delivery Challan</span>
+                                      </button>
+                                    )}
+
+                                    {!itemStages.isInvoiceConverted && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleOpenConvertModal(
+                                            item,
+                                            "Invoice",
+                                          )
+                                        }
+                                        className="w-full text-left px-3 py-2 text-[13px] font-bold text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-3"
+                                      >
+                                        <ActionIconBadge variant="invoice" />
+                                        <span>Convert to Sale Invoice</span>
                                       </button>
                                     )}
                                   </div>
@@ -5845,42 +5961,6 @@ export const EstimateQuotationView: React.FC = () => {
                                 label: "View/Edit",
                                 variant: "edit",
                                 onClick: () => handleOpenEditForm(item),
-                              },
-                              {
-                                label: "Convert to Sales Invoice",
-                                variant: "invoice",
-                                hidden:
-                                  itemStages.isInvoiceConverted ||
-                                  itemStages.isFullyConverted,
-                                onClick: () =>
-                                  handleOpenConvertModal(item, "Invoice"),
-                              },
-                              {
-                                label: "Convert to Delivery Challan",
-                                variant: "challan",
-                                hidden:
-                                  itemStages.isChallanConverted ||
-                                  itemStages.isFullyConverted,
-                                onClick: () =>
-                                  handleOpenConvertModal(item, "Challan"),
-                              },
-                              {
-                                label: "Convert to Sale Order",
-                                variant: "order",
-                                hidden:
-                                  itemStages.isOrderConverted ||
-                                  itemStages.isFullyConverted,
-                                onClick: () =>
-                                  handleOpenConvertModal(item, "Order"),
-                              },
-                              {
-                                label: "Convert to Proforma",
-                                variant: "convert",
-                                hidden:
-                                  itemStages.isProformaConverted ||
-                                  itemStages.isFullyConverted,
-                                onClick: () =>
-                                  handleOpenConvertModal(item, "Proforma"),
                               },
                               {
                                 label: "Duplicate",

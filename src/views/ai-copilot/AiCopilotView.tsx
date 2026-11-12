@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import {
   ArrowDown, ArrowUp, ArrowUpRight, BellRing, BarChart3, Boxes, CalendarDays, ChevronDown, ChevronRight, Clock, Copy, FilePlus2, GitBranch, History, IndianRupee, Info,
-  Loader2, ListChecks, Mail, MessageSquare, PackagePlus, PlusCircle, Search, ShieldCheck, Sparkles, Star, Trash2, TrendingUp, UserPlus, Target, Truck, Wallet, X, Zap, type LucideIcon,
+  Loader2, ListChecks, Mail, MessageSquare, PackagePlus, Paperclip, PlusCircle, Search, ShieldCheck, Sparkles, Star, Trash2, TrendingUp, UserPlus, Target, Truck, Wallet, X, Zap, type LucideIcon,
 } from 'lucide-react';
 import { toast } from "../../utils/toast";
 import { useAuthStore } from '../../store/useAuthStore';
@@ -18,6 +18,8 @@ interface UiMessage {
   role: 'user' | 'assistant';
   content: string;
   blocks: AiBlock[];
+  /** Images the user attached to this message (data URIs, this session only). */
+  images?: string[];
   error?: boolean;
   /** ISO time shown under the message. */
   at?: string;
@@ -33,6 +35,8 @@ const toUiMessages = (rows: AiMessage[]): UiMessage[] =>
   rows.filter((m) => m.role !== 'tool').map((m) => ({ id: m.id, role: m.role as 'user' | 'assistant', content: m.content, blocks: m.blocks ?? [], error: m.responseType === 'error', at: m.createdAt }));
 const errorMessage = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong');
 const nowIso = () => new Date().toISOString();
+const MAX_IMAGES = 4;
+const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 const SCOPE_LABELS: Record<string, string> = {
   organization: 'Organization',
   sub_organization: 'Sub-organization',
@@ -199,6 +203,8 @@ export const AiCopilotView: React.FC = () => {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [input, setInput] = useState('');
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -334,16 +340,40 @@ export const AiCopilotView: React.FC = () => {
     }
   };
 
+  const readImage = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('Could not read the image'));
+    reader.readAsDataURL(file);
+  });
+
+  const addImages = async (files: File[]) => {
+    const picked: string[] = [];
+    for (const file of files) {
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { toast.error('Only JPG, PNG or WebP images can be attached'); continue; }
+      if (file.size > MAX_IMAGE_BYTES) { toast.error(`${file.name || 'Image'} is larger than 3 MB`); continue; }
+      try { picked.push(await readImage(file)); } catch (e) { toast.error(errorMessage(e)); }
+    }
+    if (picked.length) {
+      setAttachments((cur) => {
+        if (cur.length + picked.length > MAX_IMAGES) toast.error(`You can attach up to ${MAX_IMAGES} images`);
+        return [...cur, ...picked].slice(0, MAX_IMAGES);
+      });
+    }
+  };
+
   const send = async (text: string) => {
-    const message = text.trim();
+    const images = attachments;
+    const message = text.trim() || (images.length ? 'Please look at the attached image.' : '');
     if (!message || sending) return;
     setInput('');
-    setMessages((m) => [...m, { id: `local-${Date.now()}`, role: 'user', content: message, blocks: [], at: nowIso() }]);
+    setAttachments([]);
+    setMessages((m) => [...m, { id: `local-${Date.now()}`, role: 'user', content: message, blocks: [], images: images.length ? images : undefined, at: nowIso() }]);
     setSending(true);
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      const res = await aiApi.chat(message, conversationId, controller.signal);
+      const res = await aiApi.chat(message, conversationId, controller.signal, images);
       const isNew = res.conversation_id !== conversationId;
       setConversationId(res.conversation_id);
       setMessages((m) => [...m, { id: res.message_id, role: 'assistant', content: res.message, blocks: res.data.blocks, agent: res.agent, analysis: res.analysis, prompt: message, at: nowIso() }]);
@@ -589,7 +619,7 @@ export const AiCopilotView: React.FC = () => {
     (acc[key] ??= []).push(c);
     return acc;
   }, {});
-  const canSend = !disabled && !sending && !!input.trim();
+  const canSend = !disabled && !sending && (!!input.trim() || attachments.length > 0);
 
   // Quick Actions strip = the first five; "Try Asking" = the rest (or everything when there are only a few).
   const primaryActions = quickActions.slice(0, 5);
@@ -920,6 +950,15 @@ export const AiCopilotView: React.FC = () => {
                     <div className={`min-w-0 ${m.role === 'user' ? 'max-w-[85%] sm:max-w-[75%] flex flex-col items-end' : 'flex-1'} space-y-2.5`}>
                       {m.role === 'user' ? (
                         <>
+                          {m.images && m.images.length > 0 && (
+                            <div className="flex flex-wrap justify-end gap-2">
+                              {m.images.map((src, i) => (
+                                <a key={i} href={src} target="_blank" rel="noreferrer">
+                                  <img src={src} alt={`Attachment ${i + 1}`} className="max-h-40 max-w-[220px] rounded-2xl border border-violet-200 object-cover shadow-sm" />
+                                </a>
+                              ))}
+                            </div>
+                          )}
                           <div className="bg-gradient-to-br from-[#33077C] to-[#6D28D9] text-white rounded-[18px] rounded-br-md px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words shadow-md shadow-[#33077C]/20">{m.content}</div>
                           {m.at && <span className="text-[10px] text-slate-400 pr-1">{fmtTime(m.at)}</span>}
                         </>
@@ -996,13 +1035,36 @@ export const AiCopilotView: React.FC = () => {
                     ))}
                   </div>
                 )}
-                <div className={`flex items-end gap-2 rounded-[26px] border pl-4 pr-1.5 py-1.5 transition-[border-color,box-shadow] ${disabled ? 'border-slate-200 bg-slate-50' : 'bg-white border-violet-300/70 focus-within:border-[#7C3AED] focus-within:ring-4 focus-within:ring-violet-500/10'}`}>
-                  <Sparkles className="w-5 h-5 text-[#6D28D9] shrink-0 self-center" />
+                {attachments.length > 0 && (
+                  <div className="flex flex-wrap gap-2 pb-2.5">
+                    {attachments.map((src, i) => (
+                      <div key={i} className="relative">
+                        <img src={src} alt={`Attachment ${i + 1}`} className="w-16 h-16 rounded-xl object-cover border border-violet-200" />
+                        <button type="button" onClick={() => setAttachments((cur) => cur.filter((_, idx) => idx !== i))} aria-label="Remove image"
+                          className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-slate-800 text-white flex items-center justify-center shadow">
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" multiple hidden
+                  onChange={(e) => { const files = Array.from(e.target.files ?? []); e.target.value = ''; void addImages(files); }} />
+                <div className={`flex items-end gap-2 rounded-[26px] border pl-2 pr-1.5 py-1.5 transition-[border-color,box-shadow] ${disabled ? 'border-slate-200 bg-slate-50' : 'bg-white border-violet-300/70 focus-within:border-[#7C3AED] focus-within:ring-4 focus-within:ring-violet-500/10'}`}>
+                  <button type="button" onClick={() => fileInputRef.current?.click()} disabled={disabled || sending || attachments.length >= MAX_IMAGES}
+                    aria-label="Attach image" title="Attach image (JPG, PNG, WebP · up to 3 MB)"
+                    className="w-9 h-9 shrink-0 self-center rounded-full flex items-center justify-center text-[#6D28D9] hover:bg-violet-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                    <Paperclip className="w-[18px] h-[18px]" />
+                  </button>
                   <textarea
                     ref={inputRef}
                     value={input}
                     onChange={(e) => setInput(e.target.value.slice(0, maxChars))}
                     onKeyDown={onKeyDown}
+                    onPaste={(e) => {
+                      const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'));
+                      if (files.length) { e.preventDefault(); void addImages(files); }
+                    }}
                     rows={1}
                     disabled={disabled}
                     aria-label="Message the Copilot"

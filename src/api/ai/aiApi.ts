@@ -69,10 +69,11 @@ const actionError = (res: { status: number; data?: any }, fallback: string) => {
 };
 
 export const aiApi = {
-  chat: async (message: string, conversationId?: string | null, signal?: AbortSignal): Promise<AiChatResponse> => {
+  /** `images` are data URIs ("data:image/png;base64,…"); the field is only sent when the user attached something. */
+  chat: async (message: string, conversationId?: string | null, signal?: AbortSignal, images?: string[]): Promise<AiChatResponse> => {
     // Read error bodies here (the shared interceptor keeps only the message). 401 still goes through the
     // interceptor so an expired access token is refreshed and the request retried.
-    const res = await baseClient.post('/ai/chat', { conversation_id: conversationId ?? null, message }, { timeout: CHAT_TIMEOUT_MS, signal, validateStatus: (s) => s !== 401 });
+    const res = await baseClient.post('/ai/chat', { conversation_id: conversationId ?? null, message, ...(images?.length ? { images } : {}) }, { timeout: CHAT_TIMEOUT_MS, signal, validateStatus: (s) => s !== 401 });
     if (res.status >= 400) throw chatError(res, 'The assistant could not answer this request');
     return res.data;
   },

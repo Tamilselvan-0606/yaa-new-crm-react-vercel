@@ -1970,32 +1970,96 @@ export const SettingsView: React.FC = () => {
   // =========================================================================
   // STANDARD ADMIN LAYOUT (UNCHANGED)
   // =========================================================================
+  const inputCls =
+    'w-full h-11 px-3.5 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-[13px] font-medium text-slate-700 placeholder:text-slate-400 outline-none focus:border-primary focus:ring-4 focus:ring-primary/15 transition-all';
+
+  const passwordChecks = [
+    { label: '8+ characters', ok: newPassword.length >= 8 },
+    { label: 'Uppercase letter', ok: /[A-Z]/.test(newPassword) },
+    { label: 'Number', ok: /[0-9]/.test(newPassword) },
+    { label: 'Symbol', ok: /[^A-Za-z0-9]/.test(newPassword) },
+  ];
+  const passwordScore = passwordChecks.filter((c) => c.ok).length;
+  const strengthMeta = [
+    { label: 'Too weak', color: 'bg-slate-200', text: 'text-slate-400' },
+    { label: 'Weak', color: 'bg-rose-500', text: 'text-rose-600' },
+    { label: 'Fair', color: 'bg-amber-500', text: 'text-amber-600' },
+    { label: 'Good', color: 'bg-lime-500', text: 'text-lime-600' },
+    { label: 'Strong', color: 'bg-emerald-500', text: 'text-emerald-600' },
+  ][newPassword ? passwordScore : 0];
+  const passwordsMismatch = !!confirmPassword && confirmPassword !== newPassword;
+
+  const renderPasswordField = (
+    label: string,
+    value: string,
+    onChange: (v: string) => void,
+    visible: boolean,
+    toggle: () => void,
+    invalid = false,
+  ) => (
+    <div>
+      <label className="block text-xs font-semibold text-slate-600 mb-1.5">{label}</label>
+      <div className="relative">
+        <input
+          type={visible ? 'text' : 'password'}
+          placeholder="••••••••"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className={`${inputCls} pr-10 ${invalid ? 'border-rose-300 focus:border-rose-400 focus:ring-rose-100' : ''}`}
+        />
+        <button
+          type="button"
+          onClick={toggle}
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors p-1"
+          aria-label={visible ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
+        >
+          {visible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+        </button>
+      </div>
+    </div>
+  );
+
+  const accountInitials =
+    (accountName || 'U')
+      .split(' ')
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0]?.toUpperCase())
+      .join('') || 'U';
+
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-base font-bold text-brand">
-            System Settings & Enterprise Configuration
-          </h2>
-          <p className="text-xs text-slate-500">
-            Brand styling, automated contrast colors, global font family, and organization profiles.
-          </p>
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-start gap-3.5">
+          <div className="w-11 h-11 rounded-xl bg-brand text-primary-contrast flex items-center justify-center shrink-0 shadow-sm">
+            <SettingsIcon className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold text-slate-900 tracking-tight">
+              System Settings & Enterprise Configuration
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Brand styling, automated contrast colors, global font family, and organization profiles.
+            </p>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2 self-start md:self-auto">
-          <button
-            onClick={resetTheme}
-            className="px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-semibold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
-            title="Reset theme and colors to default"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            Reset Colors
-          </button>
+        <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
+          {activeTab === 'branding' && (
+            <button
+              onClick={resetTheme}
+              className="h-10 px-4 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-semibold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              title="Reset theme and colors to default"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Reset Colors
+            </button>
+          )}
 
           <button
             onClick={handleSaveSettings}
-            className="px-4 py-2 bg-accent text-accent-contrast text-xs font-bold rounded-xl shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
+            className="h-10 px-5 bg-accent text-accent-contrast text-xs font-bold rounded-xl shadow-md hover:shadow-lg transition-all active:scale-[0.98] flex items-center gap-1.5 cursor-pointer"
           >
             <Save className="w-4 h-4" />
             Save Changes
@@ -2004,7 +2068,7 @@ export const SettingsView: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-2 border-b border-slate-200 pb-2 overflow-x-auto">
+      <div className="bg-slate-100/80 border border-slate-200/70 rounded-2xl p-1.5 flex items-center gap-1 overflow-x-auto">
         {[
           { id: 'account', label: 'My Account', icon: User },
           { id: 'branding', label: 'Theme, Colors & Typography', icon: Palette },
@@ -2018,10 +2082,10 @@ export const SettingsView: React.FC = () => {
             <button
               key={t.id}
               onClick={() => setActiveTab(t.id as any)}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+              className={`flex items-center gap-2 px-4 h-10 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                 isActive
-                  ? 'bg-brand text-primary-contrast shadow-xs'
-                  : 'bg-white text-slate-600 hover:bg-slate-100'
+                  ? 'bg-brand text-primary-contrast shadow-md'
+                  : 'text-slate-600 hover:bg-white hover:text-slate-900'
               }`}
             >
               <Icon className="w-4 h-4" />
@@ -2033,186 +2097,232 @@ export const SettingsView: React.FC = () => {
 
       {/* TAB CONTENT: MY ACCOUNT */}
       {activeTab === 'account' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-8">
-          {/* Account Profile Details */}
-          <div className="space-y-4">
-            <div>
-              <h3 className="text-sm font-bold text-brand">Account Profile</h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Manage your administrative credentials, contact details, and account preferences.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                  Full Name
-                </label>
-                <input
-                  type="text"
-                  value={accountName}
-                  onChange={(e) => setAccountName(e.target.value)}
-                  className="w-full h-10 px-3.5 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                />
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+          {/* Left: identity summary */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden lg:sticky lg:top-4">
+            <div className="h-20" style={{ background: "linear-gradient(120deg, var(--primary-dark, var(--primary)), var(--primary) 55%, var(--accent))" }} />
+            <div className="px-6 pb-6 -mt-10 text-center">
+              <div className="w-20 h-20 mx-auto rounded-full bg-accent text-2xl font-bold flex items-center justify-center ring-4 ring-white shadow-md">
+                {accountInitials}
               </div>
+              <h3 className="mt-3 text-base font-bold text-slate-900 truncate">{accountName || 'Your Name'}</h3>
+              <p className="text-xs text-slate-500 truncate">{accountEmail}</p>
+              <span className="inline-flex items-center gap-1 mt-2.5 px-2.5 py-1 rounded-full bg-primary/10 text-primary text-[11px] font-bold">
+                <ShieldCheck className="w-3.5 h-3.5" />
+                Administrator
+              </span>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  value={accountEmail}
-                  onChange={(e) => setAccountEmail(e.target.value)}
-                  className="w-full h-10 px-3.5 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                  Direct Phone
-                </label>
-                <input
-                  type="text"
-                  value={accountPhone}
-                  onChange={(e) => setAccountPhone(e.target.value)}
-                  className="w-full h-10 px-3.5 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                />
+              <div className="mt-5 pt-5 border-t border-slate-100 space-y-3 text-left">
+                <div className="flex items-center gap-3 text-xs">
+                  <span className="w-8 h-8 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-500 shrink-0">
+                    <Mail className="w-4 h-4" />
+                  </span>
+                  <span className="min-w-0 truncate font-medium text-slate-700">{accountEmail || '—'}</span>
+                </div>
+                <div className="flex items-center gap-3 text-xs">
+                  <span className="w-8 h-8 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-500 shrink-0">
+                    <Clock className="w-4 h-4" />
+                  </span>
+                  <span className="min-w-0 truncate font-medium text-slate-700">{accountPhone || '—'}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5">
+                  <span className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                    <Shield className={`w-4 h-4 ${twoFactorAuth ? 'text-emerald-600' : 'text-slate-400'}`} />
+                    Two-factor auth
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      twoFactorAuth ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-500'
+                    }`}
+                  >
+                    {twoFactorAuth ? 'Enabled' : 'Disabled'}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Password & Security Form */}
-          <form noValidate onSubmit={handlePasswordUpdate} className="pt-6 border-t border-slate-100 space-y-6">
-            <div>
-              <h3 className="text-sm font-bold text-brand flex items-center gap-2">
-                <Lock className="w-4 h-4 text-brand" />
-                Password & Security
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Keep your account secure with a strong password and multi-factor authentication.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                  Current Password
-                </label>
-                <div className="relative">
-                  <input
-                    type={showCurrentPassword ? 'text' : 'password'}
-                    placeholder="••••••••"
-                    value={currentPassword}
-                    onChange={(e) => setCurrentPassword(e.target.value)}
-                    className="w-full h-10 pl-3.5 pr-10 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowCurrentPassword(!showCurrentPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors p-1"
-                    aria-label={showCurrentPassword ? 'Hide current password' : 'Show current password'}
-                  >
-                    {showCurrentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
+          {/* Right: forms */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Account Profile Details */}
+            <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6 space-y-5">
+              <div className="flex items-center gap-3">
+                <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                  <User className="w-4.5 h-4.5" />
+                </span>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Account Profile</h3>
+                  <p className="text-xs text-slate-500">
+                    Manage your administrative credentials, contact details, and account preferences.
+                  </p>
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                  New Password
-                </label>
-                <div className="relative">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">Full Name</label>
                   <input
-                    type={showNewPassword ? 'text' : 'password'}
-                    placeholder="••••••••"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    className="w-full h-10 pl-3.5 pr-10 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                    type="text"
+                    value={accountName}
+                    onChange={(e) => setAccountName(e.target.value)}
+                    className={inputCls}
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowNewPassword(!showNewPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors p-1"
-                    aria-label={showNewPassword ? 'Hide new password' : 'Show new password'}
-                  >
-                    {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                  Confirm New Password
-                </label>
-                <div className="relative">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">Direct Phone</label>
                   <input
-                    type={showConfirmPassword ? 'text' : 'password'}
-                    placeholder="••••••••"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    className="w-full h-10 pl-3.5 pr-10 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                    type="text"
+                    value={accountPhone}
+                    onChange={(e) => setAccountPhone(e.target.value)}
+                    className={inputCls}
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors p-1"
-                    aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
-                  >
-                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">Email Address</label>
+                  <input
+                    type="email"
+                    value={accountEmail}
+                    onChange={(e) => setAccountEmail(e.target.value)}
+                    className={inputCls}
+                  />
                 </div>
               </div>
             </div>
 
-            <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-between gap-4">
-              <div>
-                <h4 className="text-xs font-bold text-slate-900 flex items-center gap-2">
-                  <Shield className="w-4 h-4 text-emerald-600" />
-                  Two-Factor Authentication (2FA)
-                </h4>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Requires an authenticator code (TOTP) on every login to ensure utmost security.
-                </p>
+            {/* Password & Security Form */}
+            <form
+              noValidate
+              onSubmit={handlePasswordUpdate}
+              className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6 space-y-5"
+            >
+              <div className="flex items-center gap-3">
+                <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                  <Lock className="w-4 h-4" />
+                </span>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Password & Security</h3>
+                  <p className="text-xs text-slate-500">
+                    Keep your account secure with a strong password and multi-factor authentication.
+                  </p>
+                </div>
               </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={twoFactorAuth}
-                onClick={() => setTwoFactorAuth(!twoFactorAuth)}
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  twoFactorAuth ? 'bg-brand' : 'bg-slate-300'
-                }`}
-              >
-                <span
-                  aria-hidden="true"
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                    twoFactorAuth ? 'translate-x-5' : 'translate-x-0'
-                  }`}
-                />
-              </button>
-            </div>
 
-            <div className="flex justify-end">
-              <button
-                type="submit"
-                disabled={isUpdatingPassword}
-                className="h-10 px-5 bg-brand text-primary-contrast text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isUpdatingPassword ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Updating...</span>
-                  </>
-                ) : (
-                  <>
-                    <Key className="w-4 h-4" />
-                    <span>Update Password</span>
-                  </>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2">
+                  {renderPasswordField(
+                    'Current Password',
+                    currentPassword,
+                    setCurrentPassword,
+                    showCurrentPassword,
+                    () => setShowCurrentPassword(!showCurrentPassword),
+                  )}
+                </div>
+                {renderPasswordField(
+                  'New Password',
+                  newPassword,
+                  setNewPassword,
+                  showNewPassword,
+                  () => setShowNewPassword(!showNewPassword),
                 )}
-              </button>
-            </div>
-          </form>
+                {renderPasswordField(
+                  'Confirm New Password',
+                  confirmPassword,
+                  setConfirmPassword,
+                  showConfirmPassword,
+                  () => setShowConfirmPassword(!showConfirmPassword),
+                  passwordsMismatch,
+                )}
+              </div>
+
+              {passwordsMismatch && (
+                <p className="text-[11px] font-semibold text-rose-600 -mt-2">Passwords do not match.</p>
+              )}
+
+              {newPassword && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 space-y-2.5">
+                  <div className="flex items-center justify-between text-[11px] font-bold">
+                    <span className="text-slate-500">Password strength</span>
+                    <span className={strengthMeta.text}>{strengthMeta.label}</span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {[0, 1, 2, 3].map((i) => (
+                      <span
+                        key={i}
+                        className={`h-1.5 rounded-full transition-colors ${
+                          i < passwordScore ? strengthMeta.color : 'bg-slate-200'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    {passwordChecks.map((c) => (
+                      <span
+                        key={c.label}
+                        className={`flex items-center gap-1 text-[11px] font-medium ${
+                          c.ok ? 'text-emerald-600' : 'text-slate-400'
+                        }`}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        {c.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 flex items-center justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <span className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                    <Shield className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900">Two-Factor Authentication (2FA)</h4>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Requires an authenticator code (TOTP) on every login to ensure utmost security.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={twoFactorAuth}
+                  onClick={() => setTwoFactorAuth(!twoFactorAuth)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    twoFactorAuth ? 'bg-brand' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                      twoFactorAuth ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="flex justify-end pt-1">
+                <button
+                  type="submit"
+                  disabled={isUpdatingPassword}
+                  className="h-10 px-5 bg-brand text-primary-contrast text-xs font-bold rounded-xl shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isUpdatingPassword ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Updating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Key className="w-4 h-4" />
+                      <span>Update Password</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 
@@ -2220,11 +2330,11 @@ export const SettingsView: React.FC = () => {
       {activeTab === 'branding' && (
         <div className="space-y-6">
           {/* 1-Click Curated Presets */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-4">
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6 space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-amber-500" />
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-3">
+                  <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0"><Sparkles className="w-4 h-4" /></span>
                   1-Click Color & Theme Presets
                 </h3>
                 <p className="text-xs text-slate-500">
@@ -2245,7 +2355,7 @@ export const SettingsView: React.FC = () => {
                     onClick={() => applyPreset(p.id)}
                     className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer relative flex flex-col justify-between ${
                       isSelected
-                        ? 'border-indigo-600 ring-2 ring-indigo-500/20 bg-indigo-50/20'
+                        ? 'border-primary ring-2 ring-primary/20 bg-primary/5'
                         : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
                     }`}
                   >
@@ -2253,7 +2363,7 @@ export const SettingsView: React.FC = () => {
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-bold text-slate-900">{p.name}</span>
                         {isSelected && (
-                          <span className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                          <span className="w-5 h-5 rounded-full bg-primary text-white flex items-center justify-center shrink-0">
                             <Check className="w-3 h-3" />
                           </span>
                         )}
@@ -2290,9 +2400,9 @@ export const SettingsView: React.FC = () => {
           </div>
 
           {/* Centralized Color Controls with Live Contrast Text Feedback */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-6">
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6 space-y-6">
             <div>
-              <h3 className="text-sm font-bold text-slate-900">Custom Color Calibration & Contrast Engine</h3>
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-3"><span className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0"><Sliders className="w-4 h-4" /></span>Custom Color Calibration & Contrast Engine</h3>
               <p className="text-xs text-slate-500">
                 Change any color in one place. The system computes WCAG relative luminance and automatically sets contrast text (like MUI contrast text).
               </p>
@@ -2300,7 +2410,7 @@ export const SettingsView: React.FC = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Primary Color Card */}
-              <div className="p-4 rounded-xl border border-slate-200 space-y-3">
+              <div className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 transition-colors space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
                     <label className="text-xs font-bold text-slate-900 block">Primary Brand Color</label>
@@ -2320,7 +2430,7 @@ export const SettingsView: React.FC = () => {
                     type="text"
                     value={theme.primary}
                     onChange={(e) => setTheme({ primary: e.target.value })}
-                    className="w-32 px-2.5 py-1 text-xs font-mono border border-slate-300 rounded-lg uppercase font-bold"
+                    className="w-32 h-9 px-2.5 text-xs font-mono border border-slate-200 rounded-lg uppercase font-bold outline-none focus:border-primary focus:ring-4 focus:ring-primary/15"
                   />
                 </div>
 
@@ -2340,7 +2450,7 @@ export const SettingsView: React.FC = () => {
               </div>
 
               {/* Accent Color Card */}
-              <div className="p-4 rounded-xl border border-slate-200 space-y-3">
+              <div className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 transition-colors space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
                     <label className="text-xs font-bold text-slate-900 block">Accent / Action Color</label>
@@ -2360,7 +2470,7 @@ export const SettingsView: React.FC = () => {
                     type="text"
                     value={theme.accent}
                     onChange={(e) => setTheme({ accent: e.target.value })}
-                    className="w-32 px-2.5 py-1 text-xs font-mono border border-slate-300 rounded-lg uppercase font-bold"
+                    className="w-32 h-9 px-2.5 text-xs font-mono border border-slate-200 rounded-lg uppercase font-bold outline-none focus:border-primary focus:ring-4 focus:ring-primary/15"
                   />
                 </div>
 
@@ -2380,7 +2490,7 @@ export const SettingsView: React.FC = () => {
               </div>
 
               {/* Main Canvas Background */}
-              <div className="p-4 rounded-xl border border-slate-200 space-y-3">
+              <div className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 transition-colors space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
                     <label className="text-xs font-bold text-slate-900 block">Canvas Background</label>
@@ -2400,7 +2510,7 @@ export const SettingsView: React.FC = () => {
                     type="text"
                     value={theme.bg}
                     onChange={(e) => setTheme({ bg: e.target.value })}
-                    className="w-32 px-2.5 py-1 text-xs font-mono border border-slate-300 rounded-lg uppercase font-bold"
+                    className="w-32 h-9 px-2.5 text-xs font-mono border border-slate-200 rounded-lg uppercase font-bold outline-none focus:border-primary focus:ring-4 focus:ring-primary/15"
                   />
                 </div>
 
@@ -2420,7 +2530,7 @@ export const SettingsView: React.FC = () => {
               </div>
 
               {/* Surface / Card Background */}
-              <div className="p-4 rounded-xl border border-slate-200 space-y-3">
+              <div className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 transition-colors space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
                     <label className="text-xs font-bold text-slate-900 block">Card & Surface Background</label>
@@ -2440,7 +2550,7 @@ export const SettingsView: React.FC = () => {
                     type="text"
                     value={theme.surface}
                     onChange={(e) => setTheme({ surface: e.target.value })}
-                    className="w-32 px-2.5 py-1 text-xs font-mono border border-slate-300 rounded-lg uppercase font-bold"
+                    className="w-32 h-9 px-2.5 text-xs font-mono border border-slate-200 rounded-lg uppercase font-bold outline-none focus:border-primary focus:ring-4 focus:ring-primary/15"
                   />
                 </div>
 
@@ -2469,7 +2579,7 @@ export const SettingsView: React.FC = () => {
               <select
                 value={theme.fontFamily}
                 onChange={(e) => setTheme({ fontFamily: e.target.value })}
-                className="w-full md:w-96 px-3 py-2 text-xs border border-slate-300 rounded-xl outline-none font-medium bg-white"
+                className="w-full md:w-96 h-11 px-3.5 text-[13px] border border-slate-200 hover:border-slate-300 rounded-xl outline-none font-medium bg-white focus:border-primary focus:ring-4 focus:ring-primary/15 transition-all cursor-pointer"
               >
                 {fontOptions.map((f) => (
                   <option key={f.value} value={f.value}>
@@ -2487,61 +2597,56 @@ export const SettingsView: React.FC = () => {
 
       {/* TAB CONTENT: COMPANY PROFILE */}
       {activeTab === 'company' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-6">
-          <div>
-            <h3 className="text-sm font-bold text-brand">Organization Profile</h3>
-            <p className="text-xs text-slate-500">General business identity used on customer invoices and reports.</p>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+            <div
+              className="h-20"
+              style={{ background: 'linear-gradient(120deg, var(--primary-dark, var(--primary)), var(--primary) 55%, var(--accent))' }}
+            />
+            <div className="px-6 pb-6 -mt-9 text-center">
+              <div className="w-[72px] h-[72px] mx-auto rounded-2xl bg-white text-primary flex items-center justify-center ring-4 ring-white shadow-md border border-slate-100">
+                <Building2 className="w-8 h-8" />
+              </div>
+              <h3 className="mt-3 text-base font-bold text-slate-900 truncate">{companyName || 'Your Company'}</h3>
+              <p className="text-xs text-slate-500 truncate">{supportEmail || '—'}</p>
+              <p className="mt-4 text-[11px] text-slate-500 leading-relaxed">
+                This identity appears on customer invoices, estimates and reports.
+              </p>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Company Legal Name</label>
-              <input
-                type="text"
-                value={companyName}
-                onChange={(e) => setCompanyName(e.target.value)}
-                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl outline-none"
-              />
+          <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6 space-y-5">
+            <div className="flex items-center gap-3">
+              <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                <Building2 className="w-4 h-4" />
+              </span>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Organization Profile</h3>
+                <p className="text-xs text-slate-500">General business identity used on customer invoices and reports.</p>
+              </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Timezone</label>
-              <input
-                type="text"
-                value={timezone}
-                onChange={(e) => setTimezone(e.target.value)}
-                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Support Email</label>
-              <input
-                type="email"
-                value={supportEmail}
-                onChange={(e) => setSupportEmail(e.target.value)}
-                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Billing Inquiries Email</label>
-              <input
-                type="email"
-                value={billingEmail}
-                onChange={(e) => setBillingEmail(e.target.value)}
-                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Direct Phone</label>
-              <input
-                type="text"
-                value={supportPhone}
-                onChange={(e) => setSupportPhone(e.target.value)}
-                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl outline-none"
-              />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="md:col-span-2">
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5">Company Legal Name</label>
+                <input type="text" value={companyName} onChange={(e) => setCompanyName(e.target.value)} className={inputCls} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5">Support Email</label>
+                <input type="email" value={supportEmail} onChange={(e) => setSupportEmail(e.target.value)} className={inputCls} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5">Billing Inquiries Email</label>
+                <input type="email" value={billingEmail} onChange={(e) => setBillingEmail(e.target.value)} className={inputCls} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5">Direct Phone</label>
+                <input type="text" value={supportPhone} onChange={(e) => setSupportPhone(e.target.value)} className={inputCls} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5">Timezone</label>
+                <input type="text" value={timezone} onChange={(e) => setTimezone(e.target.value)} className={inputCls} />
+              </div>
             </div>
           </div>
         </div>
@@ -2549,81 +2654,121 @@ export const SettingsView: React.FC = () => {
 
       {/* TAB CONTENT: REMINDERS & SLA */}
       {activeTab === 'reminders' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-6">
-          <div>
-            <h3 className="text-sm font-bold text-brand">Automated Reminder Automation Engine</h3>
-            <p className="text-xs text-slate-500">Configure trigger conditions for automated notifications across products and agency clients.</p>
+        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6 space-y-5">
+          <div className="flex items-center gap-3">
+            <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+              <Bell className="w-4 h-4" />
+            </span>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Automated Reminder Automation Engine</h3>
+              <p className="text-xs text-slate-500">
+                Configure trigger conditions for automated notifications across products and agency clients.
+              </p>
+            </div>
           </div>
 
-          <div className="space-y-4">
-            <div className="p-4 rounded-xl border border-slate-200 flex items-center justify-between">
-              <div>
-                <h4 className="text-xs font-bold text-slate-900">Lead Follow-up Schedule Window</h4>
-                <p className="text-xs text-slate-500">Trigger follow-up reminder after lead ingestion</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  value={leadFollowUpDays}
-                  onChange={(e) => setLeadFollowUpDays(Number(e.target.value))}
-                  className="w-16 px-2 py-1 text-xs border border-slate-300 rounded-lg text-center font-bold"
-                />
-                <span className="text-xs text-slate-600">days</span>
-              </div>
-            </div>
-
-            <div className="p-4 rounded-xl border border-slate-200 flex items-center justify-between">
-              <div>
-                <h4 className="text-xs font-bold text-slate-900">Payment Due Notice Window</h4>
-                <p className="text-xs text-slate-500">Generate invoice reminder alert prior to invoice due date</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  value={paymentDueReminderDays}
-                  onChange={(e) => setPaymentDueReminderDays(Number(e.target.value))}
-                  className="w-16 px-2 py-1 text-xs border border-slate-300 rounded-lg text-center font-bold"
-                />
-                <span className="text-xs text-slate-600">days</span>
-              </div>
-            </div>
-
-            <div className="p-4 rounded-xl border border-slate-200 flex items-center justify-between">
-              <div>
-                <h4 className="text-xs font-bold text-slate-900">Subscription Renewal Alert Window</h4>
-                <p className="text-xs text-slate-500">Trigger renewal reminder before SaaS contract or Retainer expires</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  value={subscriptionExpiryDays}
-                  onChange={(e) => setSubscriptionExpiryDays(Number(e.target.value))}
-                  className="w-16 px-2 py-1 text-xs border border-slate-300 rounded-lg text-center font-bold"
-                />
-                <span className="text-xs text-slate-600">days</span>
-              </div>
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {[
+              {
+                icon: UserCheck,
+                title: 'Lead Follow-up Schedule Window',
+                desc: 'Trigger follow-up reminder after lead ingestion',
+                value: leadFollowUpDays,
+                set: setLeadFollowUpDays,
+              },
+              {
+                icon: CreditCard,
+                title: 'Payment Due Notice Window',
+                desc: 'Generate invoice reminder alert prior to invoice due date',
+                value: paymentDueReminderDays,
+                set: setPaymentDueReminderDays,
+              },
+              {
+                icon: Clock,
+                title: 'Subscription Renewal Alert Window',
+                desc: 'Trigger renewal reminder before SaaS contract or Retainer expires',
+                value: subscriptionExpiryDays,
+                set: setSubscriptionExpiryDays,
+              },
+            ].map((r) => {
+              const Icon = r.icon;
+              return (
+                <div
+                  key={r.title}
+                  className="p-4 rounded-xl border border-slate-200 hover:border-primary/40 hover:shadow-xs transition-all flex flex-col gap-4"
+                >
+                  <div className="flex items-start gap-3">
+                    <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                      <Icon className="w-4 h-4" />
+                    </span>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900">{r.title}</h4>
+                      <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">{r.desc}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 mt-auto">
+                    <button
+                      type="button"
+                      onClick={() => r.set(Math.max(0, r.value - 1))}
+                      className="w-9 h-9 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold cursor-pointer"
+                      aria-label="Decrease days"
+                    >
+                      −
+                    </button>
+                    <input
+                      type="number"
+                      value={r.value}
+                      onChange={(e) => r.set(Number(e.target.value))}
+                      className="w-16 h-9 text-center text-sm font-bold border border-slate-200 rounded-lg outline-none focus:border-primary focus:ring-4 focus:ring-primary/15"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => r.set(r.value + 1)}
+                      className="w-9 h-9 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold cursor-pointer"
+                      aria-label="Increase days"
+                    >
+                      +
+                    </button>
+                    <span className="text-xs font-medium text-slate-500">days</span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
 
       {/* TAB CONTENT: BACKUP */}
       {activeTab === 'backup' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-6">
-          <div>
-            <h3 className="text-sm font-bold text-brand">Data Portability & Database Archival</h3>
-            <p className="text-xs text-slate-500">Export JSON state of products, customers, leads, payments, and marketing content.</p>
+        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6 space-y-5">
+          <div className="flex items-center gap-3">
+            <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+              <Database className="w-4 h-4" />
+            </span>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Data Portability & Database Archival</h3>
+              <p className="text-xs text-slate-500">
+                Export JSON state of products, customers, leads, payments, and marketing content.
+              </p>
+            </div>
           </div>
 
-          <div className="p-5 rounded-xl border border-dashed border-slate-300 bg-slate-50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div>
-              <h4 className="text-xs font-bold text-slate-900">Full System Snapshot</h4>
-              <p className="text-xs text-slate-500 mt-0.5">Includes all product records, customer relationships, content calendar, and billing log.</p>
+          <div className="p-5 rounded-xl border border-dashed border-primary/30 bg-primary/5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <span className="w-10 h-10 rounded-xl bg-white border border-slate-200 text-primary flex items-center justify-center shrink-0">
+                <FileText className="w-5 h-5" />
+              </span>
+              <div>
+                <h4 className="text-xs font-bold text-slate-900">Full System Snapshot</h4>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Includes all product records, customer relationships, content calendar, and billing log.
+                </p>
+              </div>
             </div>
 
             <button
               onClick={handleExportDatabase}
-              className="px-4 py-2 bg-brand text-primary-contrast text-xs font-bold rounded-xl flex items-center gap-1.5 shrink-0 cursor-pointer"
+              className="h-10 px-5 bg-brand text-primary-contrast text-xs font-bold rounded-xl shadow-md hover:shadow-lg transition-all active:scale-[0.98] flex items-center gap-1.5 shrink-0 cursor-pointer"
             >
               <Download className="w-4 h-4" />
               Export Snapshot (.JSON)

@@ -53,6 +53,7 @@ import { exportTableToExcel } from "../../../utils/excelExport";
 import {
   printTableReport,
   downloadBusinessDocument,
+  printBusinessDocument,
   downloadTableReport,
   DocumentPrintOptions,
 } from "../../../utils/printUtils";
@@ -980,8 +981,8 @@ export const PaymentInView: React.FC = () => {
     }
   };
 
-  // Print Receipt Slip
-  const handlePrintReceipt = useCallback(async (item: SalePaymentIn) => {
+  // Print Receipt — same API-backed details and layout as the Download option
+  const handlePrintReceipt = async (item: SalePaymentIn) => {
     let activeItem = item;
     if (UUID_REGEX.test(item.id)) {
       try {
@@ -993,132 +994,13 @@ export const PaymentInView: React.FC = () => {
         console.warn("Could not fetch latest receipt details for print:", e);
       }
     }
-
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) {
-      toast.error("Popup blocked. Please allow popups for this site.");
-      return;
+    try {
+      await printBusinessDocument(mapPaymentInToDocumentPrintOptions(activeItem));
+    } catch (err: any) {
+      console.error("Receipt print error:", err);
+      toast.error("Failed to print payment receipt.");
     }
-    const html = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Payment Receipt #${activeItem.receiptNo}</title>
-        <style>
-          @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');
-          body {
-            font-family: 'Plus Jakarta Sans', sans-serif;
-            padding: 40px;
-            color: #1e293b;
-            max-width: 650px;
-            margin: auto;
-          }
-          .header {
-            border-bottom: 2px solid #33077C;
-            padding-bottom: 16px;
-            margin-bottom: 24px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-          }
-          .title { font-size: 24px; font-weight: 800; color: #33077C; }
-          .badge {
-            background: #f1f5f9;
-            padding: 4px 12px;
-            border-radius: 9999px;
-            font-size: 12px;
-            font-weight: 700;
-          }
-          .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
-          .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; }
-          .label { font-size: 11px; text-transform: uppercase; color: #64748b; font-weight: 700; margin-bottom: 4px; }
-          .val { font-size: 15px; font-weight: 700; color: #0f172a; }
-          .amount-box {
-            background: #ede9fe;
-            border: 2px solid #c4b5fd;
-            border-radius: 12px;
-            padding: 20px;
-            text-align: center;
-            margin: 24px 0;
-          }
-          .amount { font-size: 32px; font-weight: 800; color: #33077C; }
-          .words { font-size: 13px; color: #475569; font-style: italic; margin-top: 6px; }
-          .footer {
-            margin-top: 40px;
-            padding-top: 20px;
-            border-top: 1px dashed #cbd5e1;
-            display: flex;
-            justify-content: space-between;
-            font-size: 12px;
-            color: #64748b;
-          }
-          .sign { text-align: right; }
-          .sign-line { width: 140px; border-top: 1px solid #0f172a; margin-top: 40px; }
-          @media print {
-            body { padding: 20px; }
-            .no-print { display: none; }
-          }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <div>
-            <div class="title">PAYMENT RECEIPT</div>
-            <div style="font-size: 12px; color: #64748b; margin-top: 4px;">OFFICIAL CASH/BANK VOUCHER</div>
-          </div>
-          <div class="badge">RECEIPT #${activeItem.receiptNo}</div>
-        </div>
-
-        <div class="grid">
-          <div class="card">
-            <div class="label">Received From (Customer)</div>
-            <div class="val">${activeItem.partyName}</div>
-            ${activeItem.customerCompany ? `<div style="font-size:12px; color:#64748b; margin-top:2px;">${activeItem.customerCompany}</div>` : ""}
-            ${activeItem.customerPhone ? `<div style="font-size:12px; color:#64748b;">${activeItem.customerPhone}</div>` : ""}
-          </div>
-          <div class="card">
-            <div class="label">Receipt Details</div>
-            <div style="font-size:13px; margin-bottom:4px;"><strong>Date:</strong> ${isoToDdmmyyyy(activeItem.date)}</div>
-            <div style="font-size:13px; margin-bottom:4px;"><strong>Mode:</strong> ${activeItem.paymentType}</div>
-            ${activeItem.invoiceNo ? `<div style="font-size:13px;"><strong>Linked Invoice:</strong> ${activeItem.invoiceNo}</div>` : ""}
-          </div>
-        </div>
-
-        <div class="amount-box">
-          <div class="label" style="color:#33077C;">Amount Received</div>
-          <div class="amount">₹ ${activeItem.receivedAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</div>
-          <div class="words">${numberToWords(activeItem.receivedAmount)}</div>
-        </div>
-
-        ${
-          activeItem.description
-            ? `<div class="card" style="margin-bottom:24px;">
-                <div class="label">Remarks / Description</div>
-                <div style="font-size:13px; color:#334155;">${activeItem.description}</div>
-               </div>`
-            : ""
-        }
-
-        <div class="footer">
-          <div>
-            <div>Generated electronically via CRM Sales Hub.</div>
-            <div style="margin-top:4px;">Date: ${new Date().toLocaleDateString("en-GB")}</div>
-          </div>
-          <div class="sign">
-            <div>Authorized Signatory</div>
-            <div class="sign-line"></div>
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
-    printWindow.document.open();
-    printWindow.document.write(html);
-    printWindow.document.close();
-    setTimeout(() => {
-      printWindow.print();
-    }, 400);
-  }, []);
+  };
 
   // Share Handlers (Email, WhatsApp)
   const handleShareEmail = (item: SalePaymentIn) => {

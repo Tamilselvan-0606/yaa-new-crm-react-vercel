@@ -85,7 +85,10 @@ import {
 } from "../../../utils/printUtils";
 import { useCompanyDocumentProfile } from "../../../hooks/useCompanyDocumentProfile";
 import { exportTableToExcel } from "../../../utils/excelExport";
-import { SaleActionDropdown } from "../utils/SaleActionDropdown";
+import {
+  SaleActionDropdown,
+  ActionIconBadge,
+} from "../utils/SaleActionDropdown";
 import {
   DocumentSharePopover,
   formatDeliveryChallanShare,
@@ -1290,7 +1293,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   const [tabs, setTabs] = useState<ChallanTabItem[]>([
     {
       id: "tab-1",
-      title: "Delivery Challan #1",
+      title: "New Delivery Challan",
       num: 1,
       formData: createEmptyFormData(1),
       editingChallan: null,
@@ -1334,7 +1337,10 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     const newTabId = `tab-${Date.now()}`;
     const newTab: ChallanTabItem = {
       id: newTabId,
-      title: `Delivery Challan #${nextNum}`,
+      title:
+        tabs.length === 0
+          ? "New Delivery Challan"
+          : `New Delivery Challan ${nextNum}`,
       num: nextNum,
       formData: createEmptyFormData(nextNum, nextPreviewNo),
       editingChallan: null,
@@ -1368,7 +1374,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     setTabs([
       {
         id: `tab-${Date.now()}`,
-        title: `Delivery Challan #${nextNum}`,
+        title: "New Delivery Challan",
         num: nextNum,
         formData: newForm,
         editingChallan: null,
@@ -2035,6 +2041,60 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       }
     });
 
+  // Cancel Delivery Challan Status (PATCH /commerce/challans/{id}/status)
+  const handleCancelChallan = (challan: DeliveryChallanRecord) =>
+    runOnce(async () => {
+      if (!challan?.id) {
+        toast.error(
+          "This delivery challan could not be found. Please refresh the list.",
+        );
+        return;
+      }
+      if (challan.status === "Cancelled") {
+        toast.info(
+          `Delivery challan ${challan.challanNo} is already cancelled.`,
+        );
+        return;
+      }
+      if (challan.status === "Converted") {
+        toast.error(
+          `Delivery challan ${challan.challanNo} is already converted and cannot be cancelled.`,
+        );
+        return;
+      }
+      try {
+        setIsActionLoading(true);
+        if (UUID_REGEX.test(challan.id)) {
+          await commerceDeliveryChallanApi.updateStatus(
+            challan.id,
+            "Cancelled",
+          );
+        } else {
+          const updated = challans.map((c) =>
+            c.id === challan.id ? { ...c, status: "Cancelled" as const } : c,
+          );
+          persistChallans(updated);
+        }
+        dispatch(
+          baseApi.util.invalidateTags([
+            { type: "DeliveryChallan", id: challan.id },
+            { type: "DeliveryChallan", id: "LIST" },
+          ]),
+        );
+        toast.success(
+          `Delivery Challan ${challan.challanNo} marked as Cancelled.`,
+        );
+        await fetchDeliveryChallans();
+      } catch (err: any) {
+        console.error("Cancel challan failed:", err);
+        toast.error(
+          getApiErrorMessage(err, "Failed to cancel delivery challan"),
+        );
+      } finally {
+        setIsActionLoading(false);
+      }
+    });
+
   // Duplicate Delivery Challan
   const handleDuplicateChallan = (item: DeliveryChallanRecord) => {
     const nextNum = challans.length + 1;
@@ -2246,8 +2306,23 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   };
 
   // Print Delivery Challan
-  const handlePrintChallan = (item: DeliveryChallanRecord) => {
-    printBusinessDocument(buildChallanDocumentOptions(item));
+  // Load the latest record (GET /commerce/challans/:id) so print / download use server data
+  const fetchLatestChallan = async (
+    item: DeliveryChallanRecord,
+  ): Promise<DeliveryChallanRecord> => {
+    if (!UUID_REGEX.test(item.id)) return item;
+    try {
+      const res = await commerceDeliveryChallanApi.getChallanById(item.id);
+      if (res?.success && res.data) return mapApiDeliveryChallanToRecord(res.data);
+    } catch (err) {
+      console.warn("Could not fetch latest challan for print/download:", err);
+    }
+    return item;
+  };
+
+  const handlePrintChallan = async (item: DeliveryChallanRecord) => {
+    const latest = await fetchLatestChallan(item);
+    printBusinessDocument(buildChallanDocumentOptions(latest));
   };
 
   // Download Delivery Challan as valid PDF
@@ -2259,10 +2334,11 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       id: toastId,
     });
     try {
-      const options = buildChallanDocumentOptions(item);
+      const latest = await fetchLatestChallan(item);
+      const options = buildChallanDocumentOptions(latest);
       await downloadBusinessDocument(
         options,
-        `DeliveryChallan_${item.challanNo.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`,
+        `DeliveryChallan_${latest.challanNo.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`,
       );
       toast.success(
         `Delivery Challan ${item.challanNo} downloaded successfully!`,
@@ -3927,82 +4003,6 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                   Cancel
                 </Button>
 
-                {/* Share Dropdown Button */}
-
-                <div className="dc-share-footer-container relative">
-                  <Button
-                    variant="secondary"
-                    size="md"
-                    type="button"
-                    onClick={() => setShowShareFooterMenu(!showShareFooterMenu)}
-                    icon={<ChevronDown className="w-3.5 h-3.5 ml-1" />}
-                  >
-                    Share
-                  </Button>
-
-                  {/* Share Popover */}
-                  {showShareFooterMenu && (
-                    <div className="absolute right-0 bottom-full mb-2 w-48 bg-white rounded-2xl shadow-2xl border border-slate-200 p-2 z-50 animate-in fade-in zoom-in-95 duration-100 text-xs text-left">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowShareFooterMenu(false);
-                          const text = encodeURIComponent(
-                            `Delivery Challan from YAA Mart\nChallan No: ${activeTab.formData.challanNo || activeTab.formData.referenceNo}\nCustomer: ${activeTab.formData.partyName}\nAmount: ₹${currentCalculations.finalAmount}`,
-                          );
-                          window.open(`https://wa.me/?text=${text}`, "_blank");
-                        }}
-                        className="w-full px-3 py-2 text-left font-bold text-slate-700 hover:bg-purple-50 hover:text-[#33077C] rounded-xl flex items-center gap-2 cursor-pointer transition-colors"
-                      >
-                        <span>Share via WhatsApp</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowShareFooterMenu(false);
-                          const subject = encodeURIComponent(
-                            `Delivery Challan ${activeTab.formData.challanNo || activeTab.formData.referenceNo}`,
-                          );
-                          const body = encodeURIComponent(
-                            `Dear ${activeTab.formData.partyName},\n\nChallan amount: ₹${currentCalculations.finalAmount}`,
-                          );
-                          window.open(
-                            `mailto:${activeTab.formData.customerEmail}?subject=${subject}&body=${body}`,
-                            "_blank",
-                          );
-                        }}
-                        className="w-full px-3 py-2 text-left font-bold text-slate-700 hover:bg-purple-50 hover:text-[#33077C] rounded-xl flex items-center gap-2 cursor-pointer transition-colors"
-                      >
-                        <span>Share via Email</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Not offered when the challan being edited is already converted (the server says so) */}
-                {!(
-                  activeTab.editingChallan &&
-                  getChallanStages(activeTab.editingChallan).isFullyConverted
-                ) && (
-                  <Button
-                    variant="secondary"
-                    size="md"
-                    type="button"
-                    disabled={isActionLoading}
-                    onClick={() => handleSaveChallan(true)}
-                    className="border-purple-200 text-[#33077C] bg-purple-50/50 hover:bg-purple-100/50"
-                    icon={
-                      isActionLoading ? (
-                        <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
-                      ) : (
-                        <ShoppingCart className="w-4 h-4" />
-                      )
-                    }
-                  >
-                    Save & Convert to Sale
-                  </Button>
-                )}
-
                 {/* Save Button (CRM Primary Theme #33077C) */}
                 <Button
                   variant="primary"
@@ -4356,7 +4356,10 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                   const challanStages = getChallanStages(item);
                   const isActionOpen = activeDropdownId === item.id;
                   const createdDt = formatDateTime(item.createdAt);
-                  const convertedAt = resolveDocumentConvertedAt("Challan", item as any);
+                  const convertedAt = resolveDocumentConvertedAt(
+                    "Challan",
+                    item as any,
+                  );
                   const convertedDt = formatDateTime(convertedAt);
                   const resolvedCustomerCode =
                     (item as any).customerCode ||
@@ -4407,7 +4410,10 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                         </div>
                         {item.customerPhone && (
                           <div>
-                            <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight"><Phone className="w-3 h-3 text-[#33077C] shrink-0" />{item.customerPhone}</span>
+                            <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight">
+                              <Phone className="w-3 h-3 text-[#33077C] shrink-0" />
+                              {item.customerPhone}
+                            </span>
                           </div>
                         )}
                       </td>
@@ -4507,7 +4513,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                                 <button
                                   type="button"
                                   disabled={
-                                    item.status === "Cancelled" || isActionLoading
+                                    item.status === "Cancelled" ||
+                                    isActionLoading
                                   }
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -4552,9 +4559,9 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                                           setConvertDropdownPos(null);
                                           handleConvertExistingToSale(item);
                                         }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2.5"
+                                        className="w-full text-left px-3 py-2 text-[13px] font-bold text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-3"
                                       >
-                                        <ShoppingCart className="w-3.5 h-3.5 text-slate-500" />
+                                        <ActionIconBadge variant="invoice" />
                                         <span>Convert to Sale Invoice</span>
                                       </button>
                                     </div>
@@ -4576,13 +4583,6 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                           <SaleActionDropdown
                             items={[
                               {
-                                label: "Convert to Sales Invoice",
-                                variant: "invoice",
-                                hidden: challanStages.isFullyConverted,
-                                onClick: () =>
-                                  handleConvertExistingToSale(item),
-                              },
-                              {
                                 label: "View/Edit",
                                 variant: "edit",
                                 onClick: () => handleOpenEditForm(item),
@@ -4591,29 +4591,6 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                                 label: "Duplicate",
                                 variant: "duplicate",
                                 onClick: () => handleDuplicateChallan(item),
-                              },
-                              {
-                                label: "Preview",
-                                variant: "preview",
-                                onClick: async () => {
-                                  let fresh = item;
-                                  try {
-                                    const res =
-                                      await commerceDeliveryChallanApi.getChallanById(
-                                        item.id,
-                                      );
-                                    if (res?.success && res.data)
-                                      fresh = mapApiDeliveryChallanToRecord(
-                                        res.data,
-                                      );
-                                  } catch (err) {
-                                    console.warn(
-                                      "Could not fetch delivery challan details:",
-                                      err,
-                                    );
-                                  }
-                                  setPreviewChallan(fresh);
-                                },
                               },
                               {
                                 label: "Print Challan",
@@ -4626,7 +4603,13 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                                 onClick: () => handleDownloadChallan(item),
                               },
                               {
-                                label: "Delete / Cancel",
+                                label: "Mark as Cancelled",
+                                variant: "cancel",
+                                hidden: item.status !== "Open",
+                                onClick: () => handleCancelChallan(item),
+                              },
+                              {
+                                label: "Delete ",
                                 variant: "delete",
                                 onClick: () => handleOpenDeleteModal(item),
                               },

@@ -270,6 +270,19 @@ function getVariantConfig(variant: ActionVariant, customIcon?: ReactNode) {
   }
 }
 
+/** Same colored round icon badge the Actions menu uses, for menus rendered outside SaleActionDropdown (e.g. Convert). */
+export const ActionIconBadge: React.FC<{ variant: ActionVariant }> = ({ variant }) => {
+  const config = getVariantConfig(variant);
+  return (
+    <span
+      style={{ width: '26px', height: '26px' }}
+      className={`rounded-full flex items-center justify-center shrink-0 shadow-2xs ${config.bg}`}
+    >
+      {config.icon}
+    </span>
+  );
+};
+
 export const SaleActionDropdown: React.FC<SaleActionDropdownProps> = ({
   items,
   title = 'Actions',

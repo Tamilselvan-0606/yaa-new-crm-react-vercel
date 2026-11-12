@@ -1151,16 +1151,30 @@ export const ExpenseView: React.FC = () => {
     };
   };
 
-  const handlePrintExpense = (exp: ExpenseItem) => {
-    printBusinessDocument(buildExpensePrintOptions(exp));
+  // Load the latest record (GET /expenses/:id) so print / download use server data
+  const fetchLatestExpense = async (exp: ExpenseItem): Promise<ExpenseItem> => {
+    if (!isValidUuid(exp.id)) return exp;
+    try {
+      const res = await workExpenseApi.getExpenseById(exp.id);
+      if (res?.data) return { ...exp, ...mapApiExpenseToUi(res.data) };
+    } catch (err) {
+      console.warn('Could not fetch latest expense for print/download:', err);
+    }
+    return exp;
+  };
+
+  const handlePrintExpense = async (exp: ExpenseItem) => {
+    const latest = await fetchLatestExpense(exp);
+    printBusinessDocument(buildExpensePrintOptions(latest));
   };
 
   const handleDownloadExpense = async (exp: ExpenseItem) => {
     if (isDownloadingExpense) return;
     setIsDownloadingExpense(true);
-    const filename = `ExpenseVoucher_${(exp.expenseNo || 'expense').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
     try {
-      await downloadBusinessDocument(buildExpensePrintOptions(exp), filename);
+      const latest = await fetchLatestExpense(exp);
+      const filename = `ExpenseVoucher_${(latest.expenseNo || 'expense').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+      await downloadBusinessDocument(buildExpensePrintOptions(latest), filename);
       toast.success(`Downloaded ${filename}`);
     } catch (err) {
       console.error('Failed to download expense voucher PDF:', err);

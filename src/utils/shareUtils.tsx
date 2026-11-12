@@ -429,8 +429,8 @@ export const formatPaymentInShare = (pay: any): SharePayload => {
   };
 };
 
-export const formatCreditNoteShare = (tx: any): SharePayload => {
-  const refNo = tx.refNo || tx.creditNoteNo || tx.id || 'N/A';
+export const formatSalesReturnShare = (tx: any): SharePayload => {
+  const refNo = tx.refNo || tx.returnNo || tx.id || 'N/A';
   const customer = tx.customerName || tx.partyName || 'Customer';
   const amt = Number(tx.totalAmount || tx.grandTotal || tx.amount || 0).toLocaleString('en-IN', {
     minimumFractionDigits: 2,
@@ -442,25 +442,25 @@ export const formatCreditNoteShare = (tx: any): SharePayload => {
 
   const emailBody =
     `Dear ${customer},\n\n` +
-    `Here are your Credit Note / Return details:\n\n` +
-    `Credit Note Ref: ${refNo}\n` +
+    `Here are your Sales Return details:\n\n` +
+    `Sales Return Ref: ${refNo}\n` +
     `Amount: ₹${amt}\n` +
     `Status: ${status}\n` +
     (date ? `Date: ${date}\n` : '') +
     `\nBest regards,\nYAA Sales Team`;
 
   const whatsAppText =
-    `*YAA CRM - CREDIT NOTE*\n` +
+    `*YAA CRM - SALES RETURN*\n` +
     `--------------------------------\n` +
-    `*Credit Note Ref:* ${refNo}\n` +
+    `*Sales Return Ref:* ${refNo}\n` +
     `*Customer:* ${customer}\n` +
     `*Amount:* ₹${amt}\n` +
     `*Status:* ${status}\n` +
     (date ? `*Date:* ${date}\n` : '');
 
   return {
-    title: `Credit Note ${refNo}`,
-    subject: `Credit Note #${refNo} from YAA CRM`,
+    title: `Sales Return ${refNo}`,
+    subject: `Sales Return #${refNo} from YAA CRM`,
     body: emailBody,
     recipientEmail: email,
     recipientPhone: phone,

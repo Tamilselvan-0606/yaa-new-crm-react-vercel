@@ -68,7 +68,7 @@ import {
   DocumentPrintOptions,
 } from "../../../utils/printUtils";
 import { FileSpreadsheet, Download } from "lucide-react";
-import { SaleActionDropdown } from "../utils/SaleActionDropdown";
+import { SaleActionDropdown, ActionIconBadge } from "../utils/SaleActionDropdown";
 import {
   DocumentSharePopover,
   formatSaleOrderShare,
@@ -1260,7 +1260,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   const [tabs, setTabs] = useState<SaleOrderTabItem[]>([
     {
       id: "tab-1",
-      title: "Sale Order #1",
+      title: "New Sale Order",
       num: 1,
       formData: createEmptyFormData(1),
       editingOrder: null,
@@ -1304,7 +1304,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     const newTabId = `tab-${Date.now()}`;
     const newTab: SaleOrderTabItem = {
       id: newTabId,
-      title: `Sale Order #${nextNum}`,
+      title: tabs.length === 0 ? "New Sale Order" : `New Sale Order ${nextNum}`,
       num: nextNum,
       formData: createEmptyFormData(nextNum, nextPreviewNo),
       editingOrder: null,
@@ -1338,7 +1338,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     setTabs([
       {
         id: `tab-${Date.now()}`,
-        title: `Sale Order #${nextNum}`,
+        title: "New Sale Order",
         num: nextNum,
         formData: newForm,
         editingOrder: null,
@@ -2346,14 +2346,29 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     };
   };
 
-  const handleDownloadSaleOrder = async (order: SaleOrderRecord) => {
+  // Load the latest record (GET /commerce/orders/:id) so print / download use server data
+  const fetchLatestOrder = async (
+    order: SaleOrderRecord,
+  ): Promise<SaleOrderRecord> => {
+    if (!UUID_REGEX.test(order.id)) return order;
+    try {
+      const res = await commerceSaleOrderApi.getOrderById(order.id);
+      if (res?.success && res.data) return mapApiSaleOrderToSaleOrderRecord(res.data);
+    } catch (err) {
+      console.warn("Could not fetch latest sale order for print/download:", err);
+    }
+    return order;
+  };
+
+  const handleDownloadSaleOrder = async (listOrder: SaleOrderRecord) => {
     if (isDownloadingPdf) return;
     setIsDownloadingPdf(true);
-    const toastId = `dl-so-${order.id}`;
-    toast.loading(`Preparing PDF for Sale Order ${order.orderNo}...`, {
+    const toastId = `dl-so-${listOrder.id}`;
+    toast.loading(`Preparing PDF for Sale Order ${listOrder.orderNo}...`, {
       id: toastId,
     });
     try {
+      const order = await fetchLatestOrder(listOrder);
       const options = mapSaleOrderToDocumentPrintOptions(order);
       await downloadBusinessDocument(
         options,
@@ -2371,7 +2386,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   };
 
   // Print Sale Order Document
-  const handlePrintOrder = (order: SaleOrderRecord) => {
+  const handlePrintOrder = async (listOrder: SaleOrderRecord) => {
+    const order = await fetchLatestOrder(listOrder);
     const printWindow = window.open("", "_blank");
     if (!printWindow) {
       toast.error("Unable to open print preview. Please allow popups.");
@@ -3998,81 +4014,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                   Cancel
                 </Button>
 
-                {/* Share Dropdown Button */}
-                <div className="so-share-footer-container relative">
-                  <Button
-                    variant="secondary"
-                    size="md"
-                    type="button"
-                    onClick={() => setShowShareFooterMenu(!showShareFooterMenu)}
-                    icon={<ChevronDown className="w-3.5 h-3.5 ml-1" />}
-                  >
-                    Share
-                  </Button>
-
-                  {/* Share Popover */}
-                  {showShareFooterMenu && (
-                    <div className="absolute right-0 bottom-full mb-2 w-48 bg-white rounded-2xl shadow-2xl border border-slate-200 p-2 z-50 animate-in fade-in zoom-in-95 duration-100 text-xs text-left">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowShareFooterMenu(false);
-                          const text = encodeURIComponent(
-                            `Sale Order from YAA Mart\nOrder No: ${activeTab.formData.orderNo}\nCustomer: ${activeTab.formData.partyName}\nAmount: ₹${currentCalculations.finalAmount}`,
-                          );
-                          window.open(`https://wa.me/?text=${text}`, "_blank");
-                        }}
-                        className="w-full px-3 py-2 text-left font-bold text-slate-700 hover:bg-purple-50 hover:text-[#33077C] rounded-xl flex items-center gap-2 cursor-pointer transition-colors"
-                      >
-                        <span>Share via WhatsApp</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowShareFooterMenu(false);
-                          const subject = encodeURIComponent(
-                            `Sale Order ${activeTab.formData.orderNo}`,
-                          );
-                          const body = encodeURIComponent(
-                            `Dear ${activeTab.formData.partyName},\n\nOrder amount: ₹${currentCalculations.finalAmount}`,
-                          );
-                          window.open(
-                            `mailto:${activeTab.formData.customerEmail}?subject=${subject}&body=${body}`,
-                            "_blank",
-                          );
-                        }}
-                        className="w-full px-3 py-2 text-left font-bold text-slate-700 hover:bg-purple-50 hover:text-[#33077C] rounded-xl flex items-center gap-2 cursor-pointer transition-colors"
-                      >
-                        <span>Share via Email</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Not offered when the order being edited is already converted (the server says so) */}
-                {!(
-                  activeTab.editingOrder &&
-                  getOrderStages(activeTab.editingOrder).isFullyConverted
-                ) && (
-                  <Button
-                    variant="secondary"
-                    size="md"
-                    type="button"
-                    disabled={isActionLoading}
-                    onClick={() => handleSaveSaleOrder(true)}
-                    className="border-purple-200 text-[#33077C] bg-purple-50/50 hover:bg-purple-100/50"
-                    icon={
-                      isActionLoading ? (
-                        <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
-                      ) : (
-                        <ShoppingCart className="w-4 h-4" />
-                      )
-                    }
-                  >
-                    Save & Convert to Sale
-                  </Button>
-                )}
-
                 {/* Save Button (CRM Primary Theme #33077C) */}
                 <Button
                   variant="primary"
@@ -4838,9 +4779,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                                               item,
                                             );
                                           }}
-                                          className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2.5"
+                                          className="w-full text-left px-3 py-2 text-[13px] font-bold text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-3"
                                         >
-                                          <Truck className="w-3.5 h-3.5 text-slate-500" />
+                                          <ActionIconBadge variant="challan" />
                                           <span>
                                             Convert to Delivery Challan
                                           </span>
@@ -4854,9 +4795,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                                             setConvertDropdownPos(null);
                                             handleConvertExistingToSale(item);
                                           }}
-                                          className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2.5"
+                                          className="w-full text-left px-3 py-2 text-[13px] font-bold text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-3"
                                         >
-                                          <ShoppingCart className="w-3.5 h-3.5 text-slate-500" />
+                                          <ActionIconBadge variant="invoice" />
                                           <span>Convert to Sale Invoice</span>
                                         </button>
                                       )}
@@ -4877,24 +4818,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                             <SaleActionDropdown
                               items={[
                                 {
-                                  label: "Convert to Delivery Challan",
-                                  variant: "challan",
-                                  disabled:
-                                    orderStages.isChallanConverted ||
-                                    orderStages.isFullyConverted,
-                                  onClick: () =>
-                                    handleConvertExistingToChallan(item),
-                                },
-                                {
-                                  label: "Convert to Sales Invoice",
-                                  variant: "invoice",
-                                  disabled:
-                                    orderStages.isInvoiceConverted ||
-                                    orderStages.isFullyConverted,
-                                  onClick: () =>
-                                    handleConvertExistingToSale(item),
-                                },
-                                {
                                   label: "View/Edit",
                                   variant: "edit",
                                   onClick: () => handleOpenEditForm(item),
@@ -4914,11 +4837,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                                   label: "Download Order",
                                   variant: "download",
                                   onClick: () => handleDownloadSaleOrder(item),
-                                },
-                                {
-                                  label: "View History",
-                                  variant: "view",
-                                  onClick: () => handleOpenHistory(item),
                                 },
                                 {
                                   label: "Mark as Cancelled",

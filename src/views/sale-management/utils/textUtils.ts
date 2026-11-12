@@ -96,6 +96,18 @@ export const isExcludedInput = (el: HTMLElement): boolean => {
 };
 
 /**
+ * Batch / lot numbers are always upper case (e.g. "bat-2026-001" -> "BAT-2026-001").
+ * Matches inputs marked data-uppercase="true" or whose name/id/placeholder/aria-label mention a batch number.
+ */
+export const isBatchNumberInput = (el: HTMLElement): boolean => {
+  if (el.getAttribute('data-uppercase') === 'true') return true;
+  if (!(el instanceof HTMLInputElement)) return false;
+  const id = `${el.name || ''} ${el.id || ''} ${el.placeholder || ''} ${el.getAttribute('aria-label') || ''}`.toLowerCase();
+  if (/search|date|expiry|mfg/.test(id)) return false;
+  return /batch|lot\s?no/.test(id);
+};
+
+/**
  * Programmatically updates an input or textarea element's value while updating React's valueTracker.
  */
 export const setNativeInputValue = (
@@ -169,8 +181,10 @@ export const useAutoCapitalizeFirstLetter = (enabled: boolean = true) => {
       const rawValue = target.value;
       if (!rawValue || typeof rawValue !== 'string') return;
 
-      // Transform first letter to uppercase (handling optional leading whitespace)
-      const updatedValue = rawValue.replace(/^(\s*)([a-z])/, (_, spaces, char) => `${spaces}${char.toUpperCase()}`);
+      // Batch numbers: whole value upper case; everything else: first letter only
+      const updatedValue = isBatchNumberInput(target)
+        ? rawValue.toUpperCase()
+        : rawValue.replace(/^(\s*)([a-z])/, (_, spaces, char) => `${spaces}${char.toUpperCase()}`);
 
       // Only transform if the text actually changed
       if (updatedValue !== rawValue) {
@@ -218,4 +232,13 @@ export const SaleManagementAutoCapitalize: React.FC = () => {
   useAutoCapitalizeFirstLetter(true);
 
   return null;
+};
+
+/** Default text shown in the Initial Batch No field. */
+export const BATCH_PREFIX = 'BAT-';
+
+/** Returns the batch number the user actually entered ("" when the field only holds the default prefix). */
+export const cleanBatchNo = (value?: string | null): string => {
+  const v = (value || '').trim();
+  return v.toUpperCase() === BATCH_PREFIX ? '' : v;
 };

@@ -98,6 +98,7 @@ import { customerApi, mapApiCustomerToSalesCustomer } from '../../../api/commerc
 import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS, handleNonNegativeKeyDown } from '../utils/formUtils';
 
 import { formatDate } from '../utils/dateUtils';
+import { CustomerCell } from '../utils/CustomerCell';
 type CollectionTab = 'all' | 'due-today' | 'overdue' | 'promise-to-pay' | 'collected';
 type CollectionsSubView =
   | 'dashboard'
@@ -1247,7 +1248,7 @@ export const CollectionsView: React.FC = () => {
       });
 
       toast.success(
-        `Recorded payment of �${Number(paymentAmount).toLocaleString('en-IN', {
+        `Recorded payment of ₹${Number(paymentAmount).toLocaleString('en-IN', {
           minimumFractionDigits: 2,
         })} for Invoice ${selectedInvoice.invoiceNo}`
       );
@@ -1511,7 +1512,7 @@ export const CollectionsView: React.FC = () => {
       });
 
       toast.success(
-        `Promise to Pay recorded for �${Number(promisedAmount).toLocaleString()} on ${promiseDate}`
+        `Promise to Pay recorded for ₹${Number(promisedAmount).toLocaleString()} on ${formatDate(promiseDate)}`
       );
 
       setIsPromiseModalOpen(false);
@@ -1668,7 +1669,7 @@ export const CollectionsView: React.FC = () => {
       else if (diffDays > 1 && diffDays < 30) relative = `${diffDays} days ago`;
       else if (diffDays >= 30) relative = `${Math.floor(diffDays / 30)} mo ago`;
 
-      const day = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+      const day = formatDate(d);
       const hasTime = rawDate.includes('T') && !rawDate.endsWith('T00:00:00.000Z') && !rawDate.endsWith('T00:00:00Z');
       const time = hasTime ? d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '';
 
@@ -2174,32 +2175,12 @@ export const CollectionsView: React.FC = () => {
                     >
                       {/* Customer */}
                       <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-[#33077C] text-white flex items-center justify-center font-bold text-xs tracking-wider shadow-xs shrink-0 select-none">
-                            {customerInitials}
-                          </div>
-                          <div className="flex flex-col">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <button
-                                type="button"
-                                onClick={() => handleOpenTimeline(item)}
-                                className="font-bold text-slate-900 text-xs sm:text-[14px] text-left hover:text-[#33077C] hover:underline cursor-pointer"
-                              >
-                                {item.customerName}
-                              </button>
-                              {resolvedCustomerCode && (
-                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-50 text-[#33077C] border border-purple-200/80">
-                                  {resolvedCustomerCode}
-                                </span>
-                              )}
-                            </div>
-                            {item.customerPhone && item.customerPhone !== "N/A" && (
-                              <div>
-                                <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight"><Phone className="w-3 h-3 text-[#33077C] shrink-0" />{item.customerPhone}</span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
+                        <CustomerCell
+                          name={item.customerName}
+                          code={resolvedCustomerCode}
+                          phone={item.customerPhone}
+                          onNameClick={() => handleOpenTimeline(item)}
+                        />
                       </td>
 
                       {/* Invoice No */}
@@ -2452,7 +2433,6 @@ export const CollectionsView: React.FC = () => {
                 <thead className="bg-[#33077C] text-white font-bold uppercase text-[10px] tracking-wider">
                   <tr>
                     <th className="py-3 px-3.5 text-white">Customer</th>
-                    <th className="py-3 px-3 text-white">Customer Code</th>
                     <th className="py-3 px-3 text-right text-white">Outstanding</th>
                     <th className="py-3 px-3 text-white">Sales Rep</th>
                     <th className="py-3 px-3 text-white">Assigned Date</th>
@@ -2463,14 +2443,14 @@ export const CollectionsView: React.FC = () => {
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
                   {isAssignmentsLoading ? (
                     <tr>
-                      <td colSpan={7} className="py-12 text-center text-slate-500">
+                      <td colSpan={6} className="py-12 text-center text-slate-500">
                         <Loader2 className="w-8 h-8 animate-spin mx-auto text-[#33077C] mb-2" />
                         <p className="text-sm font-medium">Loading customer assignments...</p>
                       </td>
                     </tr>
                   ) : paginatedCustomerAssignments.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-12 text-center text-slate-400">
+                      <td colSpan={6} className="py-12 text-center text-slate-400">
                         <UsersRound className="w-10 h-10 mx-auto text-slate-300 mb-2 opacity-50" />
                         <p className="text-sm font-medium">No customer assignments found</p>
                       </td>
@@ -2479,18 +2459,16 @@ export const CollectionsView: React.FC = () => {
                     paginatedCustomerAssignments.map((item) => (
                       <tr key={item.customer.id} className="hover:bg-slate-50/80 transition-colors">
                         <td className="py-3 px-3.5 font-medium">
-                          <div className="font-bold text-slate-900">{item.customer.name}</div>
-                          {item.customer.company && (
-                            <div className="text-[11px] text-slate-500">{item.customer.company}</div>
-                          )}
-                          <div className="text-[10px] text-slate-400 font-mono">{item.customer.phone}</div>
-                        </td>
-                        <td className="py-3 px-3 font-mono font-semibold text-purple-700">
-                          {item.customer.customerCode || 'â€”'}
+                          <CustomerCell
+                            name={item.customer.name}
+                            code={item.customer.customerCode}
+                            phone={item.customer.phone}
+                            company={item.customer.company}
+                          />
                         </td>
                         <td className="py-3 px-3 text-right">
                           <span className={`font-bold text-sm ${item.outstanding > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
-                            �{item.outstanding.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                            ₹{item.outstanding.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                           </span>
                         </td>
                         <td className="py-3 px-3">
@@ -2652,14 +2630,19 @@ export const CollectionsView: React.FC = () => {
                       return (
                         <tr key={fup.id} className="hover:bg-slate-50/80 transition-colors">
                           <td className="py-3 px-3.5 font-medium whitespace-nowrap">
-                            <div className="font-bold text-slate-900">{fup.followUpDate}</div>
-                            <div className="text-[10px] text-slate-400 font-mono">{fup.followUpTime || 'â€”'}</div>
+                            <div className="font-bold text-slate-900">{formatDate(fup.followUpDate)}</div>
+                            <div className="text-[10px] text-slate-400 font-mono">{fup.followUpTime || '—'}</div>
                           </td>
                           <td className="py-3 px-3 font-medium">
-                            <div className="font-bold text-slate-900">{fup.customerName || cust?.name || 'Customer'}</div>
-                            <div className="text-[11px] text-purple-700 font-mono font-semibold">
-                              {fup.invoiceNo || fup.invoiceNumber || 'General Follow-up'}
-                            </div>
+                            <CustomerCell
+                              name={fup.customerName || cust?.name || 'Customer'}
+                              code={cust?.customerCode}
+                              phone={cust?.phone}
+                            >
+                              <span className="mt-1 text-[11px] text-purple-700 font-mono font-semibold">
+                                {fup.invoiceNo || fup.invoiceNumber || 'General Follow-up'}
+                              </span>
+                            </CustomerCell>
                           </td>
                           <td className="py-3 px-3 font-semibold text-slate-800">
                             {fup.salesRepresentativeName || 'Rep'}
@@ -2692,15 +2675,15 @@ export const CollectionsView: React.FC = () => {
                           <td className="py-3 px-3">
                             {fup.hasPromiseToPay || fup.promisedAmount ? (
                               <div className="text-[11px]">
-                                <span className="font-bold text-indigo-700">�{Number(fup.promisedAmount || 0).toLocaleString()}</span>
-                                <span className="text-[10px] text-slate-400 block font-mono">Date: {fup.promiseDate || 'â€”'}</span>
+                                <span className="font-bold text-indigo-700">₹{Number(fup.promisedAmount || 0).toLocaleString()}</span>
+                                <span className="text-[10px] text-slate-400 block font-mono">Date: {formatDate(fup.promiseDate, '—')}</span>
                               </div>
                             ) : (
-                              <span className="text-slate-400">â€”</span>
+                              <span className="text-slate-400">—</span>
                             )}
                           </td>
                           <td className="py-3 px-3 font-semibold text-purple-700 font-mono text-[11px]">
-                            {fup.nextFollowUpDate || 'â€”'}
+                            {formatDate(fup.nextFollowUpDate, '—')}
                           </td>
                           <td className="py-3 px-3.5 text-center">
                             <button
@@ -2825,10 +2808,25 @@ export const CollectionsView: React.FC = () => {
                           {p.receiptNo}
                         </td>
                         <td className="py-3 px-3 text-slate-600 font-medium">
-                          {p.date || p.paymentDate}
+                          {formatDate(p.date || p.paymentDate)}
                         </td>
-                        <td className="py-3 px-3 font-bold text-slate-900">
-                          {p.partyName}
+                        <td className="py-3 px-3">
+                          {(() => {
+                            const histName =
+                              p.partyName || p.customer?.name || (p as any).customerName || (p as any).customer_name || (p as any).party?.name || '';
+                            const histCust = customers.find(
+                              (c) =>
+                                (p.customer?.id && c.id === p.customer.id) ||
+                                (histName && c.name && c.name.trim().toLowerCase() === histName.trim().toLowerCase()),
+                            );
+                            return (
+                              <CustomerCell
+                                name={histName || histCust?.name}
+                                code={histCust?.customerCode}
+                                phone={p.customer?.phone || histCust?.phone}
+                              />
+                            );
+                          })()}
                         </td>
                         <td className="py-3 px-3 font-mono font-semibold text-purple-700">
                           {p.invoiceNo || 'On Account'}
@@ -2842,10 +2840,10 @@ export const CollectionsView: React.FC = () => {
                           </span>
                         </td>
                         <td className="py-3 px-3 text-slate-500 font-mono text-[11px]">
-                          {p.referenceNo || 'â€”'}
+                          {p.referenceNo || '—'}
                         </td>
                         <td className="py-3 px-3 text-right font-bold text-emerald-700 text-sm">
-                          �{Number(p.receivedAmount || p.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          ₹{Number(p.receivedAmount || p.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                         </td>
                         <td className="py-3 px-3 text-center">
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -2898,7 +2896,7 @@ export const CollectionsView: React.FC = () => {
                   Customer: <span className="font-bold">{selectedCustomer?.name || selectedInvoice.customerName}</span>
                 </p>
                 <p className="text-[11px] text-slate-500 font-mono mt-0.5">
-                  Invoice No: {selectedInvoice.invoiceNo} - Due: {selectedInvoice.dueDate || 'N/A'}
+                  Invoice No: {selectedInvoice.invoiceNo} - Due: {formatDate(selectedInvoice.dueDate, 'N/A')}
                 </p>
               </div>
               <div className="text-right">
@@ -2906,7 +2904,7 @@ export const CollectionsView: React.FC = () => {
                   Current Outstanding
                 </span>
                 <span className="text-lg font-bold text-rose-600">
-                  �{(selectedInvoice.balance !== undefined
+                  ₹{(selectedInvoice.balance !== undefined
                     ? selectedInvoice.balance
                     : Math.max(0, (selectedInvoice.grandTotal || 0) - (selectedInvoice.paidAmount || 0))
                   ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
@@ -3070,7 +3068,7 @@ export const CollectionsView: React.FC = () => {
               <div className="text-right">
                 <span className="text-[10px] text-slate-500 uppercase font-semibold block">Outstanding Amount</span>
                 <span className="text-base font-bold text-rose-600">
-                  �{(selectedInvoice.balance !== undefined
+                  ₹{(selectedInvoice.balance !== undefined
                     ? selectedInvoice.balance
                     : Math.max(0, (selectedInvoice.grandTotal || 0) - (selectedInvoice.paidAmount || 0))
                   ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
@@ -3289,7 +3287,7 @@ export const CollectionsView: React.FC = () => {
                     <div key={item.id} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-[11px] flex items-start justify-between gap-2">
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-900">{item.followUpDate}</span>
+                          <span className="font-bold text-slate-900">{formatDate(item.followUpDate)}</span>
                           <span className="text-purple-700 font-semibold">- {item.outcome}</span>
                         </div>
                         <p className="text-slate-600 mt-0.5 italic">"{item.notes}"</p>
@@ -3297,7 +3295,7 @@ export const CollectionsView: React.FC = () => {
                       </div>
                       {Boolean(item.hasPromiseToPay || item.promisedAmount) && (
                         <span className="px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 font-bold text-[10px] shrink-0">
-                          Promise: �{Number(item.promisedAmount || 0).toLocaleString()}
+                          Promise: ₹{Number(item.promisedAmount || 0).toLocaleString()}
                         </span>
                       )}
                     </div>
@@ -3317,7 +3315,7 @@ export const CollectionsView: React.FC = () => {
           isOpen={isPromiseModalOpen}
           onClose={() => setIsPromiseModalOpen(false)}
           title={`Record Promise to Pay: ${selectedCustomer.name}`}
-          subtitle={`Invoice ${selectedInvoice.invoiceNo} - Outstanding: �${(
+          subtitle={`Invoice ${selectedInvoice.invoiceNo} - Outstanding: ₹${(
             selectedInvoice.balance !== undefined
               ? selectedInvoice.balance
               : Math.max(0, (selectedInvoice.grandTotal || 0) - (selectedInvoice.paidAmount || 0))
@@ -3555,7 +3553,7 @@ export const CollectionsView: React.FC = () => {
                   id: s.id,
                   category: 'invoices',
                   title: `Invoice ${s.invoiceNo} Raised: ₹${Number(s.grandTotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
-                  subtitle: `Due Date: ${s.dueDate || s.saleDate || 'N/A'} • Status: ${isCanc ? 'Cancelled' : bal <= 0 ? 'Paid' : 'Partial'}`,
+                  subtitle: `Due Date: ${formatDate(s.dueDate || s.saleDate, 'N/A')} • Status: ${isCanc ? 'Cancelled' : bal <= 0 ? 'Paid' : 'Partial'}`,
                   rawDate: s.saleDate || s.createdAt || '',
                   formattedDate: formatted,
                   relativeDate: relative,
@@ -3571,7 +3569,7 @@ export const CollectionsView: React.FC = () => {
                   id: f.id,
                   category: 'follow-ups',
                   title: `Follow-up: ${f.outcome || 'Customer Contacted'}`,
-                  subtitle: `Method: ${f.contactMethod || 'Phone'}${f.nextFollowUpDate ? ` • Next: ${f.nextFollowUpDate}` : ''}`,
+                  subtitle: `Method: ${f.contactMethod || 'Phone'}${f.nextFollowUpDate ? ` • Next: ${formatDate(f.nextFollowUpDate)}` : ''}`,
                   rawDate: f.followUpDate,
                   formattedDate: formatted,
                   relativeDate: relative,
@@ -3586,7 +3584,7 @@ export const CollectionsView: React.FC = () => {
                   id: ptp.id,
                   category: 'promises',
                   title: `Promise to Pay: ₹${Number(ptp.promisedAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
-                  subtitle: `Promised Date: ${ptp.promiseDate} • Status: ${ptp.status}`,
+                  subtitle: `Promised Date: ${formatDate(ptp.promiseDate)} • Status: ${ptp.status}`,
                   rawDate: ptp.promiseDate || ptp.createdAt || '',
                   formattedDate: formatted,
                   relativeDate: relative,
@@ -3788,7 +3786,7 @@ export const CollectionsView: React.FC = () => {
                           : 'None'}
                       </div>
                       <div className="text-[10px] text-emerald-600 font-semibold mt-0.5 truncate">
-                        {lastPayment ? `Received on ${lastPayment.paymentDate || 'recently'}` : 'No payments collected yet'}
+                        {lastPayment ? `Received on ${lastPayment.paymentDate ? formatDate(lastPayment.paymentDate) : 'recently'}` : 'No payments collected yet'}
                       </div>
                     </div>
                   </div>
@@ -4184,7 +4182,7 @@ export const CollectionsView: React.FC = () => {
           isOpen={isInvoicePreviewModalOpen}
           onClose={() => setIsInvoicePreviewModalOpen(false)}
           title={`Invoice Preview: ${selectedInvoice.invoiceNo}`}
-          subtitle={`Date: ${selectedInvoice.saleDate} - Due: ${selectedInvoice.dueDate || 'N/A'}`}
+          subtitle={`Date: ${formatDate(selectedInvoice.saleDate)} - Due: ${formatDate(selectedInvoice.dueDate, 'N/A')}`}
           maxWidth="lg"
           headerGradient={true}
           showBackIcon={true}
@@ -4202,7 +4200,7 @@ export const CollectionsView: React.FC = () => {
               <div className="text-right">
                 <span className="text-[10px] text-slate-500 block uppercase font-semibold">Total Amount</span>
                 <span className="text-base font-bold text-slate-900">
-                  �{(selectedInvoice.grandTotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  ₹{(selectedInvoice.grandTotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                 </span>
               </div>
             </div>
@@ -4223,10 +4221,10 @@ export const CollectionsView: React.FC = () => {
                       <td className="py-2 px-3 font-medium text-slate-800">{item.name || item.productId}</td>
                       <td className="py-2 px-3 text-right text-slate-600">{item.quantity}</td>
                       <td className="py-2 px-3 text-right text-slate-600">
-                        �{(item.unitPrice || item.rate || 0).toLocaleString()}
+                        ₹{(item.unitPrice || item.rate || 0).toLocaleString()}
                       </td>
                       <td className="py-2 px-3 text-right font-bold text-slate-800">
-                        �{(item.total || (item.quantity * (item.unitPrice || item.rate || 0))).toLocaleString()}
+                        ₹{(item.total || (item.quantity * (item.unitPrice || item.rate || 0))).toLocaleString()}
                       </td>
                     </tr>
                   ))}
@@ -4238,13 +4236,13 @@ export const CollectionsView: React.FC = () => {
               <div>
                 <span className="text-[11px] text-slate-600">Settled to Date:</span>
                 <span className="font-bold text-emerald-700 ml-1.5">
-                  �{(selectedInvoice.paidAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  ₹{(selectedInvoice.paidAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                 </span>
               </div>
               <div>
                 <span className="text-[11px] text-slate-600">Outstanding:</span>
                 <span className="font-bold text-rose-600 ml-1.5">
-                  �{(selectedInvoice.balance !== undefined
+                  ₹{(selectedInvoice.balance !== undefined
                     ? selectedInvoice.balance
                     : Math.max(0, (selectedInvoice.grandTotal || 0) - (selectedInvoice.paidAmount || 0))
                   ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}

@@ -996,16 +996,30 @@ export const PaymentOutView: React.FC = () => {
     };
   };
 
-  const handlePrintPaymentOut = (po: PaymentOut) => {
-    printBusinessDocument(buildPaymentOutPrintOptions(po));
+  // Load the latest record (GET /payments-out/:id) so print / download use server data
+  const fetchLatestPaymentOut = async (po: PaymentOut): Promise<PaymentOut> => {
+    if (!po.id) return po;
+    try {
+      const res = await workPaymentOutApi.getPaymentOutById(po.id);
+      if (res?.data) return { ...po, ...mapApiPaymentOutToUi(res.data) };
+    } catch (err) {
+      console.warn('Could not fetch latest payment out for print/download:', err);
+    }
+    return po;
+  };
+
+  const handlePrintPaymentOut = async (po: PaymentOut) => {
+    const latest = await fetchLatestPaymentOut(po);
+    printBusinessDocument(buildPaymentOutPrintOptions(latest));
   };
 
   const handleDownloadPaymentOut = async (po: PaymentOut) => {
     if (isDownloadingPayment) return;
     setIsDownloadingPayment(true);
-    const filename = `PaymentOut_${(po.paymentNo || 'payment-out').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
     try {
-      await downloadBusinessDocument(buildPaymentOutPrintOptions(po), filename);
+      const latest = await fetchLatestPaymentOut(po);
+      const filename = `PaymentOut_${(latest.paymentNo || 'payment-out').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+      await downloadBusinessDocument(buildPaymentOutPrintOptions(latest), filename);
       toast.success(`Downloaded ${filename}`);
     } catch (err) {
       console.error('Failed to download payment out PDF:', err);

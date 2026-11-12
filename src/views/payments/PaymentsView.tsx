@@ -15,6 +15,7 @@ import { FilterDropdown } from '../../components/common/FilterDropdown';
 import { Button } from '../../components/common/Button';
 import { Pagination } from '../../components/common/Pagination';
 import { Modal } from '../../components/common/Modal';
+import { ConfirmationModal } from '../../utils/confirmationModal';
 import { PaymentFormModal } from '../../components/forms/PaymentFormModal';
 import {
   useGetPlatformPaymentsQuery,
@@ -154,20 +155,31 @@ export const PaymentsView: React.FC = () => {
     return null;
   }, [platformPaymentsRes]);
 
-  const handleDeletePayment = async (id: string) => {
+  const [deleteTarget, setDeleteTarget] = useState<PaymentItem | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDeletePayment = (item: PaymentItem) => {
     if (!isAdmin) {
       showToast('error', 'Forbidden', 'Admin access required to delete ledger entries.');
       return;
     }
-    if (!window.confirm('Are you sure you want to delete this payment record?')) return;
+    setDeleteTarget(item);
+  };
 
+  const confirmDeletePayment = async () => {
+    if (!deleteTarget) return;
+    const id = deleteTarget.id;
+    setIsDeleting(true);
     try {
       await deletePlatformPayment(id).unwrap();
       showToast('info', 'Record Deleted', 'Payment ledger record removed.');
+      setDeleteTarget(null);
       loadPayments();
     } catch (e: any) {
       const msg = e?.data?.message || e?.message || 'Failed to delete payment.';
       showToast('error', 'Failed', msg);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -544,7 +556,7 @@ export const PaymentsView: React.FC = () => {
                                   type="button"
                                   onClick={() => {
                                     setActiveDropdownId(null);
-                                    handleDeletePayment(item.id);
+                                    handleDeletePayment(item);
                                   }}
                                   className="w-full px-3 py-2 text-left text-[13px] font-bold text-[#E11D48] hover:bg-rose-50/70 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
                                 >
@@ -582,6 +594,18 @@ export const PaymentsView: React.FC = () => {
             setPage(1);
           }}
         />
+
+      <ConfirmationModal
+        isOpen={!!deleteTarget}
+        onClose={() => {
+          if (!isDeleting) setDeleteTarget(null);
+        }}
+        type="Delete"
+        itemTypeLabel="Payment"
+        itemName={deleteTarget?.invoiceNumber}
+        isLoading={isDeleting}
+        onConfirm={confirmDeletePayment}
+      />
 
       {/* REACT HOOK FORM + ZOD PAYMENT MODAL */}
       <PaymentFormModal

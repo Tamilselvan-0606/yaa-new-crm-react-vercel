@@ -29,6 +29,8 @@ import { categoryApi, ApiCategory } from "../../../api/commerce/categoryApi";
 import { subcategoryApi } from "../../../api/commerce/subcategoryApi";
 import { unitApi, ApiUnit, resolveBaseUnitId } from "../../../api/commerce/unitApi";
 import { toast } from "../../../utils/toast";
+import { BATCH_PREFIX, cleanBatchNo } from "../utils/textUtils";
+import { BatchPrefixInput } from "../utils/BatchPrefixInput";
 import { FormError } from "../../../components/common/FormError";
 import {
   useFieldErrors,
@@ -414,7 +416,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
   // Units
   const [allAvailableUnits, setAllAvailableUnits] = useState<ApiUnit[]>([]);
   const [isUnitModalOpen, setIsUnitModalOpen] = useState(false);
-  const [selectedBaseUnit, setSelectedBaseUnit] = useState<string>("PCS");
+  const [selectedBaseUnit, setSelectedBaseUnit] = useState<string>("");
   const [selectedSecondaryUnit, setSelectedSecondaryUnit] =
     useState<string>("None");
   const [customUnitName, setCustomUnitName] = useState("");
@@ -454,7 +456,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
       category: "",
       subcategory: "",
       hsnCode: "",
-      unit: "PCS",
+      unit: "",
       salePrice: "",
       salePriceTaxType: "Excluded",
       discountValue: "",
@@ -469,7 +471,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
       minStockAlert: "",
       openingStock: "",
       location: "",
-      batchNo: "",
+      batchNo: BATCH_PREFIX,
       mfgDate: "",
       expDate: "",
       itemImage: "",
@@ -524,16 +526,14 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
       if (list && list.length > 0) {
         setAllAvailableUnits(list);
         const currentVals = getValues();
-        if (!currentVals.baseUnitId) {
+        if (!currentVals.baseUnitId && currentVals.unit) {
           const matched =
             list.find(
               (u) =>
-                u.shortCode?.toUpperCase() === "PCS" ||
-                u.name?.toUpperCase().includes("PIECE") ||
                 (currentVals.unit &&
                   (u.shortCode?.toUpperCase() === currentVals.unit.toUpperCase() ||
                     u.name?.toUpperCase() === currentVals.unit.toUpperCase())),
-            ) || list[0];
+            );
           if (matched) {
             setValue("baseUnitId", matched.id);
             if (!currentVals.unit) setValue("unit", matched.shortCode || matched.name);
@@ -675,7 +675,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
     if (!isOpen) reset();
     if (isOpen) {
       setItemImageState("");
-      setSelectedBaseUnit("PCS");
+      setSelectedBaseUnit("");
       setSelectedSecondaryUnit("None");
       reset({
         itemType: "Product",
@@ -683,7 +683,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
         category: "",
         subcategory: "",
         hsnCode: "",
-        unit: "PCS",
+        unit: "",
         salePrice: "",
         salePriceTaxType: "Excluded",
         discountValue: "",
@@ -698,7 +698,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
         minStockAlert: "",
         openingStock: "",
         location: "",
-        batchNo: "",
+        batchNo: BATCH_PREFIX,
         mfgDate: "",
         expDate: "",
         itemImage: "",
@@ -841,7 +841,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
       ["minStockAlert", checkNumber(d.minStockAlert, "minimum stock", { allowZero: true, optional: true, maxDecimals: 0 })],
       [
         "batchNo",
-        (d.mfgDate || d.expDate) && !(d.batchNo || "").trim() ? checkRequiredText("", "batch number") : null,
+        (d.mfgDate || d.expDate) && !cleanBatchNo(d.batchNo) ? checkRequiredText("", "batch number") : null,
       ],
       ["expDate", checkDateNotBefore(d.expDate, d.mfgDate, "expiry date", "manufacturing date")],
       ["itemImage", imageFileError],
@@ -970,9 +970,9 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
         payload.location = data.location.trim();
       }
 
-      if (data.batchNo && data.batchNo.trim()) {
+      if (cleanBatchNo(data.batchNo)) {
         payload.isBatchTracking = true;
-        payload.batchNo = data.batchNo.trim();
+        payload.batchNo = cleanBatchNo(data.batchNo);
         if (data.mfgDate && data.mfgDate.trim()) payload.mfgDate = data.mfgDate.trim();
         if (data.expDate && data.expDate.trim()) payload.expDate = data.expDate.trim();
       }
@@ -1214,7 +1214,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                 <SearchableDropdown
                   label="Unit"
                   required
-                  value={formData.unit || "PCS"}
+                  value={formData.unit || ""}
                   onChange={handleUnitChange}
                   options={unitOptions}
                   placeholder="Select Unit"
@@ -1587,16 +1587,14 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                       {/* Initial Batch Number */}
                       <div>
                         <FormLabel>Initial Batch No</FormLabel>
-                        <input
-                          type="text"
-                          placeholder="e.g. BAT-2026-001"
-                          value={formData.batchNo ?? ""}
-                          onChange={(e) => {
-                            setValue("batchNo", e.target.value);
+                        <BatchPrefixInput
+                          value={formData.batchNo}
+                          onChange={(v) => {
+                            setValue("batchNo", v);
                             fe.clearError("batchNo");
                           }}
-                          {...fieldAttr("batchNo")}
-                          className={`${FORM_INPUT_CLS} font-mono`}
+                          inputProps={fieldAttr("batchNo") as React.InputHTMLAttributes<HTMLInputElement>}
+                          className={FORM_INPUT_CLS}
                         />
                         <FormError message={fe.errors.batchNo} showIcon />
                         <span className="text-[10px] text-slate-400 mt-1 block">

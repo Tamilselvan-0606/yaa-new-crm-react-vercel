@@ -587,6 +587,7 @@ export const CategoryView: React.FC = () => {
           <table className="w-full text-left border-collapse border border-slate-200">
             <CommonTableHead
               columns={[
+                { label: "CODE", align: "center", width: "120px" },
                 { label: "CATEGORY NAME", align: "left", minWidth: "200px" },
                 { label: "STATUS", align: "center", width: "120px" },
                 { label: "ACTIONS", align: "center", width: "90px" },
@@ -595,7 +596,7 @@ export const CategoryView: React.FC = () => {
             <tbody className="text-sm">
               {isLoading ? (
                 <tr>
-                  <td colSpan={3} className="py-16 text-center text-slate-500 border border-slate-200">
+                  <td colSpan={4} className="py-16 text-center text-slate-500 border border-slate-200">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <Loader2 className="w-6 h-6 animate-spin text-[#33077C]" />
                       <span className="text-xs font-medium">Fetching categories from Commerce API...</span>
@@ -604,7 +605,7 @@ export const CategoryView: React.FC = () => {
                 </tr>
               ) : pagedCategories.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={4} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     No categories found matching your criteria.
                   </td>
                 </tr>
@@ -617,18 +618,16 @@ export const CategoryView: React.FC = () => {
                       key={item.id}
                       className="hover:bg-slate-50/80 transition-colors"
                     >
+                      {/* CODE */}
+                      <td className="py-3.5 sm:py-4 px-2 sm:px-3 border border-slate-200 text-center whitespace-nowrap">
+                        <span className="font-mono text-[11px] font-semibold text-slate-600">{item.code || "—"}</span>
+                      </td>
+
                       {/* CATEGORY NAME */}
                       <td className="py-3.5 sm:py-4 px-3 sm:px-5 border border-slate-200">
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-900 text-xs sm:text-sm tracking-tight break-words">
-                            {item.categoryName}
-                          </span>
-                          {item.code && (
-                            <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">
-                              {item.code}
-                            </span>
-                          )}
-                        </div>
+                        <span className="font-bold text-slate-900 text-xs sm:text-sm tracking-tight break-words">
+                          {item.categoryName}
+                        </span>
                       </td>
 
                       {/* STATUS */}

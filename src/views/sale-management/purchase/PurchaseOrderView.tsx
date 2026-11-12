@@ -1693,18 +1693,17 @@ export const PurchaseOrderView: React.FC = () => {
   const getTargetPurchaseOrderWithItems = async (
     po: PurchaseOrder,
   ): Promise<PurchaseOrder> => {
+    // Always load the latest record (GET /purchases/:id) so print / download use server data
     let targetPo = po;
-    if (!targetPo.items || targetPo.items.length === 0) {
-      try {
-        if (po.id) {
-          const res = await workPurchaseOrderApi.getPurchaseOrderById(po.id);
-          if (res?.data) {
-            targetPo = mapApiPurchaseOrderToUi(res.data);
-          }
+    try {
+      if (po.id) {
+        const res = await workPurchaseOrderApi.getPurchaseOrderById(po.id);
+        if (res?.data) {
+          targetPo = mapApiPurchaseOrderToUi(res.data);
         }
-      } catch (err) {
-        console.warn("Could not fetch single purchase order details:", err);
       }
+    } catch (err) {
+      console.warn("Could not fetch single purchase order details:", err);
     }
     return targetPo;
   };
@@ -5291,44 +5290,14 @@ export const PurchaseOrderView: React.FC = () => {
 
               {/* Bottom Actions */}
               <div className="pt-6 flex flex-col sm:flex-row justify-between items-stretch sm:items-end gap-4 border-t border-slate-100">
-                {isSplitMode ? (
+                {isSplitMode && (
                   <div className="text-[11px] text-slate-500 max-w-xs">
                     Split payment: enter each payment in the Billing Summary. Each one is saved as its own payment when you save the bill.
                   </div>
-                ) : (
-                <>
-                {/* Left side: Payment section */}
-                <div className="flex flex-col items-start gap-1">
-                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                    Payment
-                  </span>
-                  <Button
-                    type="button"
-                    variant="primary"
-                    size="md"
-                    onClick={handleOpenRecordPaymentModal}
-                    icon={<Plus className="w-4 h-4 stroke-[2.5]" />}
-                  >
-                    <span>
-                      {calculatedTotals.balance <= 0 && formData.paidAmount > 0
-                        ? "Payment Settled"
-                        : editingPurchase && formData.paidAmount > 0
-                          ? "Record Additional Payment"
-                          : "Record Payment"}
-                    </span>
-                    {formData.paidAmount > 0 && (
-                      <span className="ml-1.5 px-2 py-0.5 rounded-md bg-white/20 text-white text-xs font-bold">
-                        ₹{formData.paidAmount.toLocaleString("en-IN")} Paid
-                      </span>
-                    )}
-                  </Button>
-                </div>
-
-                </>
                 )}
 
                 {/* Right side: Cancel & Save Purchase Bill */}
-                <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3">
+                <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3 sm:ml-auto">
                   <button
                     type="button"
                     onClick={() => setIsFormModalOpen(false)}

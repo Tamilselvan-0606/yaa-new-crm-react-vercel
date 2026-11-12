@@ -86,7 +86,7 @@ import {
 } from "../../../utils/printUtils";
 import { useCompanyDocumentProfile } from "../../../hooks/useCompanyDocumentProfile";
 import { exportTableToExcel } from "../../../utils/excelExport";
-import { SaleActionDropdown } from "../utils/SaleActionDropdown";
+import { SaleActionDropdown, ActionIconBadge } from "../utils/SaleActionDropdown";
 import {
   DocumentSharePopover,
   formatProformaInvoiceShare,
@@ -2721,84 +2721,71 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       }
     });
 
-  // Duplicate Proforma (POST /commerce/proformas)
-  const handleDuplicateProforma = (proforma: SaleProformaInvoice) =>
-    runOnce(async () => {
-      const duplicated: SaleProformaInvoice = {
-        ...proforma,
-        id: `pro_${Date.now()}`,
-        proformaNo: "",
-        referenceNo: "",
-        date: new Date().toISOString().split("T")[0],
-        status: "Open",
-        convertedToInvoiceNo: undefined,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      const resolvedItems = duplicated.items.map((it) => {
-        let pid = it.productId;
-        if (!pid || !UUID_REGEX.test(pid)) {
-          const match = availableProducts.find(
-            (p) =>
-              (p.productId &&
-                UUID_REGEX.test(p.productId) &&
-                p.productName.toLowerCase() ===
-                  it.productName.trim().toLowerCase()) ||
-              (p.id &&
-                UUID_REGEX.test(p.id) &&
-                p.productName.toLowerCase() ===
-                  it.productName.trim().toLowerCase()),
-          );
-          if (match) {
-            pid =
-              match.productId && UUID_REGEX.test(match.productId)
-                ? match.productId
-                : match.id;
-          }
-        }
-        return { ...it, productId: pid || it.productId };
-      });
-      duplicated.items = resolvedItems;
-
-      try {
-        const payload = mapSaleProformaToPayload(duplicated, true);
-        const res = await commerceProformaApi.createProforma(payload);
-        const backendDocNo =
-          res.data?.proformaNo ||
-          (res.data as any)?.proformaNumber ||
-          (res.data as any)?.proformaCode ||
-          (res.data as any)?.code ||
-          (res.data as any)?.documentNo;
-        if (res.data?.id) {
-          duplicated.id = res.data.id;
-        }
-        if (backendDocNo) {
-          duplicated.proformaNo = backendDocNo;
-        }
-        dispatch(
-          baseApi.util.invalidateTags([
-            { type: "ProformaInvoice", id: "LIST" },
-          ]),
-        );
-        toast.success(
-          `Duplicated ${proforma.proformaNo} as new Proforma ${duplicated.proformaNo || ""}!`,
-        );
-      } catch (err: any) {
-        console.warn("Duplicate API notice:", err);
-        toast.info(`Duplicated ${proforma.proformaNo} locally.`);
-      } finally {
-        fetchProformas(
-          page,
-          pageSize,
-          appliedSearch,
-          appliedStatus,
-          appliedPeriod,
-        );
-        setActiveDropdownId(null);
-        setDropdownPos(null);
-      }
-    });
+  // Duplicate: open the New Proforma form prefilled with this proforma's reusable details.
+  // Nothing is saved (and no number is generated) until the user presses Save.
+  const handleDuplicateProforma = (proforma: SaleProformaInvoice) => {
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+    if (!proforma?.items || proforma.items.length === 0) {
+      toast.error("This proforma has no items to duplicate.");
+      return;
+    }
+    const stamp = Date.now();
+    const today = new Date().toISOString().split("T")[0];
+    const validUntil = new Date(stamp + 30 * 86400000)
+      .toISOString()
+      .split("T")[0];
+    const copiedItems: ExtendedProformaItem[] = proforma.items.map(
+      (it, idx) => ({
+        ...it,
+        id: `row_${stamp}_${idx}`,
+        unit: it.unit || "PCS",
+      }),
+    ) as ExtendedProformaItem[];
+    const dupData = {
+      customerId: proforma.customerId,
+      partyName: proforma.partyName,
+      customerPhone: proforma.customerPhone || "",
+      customerEmail: proforma.customerEmail || "",
+      customerCompany: proforma.customerCompany || "",
+      billingAddress: proforma.billingAddress || "",
+      proformaNo: computedPreviewNo,
+      proformaInvoiceManualNo: "",
+      referenceNo: "",
+      date: today,
+      validUntil,
+      stateOfSupply: proforma.stateOfSupply || "33-Tamil Nadu",
+      items: copiedItems,
+      notes: proforma.notes || "",
+      terms: proforma.terms || "",
+    };
+    const hasRoundOff =
+      proforma.roundOff !== undefined && proforma.roundOff !== 0;
+    setValidUptoDays("30");
+    setFormData(dupData);
+    setTabs([
+      {
+        id: "tab_1",
+        title: "New Proforma Invoice",
+        num: 1,
+        formData: dupData,
+        editingProforma: null,
+        enableRoundOff: hasRoundOff,
+        manualRoundOff: proforma.roundOff || null,
+        columnSettings: { ...columnSettings },
+      },
+    ]);
+    setActiveTabId("tab_1");
+    setEditingProforma(null);
+    setEnableRoundOff(hasRoundOff);
+    setManualRoundOff(proforma.roundOff || null);
+    setAttachedImageName(null);
+    setAttachedDocName(null);
+    setViewMode("form");
+    toast.info(
+      `Duplicated ${proforma.proformaNo || "proforma"} into a new form. Save to create it.`,
+    );
+  };
 
   // Delete Proforma (DELETE /commerce/proformas/{id}) with confirmation modal
   const handleOpenDeleteModal = (id: string, proformaNo: string) => {
@@ -2963,8 +2950,23 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   };
 
   // Print Proforma Invoice
-  const handlePrintProforma = (proforma: SaleProformaInvoice) => {
-    printBusinessDocument(buildProformaDocumentOptions(proforma));
+  // Load the latest record (GET /commerce/proformas/:id) so print / download use server data
+  const fetchLatestProforma = async (
+    proforma: SaleProformaInvoice,
+  ): Promise<SaleProformaInvoice> => {
+    if (!UUID_REGEX.test(proforma.id)) return proforma;
+    try {
+      const res = await commerceProformaApi.getProformaById(proforma.id);
+      if (res?.success && res.data) return mapApiProformaToSaleProforma(res.data);
+    } catch (err) {
+      console.warn("Could not fetch latest proforma for print/download:", err);
+    }
+    return proforma;
+  };
+
+  const handlePrintProforma = async (proforma: SaleProformaInvoice) => {
+    const latest = await fetchLatestProforma(proforma);
+    printBusinessDocument(buildProformaDocumentOptions(latest));
   };
 
   // Download Proforma Invoice as valid PDF
@@ -2976,10 +2978,11 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       id: toastId,
     });
     try {
-      const options = buildProformaDocumentOptions(proforma);
+      const latest = await fetchLatestProforma(proforma);
+      const options = buildProformaDocumentOptions(latest);
       await downloadBusinessDocument(
         options,
-        `Proforma_${proforma.proformaNo.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`,
+        `Proforma_${latest.proformaNo.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`,
       );
       toast.success(
         `Proforma ${proforma.proformaNo} downloaded successfully!`,
@@ -5448,9 +5451,9 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                           setConvertDropdownPos(null);
                                           handleConvertExistingToOrder(item);
                                         }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2.5"
+                                        className="w-full text-left px-3 py-2 text-[13px] font-bold text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-3"
                                       >
-                                        <ShoppingBag className="w-3.5 h-3.5 text-slate-500" />
+                                        <ActionIconBadge variant="order" />
                                         <span>Convert to Sale Order</span>
                                       </button>
                                     )}
@@ -5462,9 +5465,9 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                           setConvertDropdownPos(null);
                                           handleConvertExistingToChallan(item);
                                         }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2.5"
+                                        className="w-full text-left px-3 py-2 text-[13px] font-bold text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-3"
                                       >
-                                        <Truck className="w-3.5 h-3.5 text-slate-500" />
+                                        <ActionIconBadge variant="challan" />
                                         <span>Convert to Delivery Challan</span>
                                       </button>
                                     )}
@@ -5476,9 +5479,9 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                           setConvertDropdownPos(null);
                                           handleConvertExistingToSale(item);
                                         }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2.5"
+                                        className="w-full text-left px-3 py-2 text-[13px] font-bold text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-3"
                                       >
-                                        <ShoppingCart className="w-3.5 h-3.5 text-slate-500" />
+                                        <ActionIconBadge variant="invoice" />
                                         <span>Convert to Sale Invoice</span>
                                       </button>
                                     )}
@@ -5500,33 +5503,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                           {/* 3-Dots Action Menu Button */}
                           <SaleActionDropdown
                             items={[
-                              {
-                                label: "Convert to Sale Order",
-                                variant: "order",
-                                disabled:
-                                  itemStages.isOrderConverted ||
-                                  itemStages.isFullyConverted,
-                                onClick: () =>
-                                  handleConvertExistingToOrder(item),
-                              },
-                              {
-                                label: "Convert to Delivery Challan",
-                                variant: "challan",
-                                disabled:
-                                  itemStages.isChallanConverted ||
-                                  itemStages.isFullyConverted,
-                                onClick: () =>
-                                  handleConvertExistingToChallan(item),
-                              },
-                              {
-                                label: "Convert to Sales Invoice",
-                                variant: "invoice",
-                                disabled:
-                                  itemStages.isInvoiceConverted ||
-                                  itemStages.isFullyConverted,
-                                onClick: () =>
-                                  handleConvertExistingToSale(item),
-                              },
                               {
                                 label: "View/Edit",
                                 variant: "edit",

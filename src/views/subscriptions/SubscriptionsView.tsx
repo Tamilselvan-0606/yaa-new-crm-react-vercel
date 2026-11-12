@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { DateInput } from '../../components/common/DateInput';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import {
@@ -3300,26 +3301,16 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Start Date <span className="text-rose-500 font-bold">*</span>
                 </label>
-                <input
-                  type={subStartDate ? "date" : "text"}
-                  onFocus={(e) => (e.currentTarget.type = "date")}
-                  onBlur={(e) => {
-                    if (!e.currentTarget.value) e.currentTarget.type = "text";
-                  }}
-                  placeholder="dd/mm/yyyy"
+                <DateInput
                   value={subStartDate}
-                  onChange={(e) => {
-                    setSubStartDate(e.target.value);
+                  error={!!subFormErrors.startDate}
+                  onChange={(v) => {
+                    setSubStartDate(v);
                     if (subBillingCycle) {
-                      setSubEndDate(computeEndDate(e.target.value, subBillingCycle));
+                      setSubEndDate(computeEndDate(v, subBillingCycle));
                     }
                     if (subFormErrors.startDate) setSubFormErrors((prev) => ({ ...prev, startDate: '' }));
                   }}
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all cursor-pointer placeholder:text-slate-400 ${
-                    subFormErrors.startDate
-                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
                 />
                 {subFormErrors.startDate && (
                   <p className="text-[11px] font-medium text-red-500 mt-1">{subFormErrors.startDate}</p>
@@ -3330,23 +3321,13 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Renewal Date <span className="text-rose-500 font-bold">*</span>
                 </label>
-                <input
-                  type={subEndDate ? "date" : "text"}
-                  onFocus={(e) => (e.currentTarget.type = "date")}
-                  onBlur={(e) => {
-                    if (!e.currentTarget.value) e.currentTarget.type = "text";
-                  }}
-                  placeholder="dd/mm/yyyy"
+                <DateInput
                   value={subEndDate}
-                  onChange={(e) => {
-                    setSubEndDate(e.target.value);
+                  error={!!subFormErrors.endDate}
+                  onChange={(v) => {
+                    setSubEndDate(v);
                     if (subFormErrors.endDate) setSubFormErrors((prev) => ({ ...prev, endDate: '' }));
                   }}
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all cursor-pointer placeholder:text-slate-400 ${
-                    subFormErrors.endDate
-                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
                 />
                 {subFormErrors.endDate && (
                   <p className="text-[11px] font-medium text-red-500 mt-1">{subFormErrors.endDate}</p>
@@ -3574,27 +3555,17 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Start Date <span className="text-rose-500 font-bold">*</span>
                 </label>
-                <input
-                  type={orgSubStartDate ? "date" : "text"}
-                  onFocus={(e) => (e.currentTarget.type = "date")}
-                  onBlur={(e) => {
-                    if (!e.currentTarget.value) e.currentTarget.type = "text";
-                  }}
-                  placeholder="dd/mm/yyyy"
+                <DateInput
                   value={orgSubStartDate}
-                  onChange={(e) => {
-                    setOrgSubStartDate(e.target.value);
+                  error={!!orgSubErrors.startDate}
+                  onChange={(v) => {
+                    setOrgSubStartDate(v);
                     if (orgSubBillingCycle) {
-                      setOrgSubEndDate(computeEndDate(e.target.value, orgSubBillingCycle));
+                      setOrgSubEndDate(computeEndDate(v, orgSubBillingCycle));
                     }
                     if (orgSubErrors.startDate) setOrgSubErrors((prev) => ({ ...prev, startDate: '' }));
                     if (orgSubErrors.endDate) setOrgSubErrors((prev) => ({ ...prev, endDate: '' }));
                   }}
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all cursor-pointer placeholder:text-slate-400 ${
-                    orgSubErrors.startDate
-                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
                 />
                 {orgSubErrors.startDate && (
                   <p className="text-[11px] font-medium text-red-500 mt-1">{orgSubErrors.startDate}</p>
@@ -3605,23 +3576,13 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Next Renewal Date <span className="text-rose-500 font-bold">*</span>
                 </label>
-                <input
-                  type={orgSubEndDate ? "date" : "text"}
-                  onFocus={(e) => (e.currentTarget.type = "date")}
-                  onBlur={(e) => {
-                    if (!e.currentTarget.value) e.currentTarget.type = "text";
-                  }}
-                  placeholder="dd/mm/yyyy"
+                <DateInput
                   value={orgSubEndDate}
-                  onChange={(e) => {
-                    setOrgSubEndDate(e.target.value);
+                  error={!!orgSubErrors.endDate}
+                  onChange={(v) => {
+                    setOrgSubEndDate(v);
                     if (orgSubErrors.endDate) setOrgSubErrors((prev) => ({ ...prev, endDate: '' }));
                   }}
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all cursor-pointer placeholder:text-slate-400 ${
-                    orgSubErrors.endDate
-                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
                 />
                 {orgSubErrors.endDate && (
                   <p className="text-[11px] font-medium text-red-500 mt-1">{orgSubErrors.endDate}</p>

@@ -525,6 +525,16 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
               </div>
 
               <div>
+                <FormLabel>Gender</FormLabel>
+                <select {...register("gender")} className={FORM_SELECT_CLS}>
+                  <option value="">Select Gender</option>
+                  <option value="Male">Male</option>
+                  <option value="Female">Female</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+
+              <div>
                 <FormLabel>Customer Type</FormLabel>
                 <select
                   {...register("customerType")}
@@ -541,16 +551,6 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   <option value="Active">Active</option>
                   <option value="Inactive">Inactive</option>
                   <option value="Blocked">Blocked</option>
-                </select>
-              </div>
-
-              <div>
-                <FormLabel>Gender</FormLabel>
-                <select {...register("gender")} className={FORM_SELECT_CLS}>
-                  <option value="">Select Gender</option>
-                  <option value="Male">Male</option>
-                  <option value="Female">Female</option>
-                  <option value="Other">Other</option>
                 </select>
               </div>
 
