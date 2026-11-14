@@ -112,6 +112,7 @@ import {
 } from "../utils/formUtils";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import { toast } from "../../../utils/toast";
+import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 
 import { formatDate } from "../utils/dateUtils";
 
@@ -813,12 +814,29 @@ export const SupplierView: React.FC = () => {
   };
 
   // Export Suppliers to Excel
-  const handleExportExcel = () => {
-    if (displaySuppliers.length === 0) {
-      toast.error("No supplier records available to export.");
-      return;
-    }
+  const fetchSupplierReportPage = async (page: number, size: number) => {
+    const res = await supplierApi.getSuppliers({
+      page,
+      limit: size,
+      search: appliedSearch.trim() || undefined,
+      status: appliedStatus !== "All" ? appliedStatus : undefined,
+      pagination_required: true,
+    });
+    return {
+      items:
+        res && res.data && Array.isArray(res.data)
+          ? res.data.map(mapApiSupplierToSupplier)
+          : [],
+      totalRecords: res?.pagination?.totalRecords,
+      totalPages: res?.pagination?.totalPages,
+      hasNextPage: res?.pagination?.hasNextPage,
+    };
+  };
 
+  const handleExportExcel = () => runReport({
+    label: "suppliers",
+    load: () => fetchAllReportRows(fetchSupplierReportPage),
+    onRows: (displaySuppliers) => {
     const excelRows = displaySuppliers.map((s, idx) => ({
       sNo: idx + 1,
       supplierCode: s.supplierCode,
@@ -898,15 +916,14 @@ export const SupplierView: React.FC = () => {
     toast.success(
       `Suppliers Excel report downloaded (${displaySuppliers.length} records)!`,
     );
-  };
+    },
+  });
 
   // Print Table Report for Suppliers
-  const handlePrintTableReport = () => {
-    if (displaySuppliers.length === 0) {
-      toast.info("No supplier records available to print.");
-      return;
-    }
-
+  const handlePrintTableReport = () => runReport({
+    label: "suppliers",
+    load: () => fetchAllReportRows(fetchSupplierReportPage),
+    onRows: (displaySuppliers) => {
     const printRows = displaySuppliers.map((sup) => ({
       supplierCode: sup.supplierCode,
       name: sup.name,
@@ -920,7 +937,7 @@ export const SupplierView: React.FC = () => {
 
     printTableReport({
       title: "Suppliers & Vendor Directory Report",
-      subtitle: `Total Vendors: ${totalRecords || displaySuppliers.length} | Status Filter: ${pendingStatus}`,
+      subtitle: `Total Vendors: ${displaySuppliers.length} | Status Filter: ${pendingStatus}`,
       columns: [
         { header: "Code", key: "supplierCode", width: "12%" },
         { header: "Supplier Name", key: "name", width: "25%" },
@@ -953,7 +970,8 @@ export const SupplierView: React.FC = () => {
         payable: summary.totalPayables,
       },
     });
-  };
+    },
+  });
 
   return (
     <div className="space-y-6 pb-12 font-sans">
@@ -1262,9 +1280,6 @@ export const SupplierView: React.FC = () => {
                           <div>
                             <span className="font-bold text-slate-900 text-xs sm:text-[13px] block">
                               {sup.contactPerson || sup.name}
-                            </span>
-                            <span className="text-[10px] text-slate-400 font-medium block">
-                              Authorized Contact
                             </span>
                           </div>
                         </div>

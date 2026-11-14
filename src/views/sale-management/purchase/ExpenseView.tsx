@@ -62,6 +62,7 @@ import { printBusinessDocument, printTableReport, downloadBusinessDocument, Docu
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, getFormInputCls, handleNonNegativeKeyDown } from '../utils/formUtils';
 import { SaleActionDropdown } from '../utils';
 import { toast } from "../../../utils/toast";
+import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import {
   workExpenseApi,
   workExpenseCategoryApi,
@@ -77,6 +78,7 @@ import {
 } from '../../../api';
 
 import { formatDate } from '../utils/dateUtils';
+import { DateInput } from "../../../components/common/DateInput";
 export interface ExpenseItem {
   id: string;
   expenseNo: string;
@@ -1053,14 +1055,37 @@ export const ExpenseView: React.FC = () => {
   };
 
   // Export Expenses to Excel
-  const handleExportExcel = () => {
-    if (expenses.length === 0) {
-      toast.error('No expense records available to export.');
-      return;
-    }
+  const fetchExpenseReportPage = async (page: number, size: number) => {
+    const dateRange = getDateRangeForPeriod(appliedPeriod, customStartDate, customEndDate);
+    const response = await workExpenseApi.getExpenses({
+      page,
+      limit: size,
+      search: appliedSearch.trim() || undefined,
+      categoryId: appliedCategory !== 'All' ? appliedCategory : undefined,
+      paymentMethod: appliedPaymentMode !== 'All' ? appliedPaymentMode : undefined,
+      from: dateRange.from,
+      to: dateRange.to,
+      sortBy: 'expenseDate',
+      sortOrder: 'desc',
+      pagination_required: true,
+    });
+    return {
+      items:
+        response && response.success && Array.isArray(response.data)
+          ? response.data.map(mapApiExpenseToUi)
+          : [],
+      totalRecords: response?.pagination?.totalRecords,
+      totalPages: response?.pagination?.totalPages,
+      hasNextPage: response?.pagination?.hasNextPage,
+    };
+  };
 
-    const excelRows = expenses.map((exp, idx) => ({
-      sNo: (currentPage - 1) * pageSize + idx + 1,
+  const handleExportExcel = () => runReport({
+    label: 'expenses',
+    load: () => fetchAllReportRows(fetchExpenseReportPage),
+    onRows: (rows) => {
+    const excelRows = rows.map((exp, idx) => ({
+      sNo: idx + 1,
       expenseNo: exp.expenseNo,
       expenseDate: exp.expenseDate,
       category: exp.category,
@@ -1078,7 +1103,7 @@ export const ExpenseView: React.FC = () => {
       filename: `Expenses_Ledger_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Expenses',
       title: 'YAA CREATIONS CRM - OPERATING EXPENSES DIRECTORY',
-      subtitle: `Total Records: ${totalApiRecords ?? expenses.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
+      subtitle: `Total Records: ${rows.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
         { header: 'Expense #', key: 'expenseNo', align: 'center', width: 16 },
@@ -1096,14 +1121,15 @@ export const ExpenseView: React.FC = () => {
       data: excelRows,
       summaryRow: {
         sNo: 'TOTAL',
-        expenseNo: `${totalApiRecords ?? expenses.length} Records`,
+        expenseNo: `${rows.length} Records`,
         taxAmount: summaryTaxAmount,
         totalAmount: summaryTotalAmount,
       },
     });
 
-    toast.success(`Expenses Excel report downloaded (${excelRows.length} records in view)!`);
-  };
+    toast.success(`Expenses Excel report downloaded (${excelRows.length} records)!`);
+    },
+  });
 
   // Print & Download Expense Voucher via universal printUtils
   const buildExpensePrintOptions = (exp: ExpenseItem): DocumentPrintOptions => {
@@ -1185,13 +1211,11 @@ export const ExpenseView: React.FC = () => {
   };
 
   // Print Table Report for Expenses
-  const handlePrintTableReport = () => {
-    if (expenses.length === 0) {
-      toast.info('No expense records available to print.');
-      return;
-    }
-
-    const printRows = expenses.map((exp) => ({
+  const handlePrintTableReport = () => runReport({
+    label: 'expenses',
+    load: () => fetchAllReportRows(fetchExpenseReportPage),
+    onRows: (rows) => {
+    const printRows = rows.map((exp) => ({
       expenseNo: exp.expenseNo,
       expenseDate: exp.expenseDate,
       category: exp.category,
@@ -1204,7 +1228,7 @@ export const ExpenseView: React.FC = () => {
 
     printTableReport({
       title: 'Operating Expenses Ledger Report',
-      subtitle: `Total Records: ${totalApiRecords ?? expenses.length} | Category Filter: ${appliedCategory} | Mode: ${appliedPaymentMode}`,
+      subtitle: `Total Records: ${rows.length} | Category Filter: ${appliedCategory} | Mode: ${appliedPaymentMode}`,
       columns: [
         { header: 'Expense #', key: 'expenseNo', width: '15%' },
         { header: 'Date', key: 'expenseDate', width: '12%' },
@@ -1217,14 +1241,15 @@ export const ExpenseView: React.FC = () => {
       metrics: [
         { label: 'Total Operating Expenses', value: summaryTotalAmount },
         { label: 'Tax Deductions', value: summaryTaxAmount },
-        { label: 'Total Expense Vouchers', value: totalApiRecords ?? expenses.length },
+        { label: 'Total Expense Vouchers', value: rows.length },
       ],
       summaryRow: {
         expenseNo: 'Total',
         totalAmount: summaryTotalAmount,
       },
     });
-  };
+    },
+  });
 
   const pagedExpenses = useMemo(() => {
     if (expenses.length > pageSize) {
@@ -1809,10 +1834,10 @@ export const ExpenseView: React.FC = () => {
 
             <div>
               <FormLabel required>Expense Date</FormLabel>
-              <input
-                type="date"
-                {...register('expenseDate')}
-                className={getFormInputCls(!!errors.expenseDate)}
+              <DateInput
+                value={watch('expenseDate') || ''}
+                onChange={(v) => setValue('expenseDate', v, { shouldValidate: true, shouldDirty: true })}
+                error={!!errors.expenseDate}
               />
               <FormError message={errors.expenseDate?.message} />
             </div>
@@ -2000,10 +2025,15 @@ export const ExpenseView: React.FC = () => {
                   <CustomSelect
                     options={[
                       { label: '0% (No Tax)', value: '0' },
+                      { label: '0.25% GST', value: '0.25' },
+                      { label: '3% GST', value: '3' },
                       { label: '5% GST', value: '5' },
-                      { label: '12% GST', value: '12' },
                       { label: '18% GST', value: '18' },
-                      { label: '28% GST', value: '28' },
+                      { label: '40% GST', value: '40' },
+                      // A rate saved under an older slab stays visible when editing an existing expense.
+                      ...(['0', '0.25', '3', '5', '18', '40'].includes(String(field.value ?? '0')) || !field.value
+                        ? []
+                        : [{ label: `${field.value}% GST (old slab)`, value: String(field.value) }]),
                     ]}
                     value={field.value ? String(field.value) : '0'}
                     onChange={field.onChange}
@@ -2737,24 +2767,20 @@ export const ExpenseView: React.FC = () => {
           <div className="space-y-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">Start Date</label>
-              <input
-                type="date"
+              <DateInput
                 value={customStartDate}
-                onChange={(e) => {
+                onChange={(v) => ((e) => {
                   setCustomStartDate(e.target.value);
-                }}
-                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:border-[#33077C]"
+                })({ target: { value: v } } as any)}
               />
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">End Date</label>
-              <input
-                type="date"
+              <DateInput
                 value={customEndDate}
-                onChange={(e) => {
+                onChange={(v) => ((e) => {
                   setCustomEndDate(e.target.value);
-                }}
-                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:border-[#33077C]"
+                })({ target: { value: v } } as any)}
               />
               <FormError message={customDateError || undefined} />
             </div>

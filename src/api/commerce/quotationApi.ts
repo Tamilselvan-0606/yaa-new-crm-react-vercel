@@ -1,3 +1,4 @@
+import { resolveGrossSubtotal } from "../../utils/financialCalculations";
 import { baseClient, baseApi } from "../baseApi";
 import {
   QuotationStatus,
@@ -100,7 +101,7 @@ export const mapApiQuotationToSaleQuotation = (
       )
     : [];
 
-  const subtotal = Number(apiQ.subtotal ?? apiQ.subTotal ?? 0);
+  const subtotal = resolveGrossSubtotal(mappedItems, Number(apiQ.subtotal ?? apiQ.subTotal ?? 0));
   const totalDiscount = Number(
     apiQ.discount ?? apiQ.discountAmount ?? apiQ.overallDiscount ?? 0,
   );

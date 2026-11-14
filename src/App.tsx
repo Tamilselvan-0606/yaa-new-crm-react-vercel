@@ -127,6 +127,8 @@ const MainLayout: React.FC = () => {
               <Route path="/organization-subscriptions" element={<OrganizationSubscriptionsView />} />
               <Route path="/quotes" element={<QuotesView />} />
               <Route path="/quotes/new" element={<QuotesView initialCreateOpen={true} />} />
+<Route path="/quotes/:quoteId/edit" element={<QuotesView initialCreateOpen={true} />} />
+<Route path="/quotes/:quoteId/duplicate" element={<QuotesView initialCreateOpen={true} />} />
               <Route path="/proforma" element={<Navigate to="/proforma/invoices" replace />} />
               <Route path="/proforma/new" element={<NewProformaInvoiceView />} />
               <Route path="/proforma/invoices" element={<ProformaInvoicesView />} />
@@ -175,6 +177,8 @@ const MainLayout: React.FC = () => {
               />
               <Route path="/quotes" element={<QuotesView />} />
               <Route path="/quotes/new" element={<QuotesView initialCreateOpen={true} />} />
+<Route path="/quotes/:quoteId/edit" element={<QuotesView initialCreateOpen={true} />} />
+<Route path="/quotes/:quoteId/duplicate" element={<QuotesView initialCreateOpen={true} />} />
               <Route path="/proforma" element={<Navigate to="/proforma/invoices" replace />} />
               <Route path="/proforma/new" element={<NewProformaInvoiceView />} />
               <Route path="/proforma/invoices" element={<ProformaInvoicesView />} />

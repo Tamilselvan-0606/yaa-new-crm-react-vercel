@@ -62,6 +62,7 @@ import { SearchableSelect } from '../../../components/common/SearchableSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { printBusinessDocument, printTableReport, downloadBusinessDocument, DocumentPrintOptions } from '../../../utils/printUtils';
 import { toast } from "../../../utils/toast";
+import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { useNavigate } from 'react-router-dom';
 import {
   commercePurchaseRequestApi,
@@ -70,7 +71,7 @@ import {
   mapUiToUpdatePayload,
   ensureValidUuid,
 } from '../../../api/commerce/purchaseRequestApi';
-import { productApi, ApiProduct } from '../../../api/commerce/productApi';
+import { productApi, ApiProduct, isProductActive } from '../../../api/commerce/productApi';
 import { supplierApi, ApiSupplier } from '../../../api/commerce/supplierApi';
 import {
   workPurchaseOrderApi,
@@ -84,6 +85,7 @@ import { SaleActionDropdown } from '../utils';
 
 import { formatDate } from '../utils/dateUtils';
 import { evictApiCache } from "../../../api/queryCache";
+import { DateInput } from "../../../components/common/DateInput";
 const getLoggedInUserName = (): string => {
   try {
     const raw = localStorage.getItem('nexus_crm_fallback_user');
@@ -178,6 +180,7 @@ export const PurchaseRequestView: React.FC = () => {
     setIsSearchingProducts(true);
     try {
       const res = await productApi.getProducts({
+        activeOnly: true,
         search: trimmed || undefined,
         page_size: 50,
         pagination_required: false,
@@ -188,7 +191,7 @@ export const PurchaseRequestView: React.FC = () => {
           if (trimmed) {
             prev.forEach((p) => map.set(p.id, p));
           }
-          res.data.forEach((p) => map.set(p.id, p));
+          res.data.filter(isProductActive).forEach((p) => map.set(p.id, p));
           return Array.from(map.values());
         });
       }
@@ -505,6 +508,7 @@ export const PurchaseRequestView: React.FC = () => {
     >();
 
     availableProducts.forEach((p) => {
+      if (!isProductActive(p)) return;
       const prodName = p.productName || (p as any).name || 'Product';
       const prodCost = Number(p.purchasePrice || (p as any).costPrice || 0);
       const stock = Number(p.openingStock ?? 0);
@@ -1025,13 +1029,28 @@ export const PurchaseRequestView: React.FC = () => {
   }, [liveRequests, currentPage, pageSize]);
 
   // Export Purchase Requests to Excel
-  const handleExportExcel = () => {
-    const listToExport = liveRequests;
-    if (listToExport.length === 0) {
-      toast.error('No purchase request records available to export.');
-      return;
-    }
+  const fetchPurchaseRequestReportPage = async (page: number, size: number) => {
+    const res = await commercePurchaseRequestApi.getPurchaseRequests({
+      page_no: page,
+      page_size: size,
+      pagination_required: true,
+      search: appliedSearch.trim() || undefined,
+      sortOrder: 'desc',
+      status: appliedStatus !== 'All' ? appliedStatus : undefined,
+      priority: appliedPriority !== 'All' ? appliedPriority : undefined,
+    });
+    return {
+      items: res && res.success && Array.isArray(res.data) ? res.data.map(mapApiPurchaseRequestToUi) : [],
+      totalRecords: res?.pagination?.totalRecords,
+      totalPages: res?.pagination?.totalPages,
+      hasNextPage: res?.pagination?.hasNextPage,
+    };
+  };
 
+  const handleExportExcel = () => runReport({
+    label: 'purchase requests',
+    load: () => fetchAllReportRows(fetchPurchaseRequestReportPage),
+    onRows: (listToExport) => {
     const excelRows = listToExport.map((r, idx) => {
       const itemsSummary = r.items
         .map((it) => `${it.productName} (Qty: ${it.requestedQuantity})`)
@@ -1084,7 +1103,8 @@ export const PurchaseRequestView: React.FC = () => {
     });
 
     toast.success(`Purchase Requests Excel report downloaded (${listToExport.length} records)!`);
-  };
+    },
+  });
 
   // Print & Download Purchase Request via universal printUtils
   const buildPurchaseRequestPrintOptions = (req: PurchaseRequest): DocumentPrintOptions => {
@@ -1167,13 +1187,10 @@ export const PurchaseRequestView: React.FC = () => {
   };
 
   // Print Table Report for Purchase Requests
-  const handlePrintTableReport = () => {
-    const listToPrint = liveRequests;
-    if (listToPrint.length === 0) {
-      toast.info('No purchase requests available to print.');
-      return;
-    }
-
+  const handlePrintTableReport = () => runReport({
+    label: 'purchase requests',
+    load: () => fetchAllReportRows(fetchPurchaseRequestReportPage),
+    onRows: (listToPrint) => {
     const printRows = listToPrint.map((r) => {
       const totalEstimated = r.items.reduce(
         (acc, it) => acc + (it.estimatedUnitPrice || 0) * (it.requestedQuantity || (it as any).quantity || 0),
@@ -1215,7 +1232,8 @@ export const PurchaseRequestView: React.FC = () => {
         estimatedTotal: grandTotal,
       },
     });
-  };
+    },
+  });
 
   return (
     <div className="space-y-6 pb-12 font-sans">
@@ -1521,9 +1539,6 @@ export const PurchaseRequestView: React.FC = () => {
                           <span className="font-bold text-slate-900 text-xs sm:text-[13px] block">
                             {req.requestedBy}
                           </span>
-                          <span className="text-[10px] text-slate-400 font-medium block">
-                            Requisition Owner
-                          </span>
                         </div>
                       </div>
                     </td>
@@ -1744,18 +1759,16 @@ export const PurchaseRequestView: React.FC = () => {
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Request Date <span className="text-rose-500">*</span>
               </label>
-              <input
-                type="date"
-                {...fieldAttr('requestDate')}
+              <DateInput
                 value={requestDate}
-                onChange={(e) => {
+                onChange={(v) => ((e) => {
                   setRequestDate(e.target.value);
                   clearError('requestDate');
                   clearError('requiredDate');
-                }}
+                })({ target: { value: v } } as any)}
+                {...fieldAttr('requestDate')}
                 disabled={!!editingRequest}
                 title={editingRequest ? "Request date cannot be changed after creation" : undefined}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all disabled:bg-slate-50 disabled:text-slate-400 disabled:cursor-not-allowed"
               />
               <FormError message={lineErrors['requestDate']} />
             </div>
@@ -1764,15 +1777,13 @@ export const PurchaseRequestView: React.FC = () => {
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Required Date
               </label>
-              <input
-                type="date"
-                {...fieldAttr('requiredDate')}
+              <DateInput
                 value={requiredDate}
-                onChange={(e) => {
+                onChange={(v) => ((e) => {
                   setRequiredDate(e.target.value);
                   clearError('requiredDate');
-                }}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                })({ target: { value: v } } as any)}
+                {...fieldAttr('requiredDate')}
               />
               <FormError message={lineErrors['requiredDate']} />
             </div>
@@ -1894,7 +1905,7 @@ export const PurchaseRequestView: React.FC = () => {
             <FormError message={lineErrors['items']} />
             <div className="border border-slate-200 rounded-[4px] overflow-hidden bg-white shadow-2xs">
               <div className="overflow-x-auto max-w-full">
-                <table className="w-full text-xs border-collapse">
+                <table className="w-full min-w-[1100px] text-xs border-collapse">
                   <thead>
                     <tr className="bg-[#33077C] text-white font-bold uppercase text-[11px] border-b border-[#33077C] tracking-wider select-none">
                       <th className="py-2.5 px-2.5 text-center border-r border-white/20 w-10 text-white/80 font-extrabold">#</th>
@@ -1958,7 +1969,7 @@ export const PurchaseRequestView: React.FC = () => {
                           </td>
 
                           {/* 4. Req Qty */}
-                          <td className="py-2.5 px-2 border-r border-slate-200 align-middle">
+                          <td className="py-2.5 px-2 border-r border-slate-200 align-middle min-w-[110px]">
                             <input
                               type="number"
                               min="1"
@@ -1974,20 +1985,19 @@ export const PurchaseRequestView: React.FC = () => {
                           </td>
 
                           {/* 5. Est. Cost */}
-                          <td className="py-2.5 px-2 border-r border-slate-200 align-middle text-right">
+                          <td className="py-2.5 px-2 border-r border-slate-200 align-middle text-right min-w-[130px]">
                             <div className="h-10 flex items-center justify-end px-3 rounded-[4px] bg-emerald-50 text-emerald-800 border border-emerald-200/80 font-bold text-xs font-sans">
                               ₹{(it.estimatedUnitPrice || 0).toLocaleString('en-IN')}
                             </div>
                           </td>
 
                           {/* 6. Required By */}
-                          <td className="py-2.5 px-2 border-r border-slate-200 align-middle">
-                            <input
-                              type="date"
-                              {...fieldAttr(`items.${idx}.requiredDate`)}
+                          <td className="py-2.5 px-2 border-r border-slate-200 align-middle min-w-[140px]">
+                            <DateInput
                               value={it.requiredDate}
-                              onChange={(e) => handleItemFieldChange(idx, 'requiredDate', e.target.value)}
-                              className="w-full h-10 px-2 text-center bg-white hover:border-slate-400 focus:bg-white border border-slate-300 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/10 rounded-[4px] text-xs font-medium text-slate-700 outline-none shadow-2xs transition-all cursor-pointer"
+                              onChange={(v) => ((e) => handleItemFieldChange(idx, 'requiredDate', e.target.value))({ target: { value: v } } as any)}
+                              {...fieldAttr(`items.${idx}.requiredDate`)}
+                              heightClass="h-10"
                             />
                             <FormError message={lineErrors[`items.${idx}.requiredDate`]} />
                           </td>

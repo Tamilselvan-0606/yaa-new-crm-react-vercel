@@ -369,3 +369,23 @@ export const calculateDocumentTotals = (
     items: finalLines,
   };
 };
+
+/**
+ * Gross subtotal for display in bill summaries: the sum of (qty × rate) of the
+ * selected products, BEFORE discount and tax. Falls back to the backend value
+ * when no usable items exist. This keeps the summary reconciled:
+ * Subtotal − Discount + Tax (+ charges) = Total.
+ */
+export const resolveGrossSubtotal = (
+  items: Array<{ quantity?: number | string; unitPrice?: number | string }> | undefined | null,
+  fallback: number,
+): number => {
+  if (!Array.isArray(items) || items.length === 0) return fallback;
+  const gross = round2(
+    items.reduce(
+      (acc, it) => acc + (Number(it?.quantity) || 0) * (Number(it?.unitPrice) || 0),
+      0,
+    ),
+  );
+  return gross > 0 ? gross : fallback;
+};

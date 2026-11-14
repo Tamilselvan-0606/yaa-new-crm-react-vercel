@@ -52,6 +52,7 @@ import { store } from "../../../store/store";
 import { baseApi } from "../../../api/baseApi";
 import { AddCategoryModal } from "./AddCategoryModal";
 import { AddSubcategoryModal } from "./AddSubcategoryModal";
+import { DateInput } from "../../../components/common/DateInput";
 
 interface AddItemModalProps {
   isOpen: boolean;
@@ -93,30 +94,11 @@ const TAX_RATE_OPTIONS = [
   { label: "None", value: "None" },
   { label: "Exempted", value: "Exempted" },
   { label: "GST @ 0%", value: "GST @ 0%" },
-  { label: "GST @ 0.1%", value: "GST @ 0.1%" },
   { label: "GST @ 0.25%", value: "GST @ 0.25%" },
-  { label: "GST @ 1.5%", value: "GST @ 1.5%" },
   { label: "GST @ 3%", value: "GST @ 3%" },
   { label: "GST @ 5%", value: "GST @ 5%" },
-  { label: "GST @ 12%", value: "GST @ 12%" },
   { label: "GST @ 18%", value: "GST @ 18%" },
-  { label: "GST @ 28%", value: "GST @ 28%" },
   { label: "GST @ 40%", value: "GST @ 40%" },
-  { label: "GST @ 28% + Cess", value: "GST @ 28% + Cess" },
-];
-
-const COMMON_HSN_CODES = [
-  { code: "1006", desc: "Rice & Basmati Grain" },
-  { code: "1101", desc: "Wheat Flour & Atta / Maida" },
-  { code: "0713", desc: "Dried Legumes, Toor Dal, Moong Dal" },
-  { code: "1512", desc: "Sunflower & Edible Refined Oils" },
-  { code: "0405", desc: "Butter, Pure Cow Ghee & Dairy Spreads" },
-  { code: "0902", desc: "Tea, Black Tea & Green Tea" },
-  { code: "0901", desc: "Coffee, Roasted Coffee Beans" },
-  { code: "1902", desc: "Instant Noodles, Pasta & Macaroni" },
-  { code: "1701", desc: "Cane Sugar & Refined White Sugar" },
-  { code: "2501", desc: "Iodized Cooking Salt & Rock Salt" },
-  { code: "3402", desc: "Washing Powder, Liquid Detergent & Soaps" },
 ];
 
 const formatUnitOption = (u: { name: string; shortCode?: string }) => {
@@ -435,8 +417,6 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
   const [isUploadingImage, setIsUploadingImage] = useState<boolean>(false);
 
   // HSN Search
-  const [isHsnModalOpen, setIsHsnModalOpen] = useState(false);
-  const [hsnSearchQuery, setHsnSearchQuery] = useState("");
 
   const {
     register,
@@ -488,7 +468,9 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
         status: "Active",
       });
       if (res && res.data) {
-        setCategories(res.data);
+        setCategories(
+          res.data.filter((c: any) => String(c.status || "Active").toLowerCase() !== "inactive"),
+        );
       }
     } catch (err) {
       console.warn("Failed to load categories in AddItemModal:", err);
@@ -615,11 +597,17 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
   }, [allAvailableUnits]);
 
   const taxRateOptions = React.useMemo(() => {
-    return TAX_RATE_OPTIONS.map((tax) => ({
+    const opts = TAX_RATE_OPTIONS.map((tax) => ({
       value: tax.value,
       label: tax.label,
     }));
-  }, []);
+    // A rate saved under an older slab (12%, 28% ...) stays visible instead of silently turning into "None".
+    const current = formData.taxRate;
+    if (current && !opts.some((o) => o.value === current)) {
+      opts.push({ value: current, label: `${current} (old slab)` });
+    }
+    return opts;
+  }, [formData.taxRate]);
 
   const handleUnitChange = (val: string) => {
     setValue("unit", val, { shouldValidate: isSubmitted });
@@ -637,35 +625,6 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
       setSelectedBaseUnit(val);
     }
   };
-
-  // HSN search dropdown state
-  const hsnContainerRef = useRef<HTMLDivElement>(null);
-  const [isHsnDropdownOpen, setIsHsnDropdownOpen] = useState(false);
-
-  useEffect(() => {
-    const handleOutsideHsn = (e: MouseEvent) => {
-      if (
-        hsnContainerRef.current &&
-        !hsnContainerRef.current.contains(e.target as Node)
-      ) {
-        setIsHsnDropdownOpen(false);
-      }
-    };
-    if (isHsnDropdownOpen) {
-      document.addEventListener("mousedown", handleOutsideHsn);
-    }
-    return () => {
-      document.removeEventListener("mousedown", handleOutsideHsn);
-    };
-  }, [isHsnDropdownOpen]);
-
-  const filteredCommonHsn = React.useMemo(() => {
-    const q = (formData.hsnCode || "").trim().toLowerCase();
-    if (!q) return COMMON_HSN_CODES;
-    return COMMON_HSN_CODES.filter(
-      (h) => h.code.includes(q) || h.desc.toLowerCase().includes(q)
-    );
-  }, [formData.hsnCode]);
 
   // Reset modal state upon opening; clear all errors on open and on close
   useEffect(() => {
@@ -1139,73 +1098,18 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
             {/* Row 2: Item HSN, Select Unit, Add Item Image */}
             <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-end">
               {/* Item HSN */}
-              <div className="md:col-span-4" ref={hsnContainerRef}>
+              <div className="md:col-span-4">
                 <FormLabel>Item HSN</FormLabel>
                 <div className="relative">
                   <input
                     type="text"
-                    placeholder="Enter or search HSN"
+                    placeholder="Enter Item HSN"
                     value={formData.hsnCode || ""}
                     onChange={(e) => {
                       setValue("hsnCode", e.target.value);
-                      setIsHsnDropdownOpen(true);
                     }}
-                    onFocus={() => setIsHsnDropdownOpen(true)}
-                    className={`${FORM_INPUT_CLS} pr-10 font-mono`}
+                    className={`${FORM_INPUT_CLS} font-mono`}
                   />
-                  <button
-                    type="button"
-                    onClick={() => setIsHsnModalOpen(true)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-[#33077C] transition-colors cursor-pointer"
-                    title="Search HSN / SAC Codes"
-                  >
-                    <Search className="w-4 h-4" />
-                  </button>
-
-                  {/* Searchable HSN Dropdown matching Customer Dropdown */}
-                  {isHsnDropdownOpen && (
-                    <div className="absolute left-0 top-full mt-1.5 w-full min-w-0 sm:min-w-[280px] max-w-[calc(100vw-2.5rem)] bg-white rounded-2xl shadow-2xl border border-slate-200 p-2.5 z-50 animate-in fade-in zoom-in-95 duration-100">
-                      <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider px-2 py-1 mb-1">
-                        Common HSN / SAC Codes
-                      </div>
-                      <div className="max-h-48 overflow-y-auto p-1 space-y-0.5 divide-y divide-slate-100/60 custom-scrollbar">
-                        {filteredCommonHsn.map((item) => (
-                          <div
-                            key={item.code}
-                            onClick={() => {
-                              setValue("hsnCode", item.code, { shouldValidate: isSubmitted });
-                              setIsHsnDropdownOpen(false);
-                            }}
-                            className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-2 text-xs transition-colors cursor-pointer text-left ${
-                              formData.hsnCode === item.code
-                                ? "bg-purple-50 text-[#33077C] font-bold"
-                                : "hover:bg-slate-50 text-slate-700"
-                            }`}
-                          >
-                            <div>
-                              <div className="font-semibold text-xs">{item.desc}</div>
-                              <div className="text-[10.5px] text-slate-400 font-mono mt-0.5">HSN: {item.code}</div>
-                            </div>
-                            {formData.hsnCode === item.code && (
-                              <Check className="w-4 h-4 text-[#33077C] shrink-0" />
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                      <div className="pt-2 mt-1 border-t border-slate-100 text-center">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsHsnDropdownOpen(false);
-                            setIsHsnModalOpen(true);
-                          }}
-                          className="text-[11px] font-bold text-[#33077C] hover:underline cursor-pointer"
-                        >
-                          Find More in Full HSN / SAC Finder...
-                        </button>
-                      </div>
-                    </div>
-                  )}
                 </div>
               </div>
 
@@ -1605,15 +1509,13 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                       {/* Manufacturing Date */}
                       <div>
                         <FormLabel>Mfg Date</FormLabel>
-                        <input
-                          type="date"
+                        <DateInput
                           value={formData.mfgDate || ""}
-                          onChange={(e) => {
+                          onChange={(v) => ((e) => {
                             setValue("mfgDate", e.target.value);
                             fe.clearError("expDate");
                             fe.clearError("batchNo");
-                          }}
-                          className={`${FORM_INPUT_CLS} cursor-pointer`}
+                          })({ target: { value: v } } as any)}
                         />
                         <span className="text-[10px] text-slate-400 mt-1 block">
                           Manufacturing date
@@ -1623,16 +1525,14 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                       {/* Expiry Date */}
                       <div>
                         <FormLabel>Expiry Date</FormLabel>
-                        <input
-                          type="date"
+                        <DateInput
                           value={formData.expDate || ""}
-                          onChange={(e) => {
+                          onChange={(v) => ((e) => {
                             setValue("expDate", e.target.value);
                             fe.clearError("expDate");
                             fe.clearError("batchNo");
-                          }}
+                          })({ target: { value: v } } as any)}
                           {...fieldAttr("expDate")}
-                          className={`${FORM_INPUT_CLS} cursor-pointer`}
                         />
                         <FormError message={fe.errors.expDate} showIcon />
                         <span className="text-[10px] text-slate-400 mt-1 block">
@@ -1818,77 +1718,6 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
               >
                 Done
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* HSN SEARCH MODAL                                                          */}
-      {/* ========================================================================= */}
-      {isHsnModalOpen && (
-        <div
-          className="fixed inset-0 z-60 flex items-center justify-center p-2.5 sm:p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-100"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsHsnModalOpen(false);
-          }}
-        >
-          <div className="relative w-full max-w-lg bg-white rounded-xl sm:rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92dvh] animate-in zoom-in-95 duration-100 my-auto">
-            <div
-              className="flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 text-white shrink-0"
-              style={{ background: "#33077C" }}
-            >
-              <h3 className="text-base font-bold text-white">
-                HSN / SAC Finder
-              </h3>
-              <button
-                type="button"
-                onClick={() => setIsHsnModalOpen(false)}
-                className="p-1 rounded-lg text-white/80 hover:text-white transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="p-4 sm:p-5 space-y-4 flex-1 overflow-y-auto">
-              <div className="relative">
-                <input
-                  type="text"
-                  placeholder="Search HSN code or item description..."
-                  value={hsnSearchQuery}
-                  onChange={(e) => setHsnSearchQuery(e.target.value)}
-                  className={`${FORM_INPUT_CLS} pl-9`}
-                />
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              </div>
-              <div className="space-y-1 divide-y divide-slate-100">
-                {COMMON_HSN_CODES.filter(
-                  (h) =>
-                    !hsnSearchQuery.trim() ||
-                    h.code.includes(hsnSearchQuery.trim()) ||
-                    h.desc.toLowerCase().includes(hsnSearchQuery.toLowerCase()),
-                ).map((item) => (
-                  <div
-                    key={item.code}
-                    onClick={() => {
-                      setValue("hsnCode", item.code, { shouldValidate: isSubmitted });
-                      setIsHsnModalOpen(false);
-                    }}
-                    className="p-2.5 hover:bg-purple-50/60 rounded-xl cursor-pointer flex items-center justify-between transition-colors"
-                  >
-                    <div>
-                      <div className="font-bold text-slate-800 text-xs">
-                        {item.desc}
-                      </div>
-                      <div className="text-[11px] text-slate-500 font-mono">
-                        HSN: {item.code}
-                      </div>
-                    </div>
-                    <span className="text-xs font-bold text-[#33077C]">
-                      Select
-                    </span>
-                  </div>
-                ))}
-              </div>
             </div>
           </div>
         </div>

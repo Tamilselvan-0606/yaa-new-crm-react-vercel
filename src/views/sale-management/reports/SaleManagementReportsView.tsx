@@ -67,6 +67,7 @@ import { workPaymentOutApi, mapApiPaymentOutToUi } from '../../../api/work/payme
 import { Modal } from '../../../components/common/Modal';
 import { toast } from "../../../utils/toast";
 import { downloadTableReport } from '../../../utils/printUtils';
+import { DateInput } from "../../../components/common/DateInput";
 
 /** YYYY-MM-DD in the user's local time zone (toISOString() would shift the day for UTC+ zones such as IST). */
 const toLocalISO = (d: Date): string => {
@@ -1564,8 +1565,16 @@ export const SaleManagementReportsView: React.FC = () => {
             const hsn = (item as any).hsnCode || (item as any).hsn || '—';
             const cur = hsnMap.get(hsn) || { desc: item.productName, qty: 0, taxable: 0, tax: 0 };
             cur.qty += item.quantity;
-            cur.taxable += item.total;
-            cur.tax += (item.total * (item.taxPercent || 0)) / 100;
+            // item.total is the line total AFTER discount and INCLUDING GST,
+            // so derive GST from the post-discount taxable value, not from the total.
+            const rate = Number(item.taxPercent || 0);
+            const lineTotal = Number(item.total || 0);
+            const recordedTax = Number((item as any).taxAmount);
+            const lineTax = Number.isFinite(recordedTax) && (item as any).taxAmount !== undefined
+              ? recordedTax
+              : rate > 0 ? lineTotal - lineTotal / (1 + rate / 100) : 0;
+            cur.taxable += lineTotal - lineTax;
+            cur.tax += lineTax;
             hsnMap.set(hsn, cur);
           });
         });
@@ -2408,18 +2417,16 @@ export const SaleManagementReportsView: React.FC = () => {
             <div className="flex flex-col sm:flex-row items-center gap-3">
               {timeRange === 'custom' && (
                 <div className="flex items-center gap-2 w-full sm:w-auto">
-                  <input
-                    type="date"
+                  <DateInput
                     value={customStartDate}
-                    onChange={(e) => setCustomStartDate(e.target.value)}
-                    className="h-9.5 px-3 text-xs font-medium border border-slate-300 rounded-xl bg-white focus:outline-[#33077C]"
+                    onChange={(v) => ((e) => setCustomStartDate(e.target.value))({ target: { value: v } } as any)}
+                    heightClass="h-9"
                   />
                   <span className="text-xs text-slate-400 font-bold">to</span>
-                  <input
-                    type="date"
+                  <DateInput
                     value={customEndDate}
-                    onChange={(e) => setCustomEndDate(e.target.value)}
-                    className="h-9.5 px-3 text-xs font-medium border border-slate-300 rounded-xl bg-white focus:outline-[#33077C]"
+                    onChange={(v) => ((e) => setCustomEndDate(e.target.value))({ target: { value: v } } as any)}
+                    heightClass="h-9"
                   />
                 </div>
               )}

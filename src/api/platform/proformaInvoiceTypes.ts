@@ -16,6 +16,8 @@ export interface ProformaItem {
 }
 
 export interface ProformaInvoiceApiItem {
+  /** Saved organization bank account: the bank object (or its id) returned by the API. */
+  bank?: any;
   id: string;
   proformaNumber: string;
   referenceNumber?: string | null;
@@ -30,6 +32,7 @@ export interface ProformaInvoiceApiItem {
   updatedBy?: string | null;
   customerId: string;
   customerName: string;
+  customerCompany?: string | null;
   customerEmail?: string;
   customerPhone?: string;
   billingAddress?: string | null;
@@ -150,6 +153,8 @@ export interface CreateProformaRequest {
   organizationId?: string;
   subOrganizationId?: string | null;
   branchId?: string | null;
+  /** Organization bank account (organization-banks id). */
+  bankAccountId?: string | null;
   discountTotal?: number;
   billingAddress?: string;
   shippingAddress?: string;
@@ -162,6 +167,8 @@ export interface CreateProformaRequest {
 }
 
 export interface UpdateProformaRequest {
+  /** Organization bank account (organization-banks id). */
+  bankAccountId?: string | null;
   proformaManualNumber?: string;
   createdDate?: string;
   status?: ProformaInvoiceStatus | string;

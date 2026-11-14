@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { organizationApi, OrganizationApiItem } from '../api/platform/organizationApi';
 import { subOrganizationApi, SubOrganizationApiItem } from '../api/platform/subOrganizationApi';
-import { getStoredOrganizationId } from '../api/config';
+import { getStoredOrganizationId, USER_CACHE_STORAGE_KEY } from '../api/config';
 
 export interface CompanyDocumentProfile {
   companyName: string;
@@ -17,17 +17,37 @@ export interface CompanyDocumentProfile {
 
 // In-memory cache across hook instances during user session
 let cachedProfile: CompanyDocumentProfile | null = null;
+let cachedKey = '';
 let profilePromise: Promise<CompanyDocumentProfile> | null = null;
 
 export const fetchOrganizationDocumentProfile = async (
   explicitOrgId?: string
 ): Promise<CompanyDocumentProfile> => {
-  if (cachedProfile && !explicitOrgId) {
+  const storedOrgId = explicitOrgId || getStoredOrganizationId();
+  // A sub-organization user (per GET /auth/me) always prints their own sub-organization's details, not the
+  // parent organization's. Other users follow the sub-organization selected in the header.
+  let loggedInSubOrgId: string | undefined;
+  let loggedInRole = '';
+  try {
+    const cachedUser = JSON.parse(localStorage.getItem(USER_CACHE_STORAGE_KEY) || 'null');
+    loggedInSubOrgId = cachedUser?.subOrganizationId || undefined;
+    loggedInRole = String(cachedUser?.role || '');
+  } catch {
+    /* no cached user */
+  }
+  const headerSubOrgId = localStorage.getItem('active_sub_organization_id');
+  const activeSubOrgId =
+    loggedInRole === 'SUB_ORG_ADMIN' && loggedInSubOrgId
+      ? loggedInSubOrgId
+      : headerSubOrgId && headerSubOrgId !== 'all'
+        ? headerSubOrgId
+        : loggedInSubOrgId || null;
+  // The cache is only valid for the organization / sub-organization it was built for.
+  const currentKey = `${storedOrgId || ''}|${activeSubOrgId || ''}`;
+  if (cachedProfile && cachedKey === currentKey) {
     return cachedProfile;
   }
-
-  const storedOrgId = explicitOrgId || getStoredOrganizationId();
-  const activeSubOrgId = localStorage.getItem('active_sub_organization_id');
+  cachedKey = currentKey;
   const storedOrgName =
     localStorage.getItem('active_organization_orgsuperadmin') ||
     localStorage.getItem('active_organization');

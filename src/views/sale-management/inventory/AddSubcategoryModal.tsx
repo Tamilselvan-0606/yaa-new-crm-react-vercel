@@ -24,13 +24,8 @@ export interface SubcategoryFormValues {
   status: 'Active' | 'Inactive';
 }
 
-const DEFAULT_CATEGORY_OPTIONS = [
-  { label: 'General', value: 'General' },
-  { label: 'Electronics & Hardware', value: 'Electronics & Hardware' },
-  { label: 'Apparel & Fashion', value: 'Apparel & Fashion' },
-  { label: 'Home & Office Supplies', value: 'Home & Office Supplies' },
-  { label: 'Industrial Equipment', value: 'Industrial Equipment' },
-];
+// Categories always come from the API (active ones only); no hardcoded fallback list.
+const DEFAULT_CATEGORY_OPTIONS: { label: string; value: string }[] = [];
 
 export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
   isOpen,
@@ -55,7 +50,7 @@ export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
     mode: 'onSubmit',
     reValidateMode: 'onChange',
     defaultValues: {
-      category: initialCategory || 'General',
+      category: initialCategory || '',
       subcategory: '',
       status: 'Active',
     },
@@ -84,7 +79,9 @@ export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
         status: 'Active',
       });
       if (res?.data && Array.isArray(res.data)) {
-        const mapped = res.data.map((c) => ({
+        const mapped = res.data
+          .filter((c) => String((c as any).status || 'Active').toLowerCase() !== 'inactive')
+          .map((c) => ({
           label: c.name || c.categoryName,
           value: c.name || c.categoryName,
         }));
@@ -111,7 +108,7 @@ export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
   useEffect(() => {
     // Start clean every time the modal opens or closes (no errors carried over)
     reset({
-      category: initialCategory || 'General',
+      category: initialCategory || '',
       subcategory: '',
       status: 'Active',
     });

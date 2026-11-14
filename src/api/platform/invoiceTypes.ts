@@ -21,6 +21,7 @@ export interface InvoicePaymentApiItem {
   paymentDate: string;
   paymentMode: string;
   referenceNumber?: string | null;
+  transactionId?: string | null;
   notes?: string | null;
   createdAt: string;
   /** Present on ledger-backed history: */
@@ -33,6 +34,8 @@ export interface InvoicePaymentApiItem {
 }
 
 export interface InvoiceApiItem {
+  /** Saved organization bank account: the bank object (or its id) returned by the API. */
+  bank?: any;
   referenceNumber?: string | null;
   invoiceManualNumber?: string | null;
   id: string;
@@ -48,6 +51,7 @@ export interface InvoiceApiItem {
   updatedBy?: string | null;
   customerId: string;
   customerName: string;
+  customerCompany?: string | null;
   customerEmail?: string;
   customerPhone?: string;
   billingAddress?: string | null;
@@ -186,6 +190,8 @@ export interface CreateInvoiceRequest {
   organizationId?: string;
   subOrganizationId?: string | null;
   branchId?: string | null;
+  /** Organization bank account (organization-banks id). */
+  bankAccountId?: string | null;
   status?: 'Draft' | 'Sent' | InvoiceStatus;
   discountTotal?: number;
   billingAddress?: string;
@@ -199,6 +205,8 @@ export interface CreateInvoiceRequest {
 }
 
 export interface UpdateInvoiceRequest {
+  /** Organization bank account (organization-banks id). */
+  bankAccountId?: string | null;
   invoiceManualNumber?: string;
   createdDate?: string;
   dueDate?: string;

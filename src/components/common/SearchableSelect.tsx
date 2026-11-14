@@ -233,12 +233,15 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
     onChange('');
     setSearchTerm('');
     setIsTyping(false);
+    inputRef.current?.focus();
   };
 
-  // Determine what value to show inside the input
+  // Determine what value to show inside the input:
+  // When no option or an empty option (like "Select" / value === '') is chosen,
+  // do not put text in the field so the user can immediately type to search.
   const displayInputValue = isTyping
     ? searchTerm
-    : selectedOption
+    : selectedOption && selectedOption.value !== ''
     ? selectedOption.label
     : '';
 
@@ -256,6 +259,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
           if (!disabled) {
             handleOpen();
             inputRef.current?.focus();
+            inputRef.current?.select();
           }
         }}
         className={`w-full ${sizeClasses} rounded-xl border flex items-center justify-between transition-all cursor-pointer ${
@@ -274,6 +278,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
           placeholder={placeholder}
           onFocus={() => {
             handleOpen();
+            inputRef.current?.select();
           }}
           onChange={(e) => {
             setSearchTerm(e.target.value);
@@ -301,12 +306,12 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
             }
           }}
           className={`w-full min-w-0 bg-transparent border-none outline-none truncate placeholder-slate-400 ${
-            selectedOption && !isTyping ? 'font-bold text-slate-900' : 'font-medium text-slate-800'
+            selectedOption && selectedOption.value !== '' && !isTyping ? 'font-bold text-slate-900' : 'font-medium text-slate-800'
           } ${disabled ? 'cursor-not-allowed text-slate-400' : 'cursor-text'}`}
         />
 
         <div className="flex items-center gap-1 shrink-0 ml-1.5 pointer-events-auto">
-          {allowClear && selectedOption && !disabled && (
+          {allowClear && selectedOption && selectedOption.value !== '' && !disabled && (
             <button
               type="button"
               onClick={handleClear}

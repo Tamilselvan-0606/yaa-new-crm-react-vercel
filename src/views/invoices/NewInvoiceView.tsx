@@ -28,11 +28,13 @@ import {
   Boxes,
   ArrowLeft,
   Loader2,
+  Eye,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Customer } from '../../types';
 import { CustomerFormModal } from '../../components/forms/CustomerFormModal';
+import { CustomSelect } from '../../components/common/CustomSelect';
 import { useInvoiceStore, SavedInvoice } from '../../store/useInvoiceStore';
 import { useProformaInvoiceStore } from '../../store/useProformaInvoiceStore';
 import {
@@ -64,6 +66,8 @@ import {
   type UpdateSuperAdminDetailRequest,
 } from '../../api/platform/superAdminDetailsApi';
 
+import { organizationBankApi, type OrganizationBankItem } from '../../api/platform/organizationBankApi';
+
 interface BankAccount {
   id: string;
   bankName: string;
@@ -71,6 +75,7 @@ interface BankAccount {
   accountNumber: string;
   ifscCode: string;
   branchName: string;
+  accountType?: string;
   upiId?: string;
   isDefault?: boolean;
 }
@@ -114,14 +119,14 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const [isExistingInvoiceModalOpen, setIsExistingInvoiceModalOpen] = useState(false);
 
   // Column 1: Company Details & Selected Product Suite
-  const [companyLogo, setCompanyLogo] = useState<string>('/yaa-creations-logo.png');
+  const [companyLogo, setCompanyLogo] = useState<string>('');
   const [companyDetails, setCompanyDetails] = useState({
-    name: 'Yaa Creations',
-    taxId: '27AABCA1234F1Z8',
-    pan: 'ABCDE1234F',
-    address: 'No.108 Marutham Paradise Apartment, Urapakkam, Chennai,',
-    email: 'billing@yaacreations.com',
-    phone: '+91 98765 43210',
+    name: '',
+    taxId: '',
+    pan: '',
+    address: '',
+    email: '',
+    phone: '',
   });
   const [isEditingCompany, setIsEditingCompany] = useState(false);
 
@@ -147,9 +152,10 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     if (d.logoUrl) setCompanyLogo(d.logoUrl);
   };
 
-  // Fill the card when the cached default company changes (not over an invoice being edited / duplicated)
+  // Fill the card from the default company details (also when editing / duplicating, the saved row only carries
+  // placeholder seller details for the platform administrator)
   useEffect(() => {
-    if (defaultSeller && !invoiceToEdit && !invoiceToDuplicate) applySuperAdminDetail(defaultSeller);
+    if (defaultSeller) applySuperAdminDetail(defaultSeller);
   }, [defaultSeller]);
 
   const handleCompanyLogoFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -206,6 +212,9 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     { page: 1, limit: 100, sortBy: 'createdAt', sortOrder: 'desc' },
     { skip: !isProforma }
   );
+
+  // The predicted number is only trustworthy once the existing list has loaded (an empty list predicts 0001)
+  const isNumberSourceReady = isProforma ? existingProformasQuery.isSuccess : existingInvoicesQuery.isSuccess;
 
   const nextPredictedInvoiceNumber = useMemo(() => {
     const currentYear = new Date().getFullYear();
@@ -285,10 +294,13 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const [editFieldType, setEditFieldType] = useState<'text' | 'date' | 'textarea'>('text');
   const [editFieldValue, setEditFieldValue] = useState('');
 
-  // Bank Accounts Management State (starts empty, user configures via Add Bank)
+  // Bank accounts come from the organization-banks API (scoped to the active organization / sub-organization)
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [selectedBankId, setSelectedBankId] = useState<string>('');
+  const [bankAccountDetails, setBankAccountDetails] = useState('');
   const [isAddBankModalOpen, setIsAddBankModalOpen] = useState(false);
+  const [isSavingBank, setIsSavingBank] = useState(false);
+  const [viewingBank, setViewingBank] = useState<BankAccount | null>(null);
   const [newBank, setNewBank] = useState<Partial<BankAccount>>({
     bankName: '',
     accountName: '',
@@ -300,33 +312,119 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
   const selectedBank = bankAccounts.find((b) => b.id === selectedBankId) || (bankAccounts.length > 0 ? bankAccounts[0] : null);
 
-  const handleSaveNewBank = (e: React.FormEvent) => {
+  // Only banks that exist in the API (not one carried over from a duplicated document) can be sent as bankAccountId
+  const selectedBankApiId = selectedBank && !selectedBank.id.startsWith('bank_') ? selectedBank.id : undefined;
+
+  const mapApiBank = (b: OrganizationBankItem): BankAccount => ({
+    id: b.id,
+    bankName: b.bankName,
+    accountName: b.accountHolderName || b.accountName || b.accountHolder || '',
+    accountNumber: b.accountNumber,
+    ifscCode: b.ifscCode || b.ifsc || '',
+    branchName: b.branchName || '',
+    accountType: b.accountType || '',
+    upiId: b.upiId || '',
+    isDefault: !!b.isDefault,
+  });
+
+  const getBankScope = () => {
+    const orgId = currentUser?.organizationId || getStoredOrganizationId() || undefined;
+    const subOrgId =
+      localStorage.getItem('active_sub_organization_id_sales') ||
+      localStorage.getItem('active_sub_organization_id') ||
+      (currentUser as any)?.subOrganizationId ||
+      undefined;
+    return { orgId, subOrgId };
+  };
+
+  const bankAccountsRef = useRef<BankAccount[]>([]);
+  bankAccountsRef.current = bankAccounts;
+  const [banksReload, setBanksReload] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    const { orgId, subOrgId } = getBankScope();
+    organizationBankApi
+      .list({ page: 1, limit: 100, status: 'Active', organizationId: orgId, subOrganizationId: subOrgId, sortBy: 'isDefault', sortOrder: 'desc' })
+      .then((res) => {
+        if (cancelled || !Array.isArray(res?.data)) return;
+        const list = res.data.map(mapApiBank);
+        setBankAccounts((prev) => {
+          // keep a bank carried over from a duplicated document that is not in the API list
+          const extras = prev.filter((p) => !list.some((l) => l.id === p.id || l.accountNumber === p.accountNumber));
+          return [...list, ...extras];
+        });
+        setSelectedBankId((cur) => {
+          if (cur && (list.some((l) => l.id === cur) || bankAccountsRef.current.some((b) => b.id === cur))) return cur;
+          const pick = list.find((l) => l.isDefault) || list[0];
+          if (pick) {
+            setBankAccountDetails(pick.bankName);
+            return pick.id;
+          }
+          return cur;
+        });
+      })
+      .catch((err) => console.warn('Failed to load bank accounts:', err));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [banksReload, currentUser?.organizationId]);
+
+  const handleDeleteBank = async (bankId: string, bankName: string) => {
+    try {
+      if (!bankId.startsWith('bank_')) await organizationBankApi.remove(bankId);
+    } catch (err: any) {
+      showToast('error', 'Delete Failed', err?.response?.data?.error?.message || err?.response?.data?.message || 'Could not delete the bank account.');
+      return;
+    }
+    const remaining = bankAccounts.filter((b) => b.id !== bankId);
+    setBankAccounts(remaining);
+    if (selectedBankId === bankId) {
+      if (remaining.length > 0) {
+        setSelectedBankId(remaining[0].id);
+        setBankAccountDetails(remaining[0].bankName);
+      } else {
+        setSelectedBankId('');
+        setBankAccountDetails('');
+      }
+    }
+    showToast('info', 'Bank Account Deleted', `${bankName} was removed from the list.`);
+  };
+
+  const handleSaveNewBank = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBank.bankName?.trim() || !newBank.accountNumber?.trim()) {
       showToast('error', 'Incomplete Details', 'Please enter Bank Name and Account Number.');
       return;
     }
-    const created: BankAccount = {
-      id: `bank_${Date.now()}`,
-      bankName: newBank.bankName.trim(),
-      accountName: newBank.accountName?.trim() || '',
-      accountNumber: newBank.accountNumber.trim(),
-      ifscCode: (newBank.ifscCode || '').toUpperCase().trim(),
-      branchName: newBank.branchName?.trim() || '',
-      upiId: newBank.upiId?.trim() || '',
-    };
-    setBankAccounts([...bankAccounts, created]);
-    setSelectedBankId(created.id);
-    setIsAddBankModalOpen(false);
-    setNewBank({
-      bankName: '',
-      accountName: '',
-      accountNumber: '',
-      ifscCode: '',
-      branchName: '',
-      upiId: '',
-    });
-    showToast('success', 'Bank Account Added', `Added and selected ${created.bankName}.`);
+    const { orgId, subOrgId } = getBankScope();
+    try {
+      setIsSavingBank(true);
+      const res = await organizationBankApi.create({
+        bankName: newBank.bankName.trim(),
+        accountHolderName: newBank.accountName?.trim() || undefined,
+        accountNumber: newBank.accountNumber.trim(),
+        ifscCode: (newBank.ifscCode || '').toUpperCase().trim() || undefined,
+        accountType: newBank.accountType?.trim() || 'Current',
+        branchName: newBank.branchName?.trim() || undefined,
+        upiId: newBank.upiId?.trim() || undefined,
+        isDefault: bankAccounts.length === 0,
+        status: 'Active',
+        organizationId: orgId,
+        subOrganizationId: subOrgId || null,
+      });
+      const created = mapApiBank(res.data);
+      setBankAccounts((prev) => [...prev, created]);
+      setSelectedBankId(created.id);
+      setBankAccountDetails(created.bankName);
+      setIsAddBankModalOpen(false);
+      setNewBank({ bankName: '', accountName: '', accountNumber: '', ifscCode: '', branchName: '', accountType: '', upiId: '' });
+      showToast('success', 'Bank Account Added', `Added and selected ${created.bankName}.`);
+    } catch (err: any) {
+      showToast('error', 'Could Not Add Bank', err?.response?.data?.error?.message || err?.response?.data?.message || 'Failed to save the bank account.');
+    } finally {
+      setIsSavingBank(false);
+    }
   };
 
   // Live platform organizations (for Platform Administrator)
@@ -493,11 +591,12 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       linkedProducts: [],
       gstin: org.gstNumber || '',
       taxId: org.gstNumber || '',
+      pan: org.panNumber || org.pan || '',
     }))
     : platformClients.map((client) => ({
       id: client.id,
       name: client.contactPerson || client.name,
-      company: client.name || client.legalName || 'Client',
+      company: client.legalName || client.name || 'Client',
       code: (client as any).code || '',
       email: client.email || '',
       phone: client.phone || client.whatsapp || '',
@@ -696,7 +795,9 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
   // Filter clients for dropdown
   const filteredCustomers = availableCustomers.filter((c) => {
-    const q = clientSearchQuery.toLowerCase();
+    // When the box just shows the already-selected client, list everyone so the selection can be changed.
+    const selectedLabel = selectedCustomer ? clientLabel(selectedCustomer) : '';
+    const q = (clientSearchQuery === selectedLabel ? '' : clientSearchQuery).toLowerCase();
     return (
       c.company?.toLowerCase().includes(q) ||
       c.name?.toLowerCase().includes(q) ||
@@ -734,19 +835,20 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   } | null>(null);
   const [tempDescription, setTempDescription] = useState('');
 
-  // Auto pre-fill predicted next document number for fresh creations
+  // Auto pre-fill predicted next document number for fresh creations, duplicates and conversions
+  // (all are saved as new records, so the number must be in state to be sent in the create payload)
   useEffect(() => {
-    if (!invoiceToEdit && !invoiceToDuplicate && !invoiceNumber && nextPredictedInvoiceNumber) {
+    if (!invoiceToEdit && !invoiceNumber && isNumberSourceReady && nextPredictedInvoiceNumber) {
       setInvoiceNumber(nextPredictedInvoiceNumber);
     }
-  }, [invoiceToEdit, invoiceToDuplicate, invoiceNumber, nextPredictedInvoiceNumber]);
+  }, [invoiceToEdit, invoiceNumber, isNumberSourceReady, nextPredictedInvoiceNumber]);
 
   // Populate data when editing or duplicating an invoice
   useEffect(() => {
     const src = invoiceToEdit || invoiceToDuplicate;
     if (src) {
       if (invoiceToEdit?.invoiceNumber) setInvoiceNumber(invoiceToEdit.invoiceNumber);
-      if (invoiceToEdit?.invoiceDate) setInvoiceDate(invoiceToEdit.invoiceDate);
+      if (invoiceToEdit?.invoiceDate) setInvoiceDate(invoiceToEdit.invoiceDate.split('T')[0]);
       if ((src as any)?.createdAt) {
         setCreatedDate(((src as any).createdAt).split('T')[0]);
       } else if (src?.invoiceDate) {
@@ -777,9 +879,11 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       if (src.client) {
         setSelectedCustomer(src.client as any);
       }
-      if (src.company) {
+      if (src.company && !isPlatformAdmin) {
         setCompanyDetails((prev) => ({ ...prev, ...src.company }));
       }
+      // Editing: preselect the bank saved on the document (its id is kept even before the bank list has loaded)
+      if (src.bank?.id) setSelectedBankId(src.bank.id);
       if (src.bank && src.bank.accountNumber) {
         setBankAccounts((prev) => {
           const exists = prev.find((b) => b.accountNumber === src.bank.accountNumber);
@@ -788,7 +892,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
             return prev;
           }
           const loadedBank: BankAccount = {
-            id: `bank_${Date.now()}`,
+            id: src.bank.id || `bank_${Date.now()}`,
             bankName: src.bank.bankName || 'Bank Account',
             accountName: src.bank.accountName || '',
             accountNumber: src.bank.accountNumber,
@@ -1060,9 +1164,10 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
           <div className="px-7 py-4.5 bg-[#33077C] text-white flex flex-wrap sm:flex-nowrap items-center justify-between gap-3">
             <div className="flex items-center gap-6">
               <h2 className="text-base font-bold text-white tracking-tight whitespace-nowrap">
-                Sale Configuration
+                Company Details
               </h2>
             </div>
+            {isPlatformAdmin && (
             <button
               type="button"
               disabled={isSavingCompany}
@@ -1077,6 +1182,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
             >
               {isSavingCompany ? 'Saving...' : isEditingCompany ? 'Done' : 'Edit'}
             </button>
+            )}
           </div>
 
           {/* Card Body */}
@@ -1090,11 +1196,15 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                       <span className="font-bold text-slate-800">Company Logo</span>
                       <div className="flex items-center gap-2">
                         <span className="text-slate-700 mr-1">:</span>
-                        <img
-                          src={companyLogo}
-                          alt="Company Logo"
-                          className="h-9 sm:h-10 object-contain rounded"
-                        />
+                        {companyLogo ? (
+                          <img
+                            src={companyLogo}
+                            alt="Company Logo"
+                            className="h-14 sm:h-16 max-w-[200px] object-contain rounded"
+                          />
+                        ) : (
+                          <span className="text-slate-400 italic text-xs">No logo set</span>
+                        )}
                       </div>
                     </div>
                     <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
@@ -1128,11 +1238,15 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   <div>
                     <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Company Logo</label>
                     <div className="mt-1.5 flex items-center gap-3">
-                      <img
-                        src={companyLogo}
-                        alt="Company Logo"
-                        className="h-10 object-contain border border-slate-200 rounded-lg p-1 bg-white"
-                      />
+                      {companyLogo ? (
+                        <img
+                          src={companyLogo}
+                          alt="Company Logo"
+                          className="h-10 object-contain border border-slate-200 rounded-lg p-1 bg-white"
+                        />
+                      ) : (
+                        <span className="text-xs text-slate-400 italic">No logo selected</span>
+                      )}
                       {isPlatformAdmin ? (
                         <>
                           <input
@@ -1150,9 +1264,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             Change Logo
                           </button>
                         </>
-                      ) : (
-                        <span className="text-xs text-slate-500 font-medium">Yaa Creations Logo</span>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                   <div>
@@ -1365,7 +1477,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
           <div className="px-7 py-4.5 bg-[#33077C] text-white flex items-center justify-between rounded-t-2xl">
             <div className="flex items-center gap-3.5">
               <h2 className="text-base font-bold text-white tracking-tight">
-                {isSuperAdmin && !isOrgSuperAdmin ? 'Organization / Bill To' : 'Client & Billing Party'}
+                {isSuperAdmin && !isOrgSuperAdmin ? 'Bill To / Organization Details' : 'Bill To / Customer Details'}
               </h2>
             </div>
             <div className="flex items-center gap-2">
@@ -1468,11 +1580,6 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                                 setSelectedCustomer(cust);
                                 setClientSearchQuery(displayName);
                                 setIsClientDropdownOpen(false);
-                                showToast(
-                                  'success',
-                                  isSuperAdmin && !isOrgSuperAdmin ? 'Organization Selected' : 'Client Selected',
-                                  `Selected "${displayName}".`
-                                );
                               }}
                               className={`w-full text-left px-3.5 py-2.5 rounded-lg text-xs transition-all cursor-pointer flex items-center justify-between gap-3 ${isSelected
                                 ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
@@ -1502,7 +1609,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                 <div>
                   <div className="space-y-3.5 text-[13px]">
                     <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                      <span className="font-bold text-slate-800">{isSuperAdmin && !isOrgSuperAdmin ? 'Organization' : 'Client Name'}</span>
+                      <span className="font-bold text-slate-800">{isSuperAdmin && !isOrgSuperAdmin ? 'Organization' : 'Company Name'}</span>
                       <span className="text-slate-700 font-semibold">: {selectedCustomer.company || selectedCustomer.name}</span>
                     </div>
                     <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
@@ -1522,7 +1629,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                       <span className="text-slate-700">: {selectedCustomer.email || 'N/A'}</span>
                     </div>
                     <div className="grid grid-cols-[140px_1fr] gap-2 items-start">
-                      <span className="font-bold text-slate-800">Address</span>
+                      <span className="font-bold text-slate-800">Company Address</span>
                       <span className="text-slate-700 leading-relaxed">: {selectedCustomer.address || (selectedCustomer as any).location || 'N/A'}</span>
                     </div>
                   </div>
@@ -1736,14 +1843,73 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
         </div>
 
         {/* ========================================================================= */}
-        {/* BILLING FOOTER: INVOICE SUMMARY */}
+        {/* BILLING FOOTER: BANK PAYMENT DETAILS (LEFT) & INVOICE SUMMARY (RIGHT) */}
         {/* ========================================================================= */}
         <div className="p-6 lg:p-8 bg-[#F8FAFC] border-t border-slate-100">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             {/* ===================================================================== */}
+            {/* LEFT: Bank Account Details field & Visible Details (7 cols) */}
+            {/* ===================================================================== */}
+            <div className="lg:col-span-7 max-w-md space-y-5">
+              <div>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                  Bank Account Details
+                </label>
+                <CustomSelect
+                  value={selectedBank?.id || ''}
+                  onChange={(val) => {
+                    const matched = bankAccounts.find((b) => b.id === val);
+                    if (matched) {
+                      setSelectedBankId(matched.id);
+                      setBankAccountDetails(matched.bankName);
+                    }
+                  }}
+                  options={bankAccounts.map((b) => ({
+                    value: b.id,
+                    label: b.bankName,
+                    onView: () => setViewingBank(b),
+                    onDelete: () => handleDeleteBank(b.id, b.bankName),
+                  }))}
+                  placeholder="Select Bank Account"
+                  optionVariant="strong"
+                  addLabel="Add Bank Account"
+                  onAdd={() => setIsAddBankModalOpen(true)}
+                />
+              </div>
+
+              {/* Selected Bank Details Display */}
+              {selectedBank && (
+                <div className="pt-6 space-y-4 text-[13px]">
+                  <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                    <span className="font-bold text-slate-800">Account Name</span>
+                    <span className="text-slate-700">: {selectedBank.accountName || companyDetails.name || 'Yaa Creations'}</span>
+                  </div>
+                  <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                    <span className="font-bold text-slate-800">Account Number</span>
+                    <span className="text-slate-700">: {selectedBank.accountNumber}</span>
+                  </div>
+                  {selectedBank.ifscCode && (
+                    <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                      <span className="font-bold text-slate-800">IFSC</span>
+                      <span className="text-slate-700 uppercase">: {selectedBank.ifscCode}</span>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                    <span className="font-bold text-slate-800">Account Type</span>
+                    <span className="text-slate-700">: {selectedBank.accountType || 'Current'}</span>
+                  </div>
+                  <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                    <span className="font-bold text-slate-800">Bank</span>
+                    <span className="text-slate-700">: {selectedBank.bankName}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ===================================================================== */}
             {/* RIGHT CARD: Invoice Summary (5 cols) */}
             {/* ===================================================================== */}
-            <div className="lg:col-span-5 lg:col-start-8 bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition-all duration-300 overflow-hidden flex flex-col">
+            <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition-all duration-300 overflow-hidden flex flex-col">
               {/* Header */}
               <div className="px-7 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/40">
                 <div className="flex items-center gap-3.5">
@@ -1768,6 +1934,13 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                     <span>Discount:</span>
                     <span className={`font-bold text-sm ${totalDiscount > 0 ? 'text-rose-600' : 'text-slate-800'}`}>
                       {totalDiscount > 0 ? `-₹${totalDiscount.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : '₹0.00'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-slate-600 font-medium">
+                    <span>Amount (After Discount):</span>
+                    <span className="font-bold text-slate-900 text-sm">
+                      ₹{taxableAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </span>
                   </div>
                 </div>
@@ -1870,14 +2043,15 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                         setIsSubmitting(true);
                         if (invoiceToEdit) {
                           const updatePayload: UpdateProformaRequest = {
+                            bankAccountId: selectedBankApiId,
                             proformaManualNumber: manualNumber.trim() || undefined,
                             createdDate: createdDate || undefined,
                             invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
                             dueDate: dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
                             discountTotal: totalDiscount,
-                            billingAddress: selectedCustomer.address || selectedCustomer.location || 'Plot No 42, High-Tech Zone, Madhapur, Hyderabad, TG 500081',
+                            billingAddress: selectedCustomer.address || selectedCustomer.location || '',
                             gstin: (selectedCustomer as any).gstin || '',
-                            pan: (selectedCustomer as any).pan || 'AAAAA0000A',
+                            pan: (selectedCustomer as any).pan || '',
                             notes: invoiceDescription || undefined,
                             items: items.map((it, idx) => ({
                               itemId: it.id || `SKU-${idx + 1}`,
@@ -1898,6 +2072,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                           const activeBranchId = localStorage.getItem('active_branch_id_sales') || localStorage.getItem('active_branch_id');
 
                           const createPayload: CreateProformaRequest = {
+                            bankAccountId: selectedBankApiId,
                             proformaNumber: invoiceNumber.trim() || undefined,
                             proformaManualNumber: manualNumber.trim() || undefined,
                             createdDate: createdDate || undefined,
@@ -1909,9 +2084,9 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             subOrganizationId: activeSubOrgId || undefined,
                             branchId: activeBranchId || undefined,
                             discountTotal: totalDiscount,
-                            billingAddress: selectedCustomer.address || selectedCustomer.location || 'Plot No 42, High-Tech Zone, Madhapur, Hyderabad, TG 500081',
+                            billingAddress: selectedCustomer.address || selectedCustomer.location || '',
                             gstin: (selectedCustomer as any).gstin || '',
-                            pan: (selectedCustomer as any).pan || 'AAAAA0000A',
+                            pan: (selectedCustomer as any).pan || '',
                             notes: invoiceDescription || undefined,
                             items: items.map((it, idx) => ({
                               itemId: it.id || `SKU-${idx + 1}`,
@@ -1976,12 +2151,13 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
                       if (invoiceToEdit) {
                         const updatePayload: UpdateInvoiceRequest = {
+                          bankAccountId: selectedBankApiId,
                           invoiceManualNumber: manualNumber.trim() || undefined,
                           createdDate: createdDate || undefined,
                           dueDate: dueDate || (invoiceDate ? new Date(new Date(invoiceDate).getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] : undefined),
                           notes: invoiceDescription || undefined,
                           discountTotal: totalDiscount,
-                          billingAddress: selectedCustomer.address || selectedCustomer.location || 'Plot No 42, High-Tech Zone, Madhapur, Hyderabad, TG 500081',
+                          billingAddress: selectedCustomer.address || selectedCustomer.location || '',
                           items: items.map((it, idx) => ({
                             itemId: it.id || `SKU-${idx + 1}`,
                             title: it.name.trim(),
@@ -1997,6 +2173,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                         navigate('/sales/invoices');
                       } else {
                         const createPayload: CreateInvoiceRequest = {
+                          bankAccountId: selectedBankApiId,
                           invoiceNumber: invoiceNumber.trim() || undefined,
                           invoiceManualNumber: manualNumber.trim() || undefined,
                           createdDate: createdDate || undefined,
@@ -2009,9 +2186,9 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                           branchId: activeBranchId || undefined,
                           status: 'Sent',
                           discountTotal: totalDiscount,
-                          billingAddress: selectedCustomer.address || selectedCustomer.location || 'Plot No 42, High-Tech Zone, Madhapur, Hyderabad, TG 500081',
+                          billingAddress: selectedCustomer.address || selectedCustomer.location || '',
                           gstin: (selectedCustomer as any).gstin || '',
-                          pan: (selectedCustomer as any).pan || 'AAAAA0000A',
+                          pan: (selectedCustomer as any).pan || '',
                           notes: invoiceDescription || undefined,
                           items: items.map((it, idx) => ({
                             itemId: it.id || `SKU-${idx + 1}`,
@@ -2210,6 +2387,222 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               <button
                 onClick={() => setIsExistingInvoiceModalOpen(false)}
                 className="h-11 px-6 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-sm font-bold rounded-xl cursor-pointer flex items-center justify-center"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: ADD NEW BANK ACCOUNT */}
+      {/* ========================================================================= */}
+      {isAddBankModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-xl sm:rounded-2xl shadow-2xl max-w-6xl w-full max-h-[92dvh] flex flex-col overflow-hidden">
+            {/* Modal Header */}
+            <div
+              className="px-4 sm:px-6 py-3.5 sm:py-4.5 flex items-center justify-between text-white shrink-0 z-10 shadow-md"
+              style={{ background: '#33077C' }}
+            >
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsAddBankModalOpen(false)}
+                  className="p-1.5 -ml-1 rounded-xl transition-all cursor-pointer flex items-center justify-center text-white hover:bg-white/20 active:scale-95"
+                  title="Go back"
+                >
+                  <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+                </button>
+                <div>
+                  <h3 className="text-base font-bold text-white">Add New Bank Account</h3>
+                  <p className="text-xs text-white/90 font-medium">Add payment settlement bank details for invoices</p>
+                </div>
+              </div>
+            </div>
+
+            <form noValidate onSubmit={handleSaveNewBank} className="p-4 sm:p-8 space-y-5 sm:space-y-6 overflow-y-auto flex-1">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-[13px] font-medium text-slate-600 mb-1.5">
+                    Bank Name <span className="text-rose-500 font-bold">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Axis Bank Ltd"
+                    value={newBank.bankName || ''}
+                    onChange={(e) => setNewBank({ ...newBank, bankName: e.target.value })}
+                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[13px] font-medium text-slate-600 mb-1.5">
+                    Account Holder Name <span className="text-rose-500 font-bold">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Yaa Creations"
+                    value={newBank.accountName || ''}
+                    onChange={(e) => setNewBank({ ...newBank, accountName: e.target.value })}
+                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[13px] font-medium text-slate-600 mb-1.5">
+                    Account Number <span className="text-rose-500 font-bold">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="918020012345678"
+                    value={newBank.accountNumber || ''}
+                    onChange={(e) => setNewBank({ ...newBank, accountNumber: e.target.value })}
+                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[13px] font-medium text-slate-600 mb-1.5">
+                    IFSC / SWIFT <span className="text-rose-500 font-bold">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="UTIB0000123"
+                    value={newBank.ifscCode || ''}
+                    onChange={(e) => setNewBank({ ...newBank, ifscCode: e.target.value })}
+                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs uppercase"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[13px] font-medium text-slate-600 mb-1.5">
+                    Account Type
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Current or Savings"
+                    value={newBank.accountType || ''}
+                    onChange={(e) => setNewBank({ ...newBank, accountType: e.target.value })}
+                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[13px] font-medium text-slate-600 mb-1.5">
+                    Branch Name
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Indiranagar, Bangalore"
+                    value={newBank.branchName || ''}
+                    onChange={(e) => setNewBank({ ...newBank, branchName: e.target.value })}
+                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[13px] font-medium text-slate-600 mb-1.5">
+                    UPI ID (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. company@axis"
+                    value={newBank.upiId || ''}
+                    onChange={(e) => setNewBank({ ...newBank, upiId: e.target.value })}
+                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3 pt-5 sm:pt-6 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsAddBankModalOpen(false)}
+                  className="w-full sm:w-auto h-10 px-4.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 hover:border-slate-300 rounded-xl text-sm font-bold shadow-2xs transition-all duration-200 cursor-pointer select-none active:scale-[0.98] flex items-center justify-center gap-2"
+                >
+                  <X className="w-4 h-4 text-slate-500 stroke-[2.2]" />
+                  <span>Cancel</span>
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingBank}
+                  className="w-full sm:w-auto h-10 px-5.5 bg-[#33077C] hover:bg-[#4309A2] text-white text-sm font-bold rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <Check className="w-4 h-4 text-white stroke-[2.5]" />
+                  <span>{isSavingBank ? 'Saving...' : 'Save Bank Account'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: VIEW BANK ACCOUNT DETAILS */}
+      {/* ========================================================================= */}
+      {viewingBank && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-xl sm:rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col">
+            <div
+              className="px-4 sm:px-6 py-3.5 sm:py-4 flex items-center justify-between text-white shrink-0 shadow-md"
+              style={{ background: '#33077C' }}
+            >
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setViewingBank(null)}
+                  className="p-1.5 -ml-1 rounded-xl transition-all cursor-pointer flex items-center justify-center text-white hover:bg-white/20 active:scale-95"
+                  title="Go back"
+                >
+                  <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+                </button>
+                <div>
+                  <h3 className="text-base font-bold text-white">{viewingBank.bankName}</h3>
+                  <p className="text-xs text-white/90 font-medium">Bank Account Information</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-3.5 text-xs sm:text-[13px]">
+              <div className="grid grid-cols-[140px_1fr] gap-2 items-center py-1.5 border-b border-slate-100">
+                <span className="font-bold text-slate-500">Bank Name</span>
+                <span className="text-slate-900 font-semibold">{viewingBank.bankName}</span>
+              </div>
+              <div className="grid grid-cols-[140px_1fr] gap-2 items-center py-1.5 border-b border-slate-100">
+                <span className="font-bold text-slate-500">Account Holder</span>
+                <span className="text-slate-900 font-semibold">{viewingBank.accountName || '-'}</span>
+              </div>
+              <div className="grid grid-cols-[140px_1fr] gap-2 items-center py-1.5 border-b border-slate-100">
+                <span className="font-bold text-slate-500">Account Number</span>
+                <span className="text-slate-900 font-bold tracking-wider">{viewingBank.accountNumber}</span>
+              </div>
+              <div className="grid grid-cols-[140px_1fr] gap-2 items-center py-1.5 border-b border-slate-100">
+                <span className="font-bold text-slate-500">IFSC / SWIFT</span>
+                <span className="text-slate-900 font-semibold">{viewingBank.ifscCode || '-'}</span>
+              </div>
+              <div className="grid grid-cols-[140px_1fr] gap-2 items-center py-1.5 border-b border-slate-100">
+                <span className="font-bold text-slate-500">Branch Name</span>
+                <span className="text-slate-900 font-semibold">{viewingBank.branchName || '-'}</span>
+              </div>
+              {viewingBank.upiId && (
+                <div className="grid grid-cols-[140px_1fr] gap-2 items-center py-1.5 border-b border-slate-100">
+                  <span className="font-bold text-slate-500">UPI ID</span>
+                  <span className="text-slate-900 font-semibold">{viewingBank.upiId}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setViewingBank(null)}
+                className="h-10 px-5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs sm:text-sm font-bold shadow-2xs transition-all cursor-pointer"
               >
                 Close
               </button>

@@ -10,6 +10,7 @@ import {
   Path,
   Circle,
 } from '@react-pdf/renderer';
+import { PDF_FONT, PDF_FONT_BOLD } from '../common/pdf/pdfFonts';
 import { Quotation } from '../../views/quotes/QuotesView';
 import { formatDate } from '../../views/sale-management/utils/dateUtils';
 
@@ -19,14 +20,14 @@ const styles = StyleSheet.create({
     paddingBottom: 36,
     paddingHorizontal: 42,
     fontSize: 9,
-    fontFamily: 'Helvetica',
+    fontFamily: PDF_FONT,
     color: '#334155', // slate-700
     backgroundColor: '#FFFFFF',
   },
   // Top Title
   mainTitle: {
     fontSize: 16,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#0F172A',
     marginBottom: 16,
     letterSpacing: -0.3,
@@ -50,29 +51,29 @@ const styles = StyleSheet.create({
     width: 140,
     color: '#64748B', // slate-500
     fontSize: 10,
-    fontFamily: 'Helvetica',
+    fontFamily: PDF_FONT,
   },
   headerMetaColon: {
     width: 12,
     color: '#64748B',
     fontSize: 10,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     textAlign: 'left',
   },
   headerMetaValue: {
     fontSize: 9.5,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#334155', // slate-700
   },
   // Header Right: Company Branding
   logoContainer: {
-    width: '40%',
+    width: '42%',
     alignItems: 'flex-end',
     justifyContent: 'flex-start',
   },
   logoImage: {
-    width: 175,
-    height: 52,
+    width: 220,
+    height: 70,
     objectFit: 'contain',
   },
   // Divider
@@ -94,7 +95,7 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 12.5,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#33077C',
     borderBottomWidth: 1,
     borderBottomColor: '#F1F5F9',
@@ -108,20 +109,20 @@ const styles = StyleSheet.create({
   },
   billingLabel: {
     width: 102,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#334155', // slate-700
     fontSize: 9,
   },
   billingColon: {
     width: 14,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#475569',
     fontSize: 9,
     textAlign: 'left',
   },
   billingValue: {
     flex: 1,
-    fontFamily: 'Helvetica',
+    fontFamily: PDF_FONT,
     color: '#334155',
     fontSize: 9,
     lineHeight: 1.35,
@@ -137,7 +138,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     backgroundColor: '#2B3991',
     color: '#FFFFFF',
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     fontSize: 7.5,
     textTransform: 'uppercase',
     alignItems: 'center',
@@ -202,11 +203,11 @@ const styles = StyleSheet.create({
   summaryLabel: {
     color: '#475569', // slate-600
     fontSize: 9,
-    fontFamily: 'Helvetica',
+    fontFamily: PDF_FONT,
     lineHeight: 1.4,
   },
   summaryValue: {
-    fontFamily: 'Helvetica',
+    fontFamily: PDF_FONT,
     color: '#334155', // slate-700
     fontSize: 9,
     lineHeight: 1.4,
@@ -223,12 +224,12 @@ const styles = StyleSheet.create({
   },
   summaryGrandTotalLabel: {
     fontSize: 9.5,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#334155', // slate-700
   },
   summaryGrandTotalValue: {
     fontSize: 10,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#334155', // slate-700
   },
 
@@ -267,7 +268,7 @@ const styles = StyleSheet.create({
   },
   signCompany: {
     fontSize: 9.5,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#0F172A',
     textAlign: 'right',
     marginBottom: 3,
@@ -284,7 +285,7 @@ const styles = StyleSheet.create({
   },
   signAuthText: {
     fontSize: 8,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#33077C',
     textTransform: 'uppercase',
     letterSpacing: 0.6,
@@ -299,18 +300,21 @@ export interface SellerInfo {
   phone?: string;
   email?: string;
   address?: string;
+  logo?: string;
 }
 
 interface EstimatePDFDocumentProps {
   quotation: Quotation;
   documentTitle?: string;
   sellerDetails?: SellerInfo;
+  logoUrl?: string | null;
 }
 
 export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
   quotation,
   documentTitle = 'Quotation',
   sellerDetails,
+  logoUrl,
 }) => {
   // Format items
   const rawItems = quotation.items && quotation.items.length > 0
@@ -336,7 +340,8 @@ export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
   const halfGstTotal = gstTotal / 2;
   const grandTotal = quotation.amount || (taxableAmount + gstTotal);
 
-  const logoSrc = typeof window !== 'undefined' ? `${window.location.origin}/yaa-creations-logo.png` : '/yaa-creations-logo.png';
+  // Logo is intentionally not drawn on the PDF (it would download the image on every print).
+  const logoSrc: string | null = null;
 
   const company = {
     name: sellerDetails?.name || 'Yaa Creations',
@@ -393,7 +398,9 @@ export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
 
           {/* Right: Company Logo */}
           <View style={styles.logoContainer}>
-            <Image src={logoSrc} style={styles.logoImage} />
+            {logoSrc ? (
+              <Image src={logoSrc} style={styles.logoImage} />
+            ) : null}
           </View>
         </View>
 
@@ -506,19 +513,19 @@ export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
                 key={it.id || idx}
                 style={[styles.tableRow, idx % 2 === 1 ? styles.tableRowEven : {}]}
               >
-                <Text style={[styles.tableCell, styles.colNum, { fontFamily: 'Helvetica-Bold' }]}>{idx + 1}</Text>
-                <Text style={[styles.tableCell, styles.colItem, { fontFamily: 'Helvetica-Bold', color: '#0F172A' }]}>
+                <Text style={[styles.tableCell, styles.colNum, { fontFamily: PDF_FONT_BOLD }]}>{idx + 1}</Text>
+                <Text style={[styles.tableCell, styles.colItem, { fontFamily: PDF_FONT_BOLD, color: '#0F172A' }]}>
                   {it.description}
                 </Text>
                 <Text style={[styles.tableCell, styles.colGst]}>{gstRate}%</Text>
-                <Text style={[styles.tableCell, styles.colQty, { fontFamily: 'Helvetica-Bold' }]}>{qty}</Text>
-                <Text style={[styles.tableCell, styles.colRate]}>₹{rate.toFixed(2)}</Text>
-                <Text style={[styles.tableCell, styles.colSub]}>₹{itemSub.toFixed(2)}</Text>
-                <Text style={[styles.tableCell, styles.colDisc]}>₹{itemDisc.toFixed(2)}</Text>
-                <Text style={[styles.tableCell, styles.colCgst]}>₹{halfTax.toFixed(2)}</Text>
-                <Text style={[styles.tableCell, styles.colSgst]}>₹{halfTax.toFixed(2)}</Text>
-                <Text style={[styles.tableCell, styles.colTotal, { fontFamily: 'Helvetica-Bold', color: '#0F172A' }]}>
-                  ₹{itemTotal.toFixed(2)}
+                <Text style={[styles.tableCell, styles.colQty, { fontFamily: PDF_FONT_BOLD }]}>{qty}</Text>
+                <Text style={[styles.tableCell, styles.colRate]}>₹{rate.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                <Text style={[styles.tableCell, styles.colSub]}>₹{itemSub.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                <Text style={[styles.tableCell, styles.colDisc]}>₹{itemDisc.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                <Text style={[styles.tableCell, styles.colCgst]}>₹{halfTax.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                <Text style={[styles.tableCell, styles.colSgst]}>₹{halfTax.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                <Text style={[styles.tableCell, styles.colTotal, { fontFamily: PDF_FONT_BOLD, color: '#0F172A' }]}>
+                  ₹{itemTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </Text>
               </View>
             );
@@ -530,59 +537,41 @@ export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
           <View style={styles.summaryRibbon}>
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>Subtotal</Text>
-              <Text style={styles.summaryValue}>₹{subtotal.toFixed(2)}</Text>
+              <Text style={styles.summaryValue}>₹{subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
             </View>
 
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>Discount</Text>
               <Text style={styles.summaryValue}>
-                {totalDiscount > 0 ? `-₹${totalDiscount.toFixed(2)}` : '₹0.00'}
+                {totalDiscount > 0 ? `-₹${totalDiscount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '₹0.00'}
+              </Text>
+            </View>
+
+            <View style={styles.summaryItem}>
+              <Text style={styles.summaryLabel}>Amount (After Discount)</Text>
+              <Text style={styles.summaryValue}>
+                ₹{taxableAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </Text>
             </View>
 
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>GST Total (18%)</Text>
-              <Text style={styles.summaryValue}>₹{gstTotal.toFixed(2)}</Text>
+              <Text style={styles.summaryValue}>₹{gstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
             </View>
 
             <View style={styles.summaryGrandTotalRow}>
               <Text style={styles.summaryGrandTotalLabel}>Grand Total</Text>
-              <Text style={styles.summaryGrandTotalValue}>₹{grandTotal.toFixed(2)}</Text>
+              <Text style={styles.summaryGrandTotalValue}>₹{grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
             </View>
           </View>
         </View>
 
-        {/* 7. Bottom Settlement: Authorized Signatory */}
-        <View style={[styles.bottomGrid, { justifyContent: 'flex-end' }]}>
-          {/* Signature Block */}
-          <View style={styles.signCol}>
-            <View style={styles.signSvgBox}>
-              <Svg viewBox="0 0 200 60">
-                <Path
-                  d="M10 40 C 30 10, 45 55, 60 25 C 75 -5, 85 45, 105 30 C 120 15, 130 50, 150 20 C 160 5, 175 35, 195 25"
-                  stroke="#33077C"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <Path
-                  d="M30 48 C 65 42, 110 50, 180 45"
-                  stroke="#4309A2"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                />
-              </Svg>
-            </View>
-            <View style={styles.signBorder}>
-              <Text style={styles.signCompany}>{company.name}</Text>
-              <View style={styles.signBadgeRow}>
-                <Svg viewBox="0 0 16 16" style={styles.signCheckIcon}>
-                  <Circle cx="8" cy="8" r="7" stroke="#10B981" strokeWidth="1.5" fill="none" />
-                  <Path d="M4.5 8.2 L6.8 10.5 L11.5 5.8" stroke="#10B981" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-                </Svg>
-                <Text style={styles.signAuthText}>Authorized Signatory</Text>
-              </View>
-            </View>
+        {/* 7. Bottom Settlement / Footer Section */}
+        <View style={{ marginTop: 'auto', paddingTop: 16 }}>
+          <View style={{ paddingTop: 4, alignItems: 'center' }}>
+            <Text style={{ fontSize: 8, fontFamily: PDF_FONT, color: '#64748B', textAlign: 'center' }}>
+              This is an electronically generated document, no signature is required.
+            </Text>
           </View>
         </View>
       </Page>

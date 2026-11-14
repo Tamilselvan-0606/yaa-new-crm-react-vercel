@@ -20,6 +20,7 @@ import {
 import { SaleTransaction } from '../../../store/useSalesManagementStore';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { toast } from "../../../utils/toast";
+import { DateInput } from "../../../components/common/DateInput";
 
 interface SalesGraphModalProps {
   isOpen: boolean;
@@ -174,11 +175,10 @@ export const SalesGraphModal: React.FC<SalesGraphModalProps> = ({
             <div className="flex items-center gap-2 text-xs sm:text-[13px] font-semibold text-slate-700">
               <span className="text-slate-500 font-medium">From</span>
               <div className="relative flex items-center">
-                <input
-                  type="date"
+                <DateInput
                   value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  className="h-8.5 px-2.5 pr-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#2563EB] transition-colors"
+                  onChange={(v) => ((e) => setStartDate(e.target.value))({ target: { value: v } } as any)}
+                  heightClass="h-8"
                 />
               </div>
             </div>
@@ -186,11 +186,10 @@ export const SalesGraphModal: React.FC<SalesGraphModalProps> = ({
             <div className="flex items-center gap-2 text-xs sm:text-[13px] font-semibold text-slate-700">
               <span className="text-slate-500 font-medium">To</span>
               <div className="relative flex items-center">
-                <input
-                  type="date"
+                <DateInput
                   value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  className="h-8.5 px-2.5 pr-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#2563EB] transition-colors"
+                  onChange={(v) => ((e) => setEndDate(e.target.value))({ target: { value: v } } as any)}
+                  heightClass="h-8"
                 />
               </div>
             </div>

@@ -399,6 +399,7 @@ export type PaymentMethod = 'Bank Transfer' | 'Credit Card' | 'Stripe' | 'UPI' |
 
 export interface PaymentItem {
   id: string;
+  invoiceId?: string;
   invoiceNumber: string;
   customerId?: string;
   customerName: string;

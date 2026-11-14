@@ -140,8 +140,33 @@ export const SaleManagementDashboardView: React.FC = () => {
     return timeRange;
   }, [timeRange]);
 
+  // The chart requests below only run once the chart section scrolls into view (not at login).
+  const [chartsInView, setChartsInView] = useState(false);
+  const chartsObserverRef = React.useRef<IntersectionObserver | null>(null);
+  const chartsSectionRef = useCallback((node: HTMLDivElement | null) => {
+    chartsObserverRef.current?.disconnect();
+    chartsObserverRef.current = null;
+    if (!node) return;
+    if (typeof IntersectionObserver === 'undefined') {
+      setChartsInView(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setChartsInView(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '200px' },
+    );
+    observer.observe(node);
+    chartsObserverRef.current = observer;
+  }, []);
+
   // Monthly Sales vs Purchases: one GET /commerce/sales/report-summary per calendar month
   useEffect(() => {
+    if (!chartsInView) return;
     let cancelled = false;
     const pad = (n: number) => String(n).padStart(2, '0');
     const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -170,10 +195,11 @@ export const SaleManagementDashboardView: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [activeBranchId]);
+  }, [activeBranchId, chartsInView]);
 
   // Sales collection status: invoice counts per payment status from GET /commerce/invoices (pagination.totalRecords)
   useEffect(() => {
+    if (!chartsInView) return;
     let cancelled = false;
     const count = (paymentStatus: string) =>
       commerceInvoiceApi
@@ -188,7 +214,7 @@ export const SaleManagementDashboardView: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [activeBranchId]);
+  }, [activeBranchId, chartsInView]);
 
   // Main Dashboard APIs fetcher
   const fetchAllDashboardApis = useCallback(
@@ -278,7 +304,7 @@ export const SaleManagementDashboardView: React.FC = () => {
           if (isManualRefresh) setIsRefreshing(false);
         });
     },
-    [apiPeriod, activeSubOrgId, activeBranchId, recentTab, currentUser]
+    [apiPeriod, activeSubOrgId, activeBranchId, recentTab, currentUser?.organizationId]
   );
 
   // Trigger full API sync when period, sub_organization_id, or branch_id change
@@ -339,9 +365,11 @@ export const SaleManagementDashboardView: React.FC = () => {
     };
   }, [modulesData]);
 
-  // Shown exactly as the API reports them (a loss stays a loss)
-  const displayGrossMarginPercent =
-    Number(modulesData?.saleReport?.grossMarginPercent ?? reportAnalytics.grossProfitMargin) || 0;
+  // Never show a negative margin percentage on the dashboard.
+  const displayGrossMarginPercent = Math.max(
+    0,
+    Number(modulesData?.saleReport?.grossMarginPercent ?? reportAnalytics.grossProfitMargin) || 0,
+  );
   const displayGrossProfit =
     Number(modulesData?.saleReport?.grossProfit ?? reportAnalytics.grossProfit) || 0;
 
@@ -1170,7 +1198,7 @@ export const SaleManagementDashboardView: React.FC = () => {
 
       {/* 3. Deep Dive Visuals */}
       {(activeModuleTab === 'all' || activeModuleTab === 'sales_hub' || activeModuleTab === 'reports') && (
-        <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+        <div ref={chartsSectionRef} className="grid grid-cols-1 xl:grid-cols-12 gap-6">
           {/* Main Visual: Monthly Sales vs Purchases Comparative Performance (8 cols) */}
           <div className="xl:col-span-8 min-w-0 bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">

@@ -1,3 +1,4 @@
+import { resolveGrossSubtotal } from "../../utils/financialCalculations";
 import { baseClient, baseApi } from '../baseApi';
 import {
   SaleTransaction,
@@ -87,6 +88,7 @@ export const mapApiPaymentToSalePaymentRecord = (p: ApiInvoicePaymentItem): Sale
 /**
  * Mapper: ApiSalesInvoice -> SaleTransaction
  */
+/** The API may return the sales rep as a plain name or as an object ({ name, ... }); always use a trimmed name string. */const toSalespersonName = (value: unknown): string => {  if (typeof value === 'string') return value.trim();  if (value && typeof value === 'object') {    const v = value as { name?: unknown; fullName?: unknown };    const n = v.name ?? v.fullName;    return typeof n === 'string' ? n.trim() : '';  }  return '';};
 export const mapApiInvoiceToSaleTransaction = (apiInv: ApiSalesInvoice): SaleTransaction => {
   const cgst = Number(apiInv.cgst ?? 0);
   const sgst = Number(apiInv.sgst ?? 0);
@@ -98,7 +100,7 @@ export const mapApiInvoiceToSaleTransaction = (apiInv: ApiSalesInvoice): SaleTra
     ? apiInv.items.map((it, idx) => mapApiInvoiceItemToSaleProductItem(it, idx, parentWithGst))
     : [];
 
-  const subtotal = Number(apiInv.subtotal ?? apiInv.subTotal ?? 0);
+  const subtotal = resolveGrossSubtotal(items, Number(apiInv.subtotal ?? apiInv.subTotal ?? 0));
   const totalDiscount = Number(apiInv.totalDiscount ?? apiInv.discountAmount ?? apiInv.discount ?? 0);
   const shippingCharges = Number(apiInv.shippingCharges ?? 0);
   const otherCharges = Number(apiInv.otherCharges ?? 0);
@@ -187,7 +189,7 @@ export const mapApiInvoiceToSaleTransaction = (apiInv: ApiSalesInvoice): SaleTra
     paymentStatus: normalizedPayStatus,
     saleStatus: normalizedSaleStatus,
     createdBy: apiInv.createdBy || '',
-    salesperson: apiInv.salesperson || (apiInv as any).salesRepresentative || (apiInv as any).salesRepresentativeName || (apiInv as any).salesPerson || (apiInv as any).sales_rep || '',
+    salesperson: toSalespersonName(apiInv.salesperson) || toSalespersonName((apiInv as any).salesRepresentative) || toSalespersonName((apiInv as any).salesRepresentativeName) || toSalespersonName((apiInv as any).salesPerson) || toSalespersonName((apiInv as any).sales_rep) || '',
     salesRepresentativeName: (apiInv as any).salesRepresentativeName || (apiInv as any).salesRepresentative || apiInv.salesperson || undefined,
     salesRepresentativeId: (apiInv as any).salesRepresentativeId || undefined,
     notes: apiInv.notes || undefined,
@@ -297,8 +299,9 @@ export const mapSaleTransactionToInvoicePayload = (
   if (sale.saleStatus && sale.saleStatus !== "Confirmed") {
     payload.saleStatus = sale.saleStatus;
   }
-  if (sale.salesperson && sale.salesperson.trim()) {
-    payload.salesperson = sale.salesperson.trim();
+  const salespersonName = toSalespersonName(sale.salesperson);
+  if (salespersonName) {
+    payload.salesperson = salespersonName;
   }
   if (sale.notes && sale.notes.trim()) {
     payload.notes = sale.notes.trim();

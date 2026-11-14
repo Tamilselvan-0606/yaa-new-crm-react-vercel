@@ -10,8 +10,10 @@ import {
   Path,
   Circle,
 } from '@react-pdf/renderer';
+import { PDF_FONT, PDF_FONT_BOLD } from '../common/pdf/pdfFonts';
 import { SavedInvoice } from '../../store/useInvoiceStore';
 import { formatDate } from '../../views/sale-management/utils/dateUtils';
+import { numberToWordsIndian } from '../../utils/printUtils';
 
 const styles = StyleSheet.create({
   page: {
@@ -19,14 +21,14 @@ const styles = StyleSheet.create({
     paddingBottom: 36,
     paddingHorizontal: 42,
     fontSize: 9,
-    fontFamily: 'Helvetica',
+    fontFamily: PDF_FONT,
     color: '#334155', // slate-700
     backgroundColor: '#FFFFFF',
   },
   // Top Title
   mainTitle: {
     fontSize: 16,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#0F172A',
     marginBottom: 16,
     letterSpacing: -0.3,
@@ -50,39 +52,39 @@ const styles = StyleSheet.create({
     width: 140,
     color: '#64748B', // slate-500
     fontSize: 10,
-    fontFamily: 'Helvetica',
+    fontFamily: PDF_FONT,
   },
   headerMetaColon: {
     width: 12,
     color: '#64748B',
     fontSize: 10,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     textAlign: 'left',
   },
   headerMetaValue: {
     fontSize: 9.5,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#334155', // slate-700 (crisp and readable, not stark pitch-black)
   },
   headerMetaValueOrange: {
     fontSize: 9.5,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#EA580C', // orange-600
   },
   // Header Right: Company Branding
   logoContainer: {
-    width: '40%',
+    width: '42%',
     alignItems: 'flex-end',
     justifyContent: 'flex-start',
   },
   headerMetaRight: {
-    width: '40%',
+    width: '42%',
     alignItems: 'flex-end',
     justifyContent: 'flex-start',
   },
   logoImage: {
-    width: 175,
-    height: 52,
+    width: 220,
+    height: 70,
     objectFit: 'contain',
   },
   // Divider
@@ -91,7 +93,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#CBD5E1', // slate-300
     borderBottomStyle: 'dashed',
     marginTop: 4,
-    marginBottom: 16,
+    marginBottom: 8,
   },
   // Billing Grid
   billingGrid: {
@@ -104,7 +106,7 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 12.5,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#33077C',
     borderBottomWidth: 1,
     borderBottomColor: '#F1F5F9',
@@ -118,27 +120,27 @@ const styles = StyleSheet.create({
   },
   billingLabel: {
     width: 102,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#334155', // slate-700 (bold & highlighted, not harsh pitch-black)
     fontSize: 9,
   },
   billingColon: {
     width: 14,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#475569',
     fontSize: 9,
     textAlign: 'left',
   },
   billingValue: {
     flex: 1,
-    fontFamily: 'Helvetica',
+    fontFamily: PDF_FONT,
     color: '#334155',
     fontSize: 9,
     lineHeight: 1.35,
   },
   billingValueBold: {
     flex: 1,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#1E293B',
     fontSize: 9,
     lineHeight: 1.35,
@@ -154,7 +156,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     backgroundColor: '#2B3991',
     color: '#FFFFFF',
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     fontSize: 7.5,
     textTransform: 'uppercase',
     alignItems: 'center',
@@ -219,23 +221,23 @@ const styles = StyleSheet.create({
   summaryLabel: {
     color: '#475569', // slate-600
     fontSize: 9,
-    fontFamily: 'Helvetica',
+    fontFamily: PDF_FONT,
     lineHeight: 1.4,
   },
   summaryLabelOrange: {
     color: '#475569', // default slate-600 instead of orange
     fontSize: 9,
-    fontFamily: 'Helvetica',
+    fontFamily: PDF_FONT,
     lineHeight: 1.4,
   },
   summaryValue: {
-    fontFamily: 'Helvetica',
+    fontFamily: PDF_FONT,
     color: '#334155', // slate-700 (softer, not stark heavy dark)
     fontSize: 9,
     lineHeight: 1.4,
   },
   summaryValueOrange: {
-    fontFamily: 'Helvetica',
+    fontFamily: PDF_FONT,
     color: '#334155',
     fontSize: 9,
     lineHeight: 1.4,
@@ -252,12 +254,12 @@ const styles = StyleSheet.create({
   },
   summaryGrandTotalLabel: {
     fontSize: 9.5,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#334155', // slate-700
   },
   summaryGrandTotalValue: {
     fontSize: 10,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#334155', // slate-700 (gentle, not harsh dark)
   },
   summaryPaidRow: {
@@ -268,37 +270,37 @@ const styles = StyleSheet.create({
   },
   summaryPaidLabel: {
     fontSize: 9,
-    fontFamily: 'Helvetica',
+    fontFamily: PDF_FONT,
     color: '#475569',
     lineHeight: 1.4,
   },
   summaryPaidValue: {
     fontSize: 9,
-    fontFamily: 'Helvetica',
+    fontFamily: PDF_FONT,
     color: '#334155', // slate-700
     lineHeight: 1.4,
   },
   summaryTdsLabel: {
     fontSize: 9,
-    fontFamily: 'Helvetica',
+    fontFamily: PDF_FONT,
     color: '#475569',
     lineHeight: 1.4,
   },
   summaryTdsValue: {
     fontSize: 9,
-    fontFamily: 'Helvetica',
+    fontFamily: PDF_FONT,
     color: '#334155',
     lineHeight: 1.4,
   },
   summaryDueLabel: {
     fontSize: 9.5,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#334155', // slate-700
     lineHeight: 1.4,
   },
   summaryDueValue: {
     fontSize: 10,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#334155', // slate-700
     lineHeight: 1.4,
   },
@@ -338,7 +340,7 @@ const styles = StyleSheet.create({
   },
   signCompany: {
     fontSize: 9.5,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#0F172A',
     textAlign: 'right',
     marginBottom: 3,
@@ -355,7 +357,7 @@ const styles = StyleSheet.create({
   },
   signAuthText: {
     fontSize: 8,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: PDF_FONT_BOLD,
     color: '#33077C',
     textTransform: 'uppercase',
     letterSpacing: 0.6,
@@ -366,9 +368,10 @@ const styles = StyleSheet.create({
 interface InvoicePDFDocumentProps {
   invoice: SavedInvoice;
   documentTitle?: string;
+  logoUrl?: string | null;
 }
 
-export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice, documentTitle = 'Invoice' }) => {
+export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice, documentTitle = 'Invoice', logoUrl }) => {
   const activeInvoice = invoice;
   const isProforma = documentTitle.toLowerCase().includes('proforma');
 
@@ -410,7 +413,8 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
   const balanceDue = Math.max(0, activeInvoice.grandTotal - paidAmount);
   const isPartiallyPaid = activeInvoice.status === 'Partially Paid' || (paidAmount > 0 && balanceDue > 0.005);
 
-  const logoSrc = typeof window !== 'undefined' ? `${window.location.origin}/yaa-creations-logo.png` : '/yaa-creations-logo.png';
+  // Logo is intentionally not drawn on the PDF (it would download the image on every print).
+  const logoSrc: string | null = null;
 
   return (
     <Document title={`${documentTitle}-${activeInvoice.invoiceNumber}`} author={activeInvoice.company.name}>
@@ -461,7 +465,9 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
 
           {/* Right: Company Logo */}
           <View style={styles.logoContainer}>
-            <Image src={logoSrc} style={styles.logoImage} />
+            {logoSrc ? (
+              <Image src={logoSrc} style={styles.logoImage} />
+            ) : null}
           </View>
         </View>
 
@@ -572,19 +578,19 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
                 key={it.id || idx}
                 style={[styles.tableRow, idx % 2 === 1 ? styles.tableRowEven : {}]}
               >
-                <Text style={[styles.tableCell, styles.colNum, { fontFamily: 'Helvetica-Bold' }]}>{idx + 1}</Text>
-                <Text style={[styles.tableCell, styles.colItem, { fontFamily: 'Helvetica-Bold', color: '#0F172A' }]}>
+                <Text style={[styles.tableCell, styles.colNum, { fontFamily: PDF_FONT_BOLD }]}>{idx + 1}</Text>
+                <Text style={[styles.tableCell, styles.colItem, { fontFamily: PDF_FONT_BOLD, color: '#0F172A' }]}>
                   {it.name}
                 </Text>
                 <Text style={[styles.tableCell, styles.colGst]}>{it.taxPercent}%</Text>
-                <Text style={[styles.tableCell, styles.colQty, { fontFamily: 'Helvetica-Bold' }]}>{it.qty}</Text>
-                <Text style={[styles.tableCell, styles.colRate]}>₹{it.unitPrice.toFixed(2)}</Text>
-                <Text style={[styles.tableCell, styles.colSub]}>₹{itemSub.toFixed(2)}</Text>
-                <Text style={[styles.tableCell, styles.colDisc]}>₹{itemDisc.toFixed(2)}</Text>
-                <Text style={[styles.tableCell, styles.colCgst]}>₹{halfTax.toFixed(2)}</Text>
-                <Text style={[styles.tableCell, styles.colSgst]}>₹{halfTax.toFixed(2)}</Text>
-                <Text style={[styles.tableCell, styles.colTotal, { fontFamily: 'Helvetica-Bold', color: '#0F172A' }]}>
-                  ₹{itemTotal.toFixed(2)}
+                <Text style={[styles.tableCell, styles.colQty, { fontFamily: PDF_FONT_BOLD }]}>{it.qty}</Text>
+                <Text style={[styles.tableCell, styles.colRate]}>₹{it.unitPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                <Text style={[styles.tableCell, styles.colSub]}>₹{itemSub.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                <Text style={[styles.tableCell, styles.colDisc]}>₹{itemDisc.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                <Text style={[styles.tableCell, styles.colCgst]}>₹{halfTax.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                <Text style={[styles.tableCell, styles.colSgst]}>₹{halfTax.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                <Text style={[styles.tableCell, styles.colTotal, { fontFamily: PDF_FONT_BOLD, color: '#0F172A' }]}>
+                  ₹{itemTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </Text>
               </View>
             );
@@ -597,7 +603,7 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>Subtotal</Text>
               <Text style={styles.summaryValue}>
-                ₹{(activeInvoice.subtotal || activeInvoice.taxableAmount).toFixed(2)}
+                ₹{(activeInvoice.subtotal || activeInvoice.taxableAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </Text>
             </View>
 
@@ -605,14 +611,21 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
               <Text style={styles.summaryLabelOrange}>Discount</Text>
               <Text style={styles.summaryValueOrange}>
                 {activeInvoice.totalDiscount > 0
-                  ? `-₹${activeInvoice.totalDiscount.toFixed(2)}`
+                  ? `-₹${activeInvoice.totalDiscount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
                   : '₹0.00'}
               </Text>
             </View>
 
             <View style={styles.summaryItem}>
+              <Text style={styles.summaryLabel}>Amount (After Discount)</Text>
+              <Text style={styles.summaryValue}>
+                ₹{(activeInvoice.taxableAmount ?? Math.max(0, (activeInvoice.subtotal || 0) - (activeInvoice.totalDiscount || 0))).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </Text>
+            </View>
+
+            <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>GST Total</Text>
-              <Text style={styles.summaryValue}>₹{activeInvoice.taxTotal.toFixed(2)}</Text>
+              <Text style={styles.summaryValue}>₹{activeInvoice.taxTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
             </View>
 
             {showRounding && (
@@ -626,12 +639,12 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
 
             <View style={styles.summaryGrandTotalRow}>
               <Text style={styles.summaryGrandTotalLabel}>Grand Total</Text>
-              <Text style={styles.summaryGrandTotalValue}>₹{activeInvoice.grandTotal.toFixed(2)}</Text>
+              <Text style={styles.summaryGrandTotalValue}>₹{activeInvoice.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
             </View>
 
             <View style={styles.summaryPaidRow}>
               <Text style={styles.summaryPaidLabel}>Total Paid</Text>
-              <Text style={styles.summaryPaidValue}>₹{paidAmount.toFixed(2)}</Text>
+              <Text style={styles.summaryPaidValue}>₹{paidAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
             </View>
 
             {tdsAmount > 0 && (
@@ -639,87 +652,77 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
                 <Text style={styles.summaryTdsLabel}>
                   TDS Deducted {activeInvoice.paymentDetails?.tdsSection ? `(${activeInvoice.paymentDetails.taxDeductedType === 'gst' ? 'GST' : 'IT'})` : ''}
                 </Text>
-                <Text style={styles.summaryTdsValue}>-₹{tdsAmount.toFixed(2)}</Text>
+                <Text style={styles.summaryTdsValue}>-₹{tdsAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
               </View>
             )}
 
             {isPartiallyPaid && (
               <View style={styles.summaryPaidRow}>
                 <Text style={styles.summaryDueLabel}>Balance Due</Text>
-                <Text style={styles.summaryDueValue}>₹{balanceDue.toFixed(2)}</Text>
+                <Text style={styles.summaryDueValue}>₹{balanceDue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
               </View>
             )}
           </View>
         </View>
 
-        {/* 7. Bottom Settlement / Bank Information & Signature */}
+        {/* Total (in words) */}
+        <View style={{ marginTop: 6, marginBottom: 10 }}>
+          <Text style={{ fontSize: 9, fontFamily: PDF_FONT, color: '#0F172A' }}>
+            <Text style={{ fontFamily: PDF_FONT_BOLD }}>Total (in words) : </Text>
+            {numberToWordsIndian(activeInvoice.grandTotal).toUpperCase()}
+          </Text>
+        </View>
+
+        {/* 7. Bottom Settlement / Bank Information */}
         <View style={styles.bottomGrid}>
           {/* Bank Info */}
-          {activeInvoice.bank?.accountNumber || activeInvoice.bank?.bankName ? (
-            <View style={styles.bankCol}>
-              <Text style={styles.sectionTitle}>Billing Information:</Text>
-              {activeInvoice.bank.accountName ? (
-                <View style={styles.billingRow}>
-                  <Text style={styles.billingLabel}>Account Name</Text>
-                  <Text style={styles.billingColon}>:</Text>
-                  <Text style={styles.billingValue}>{activeInvoice.bank.accountName}</Text>
-                </View>
-              ) : null}
-              <View style={styles.billingRow}>
-                <Text style={styles.billingLabel}>Bank Account</Text>
-                <Text style={styles.billingColon}>:</Text>
-                <Text style={styles.billingValue}>
-                  {activeInvoice.bank.accountNumber || '-'} {activeInvoice.bank.bankName ? `(${activeInvoice.bank.bankName})` : ''}
-                </Text>
-              </View>
-              {activeInvoice.bank.ifscCode ? (
-                <View style={styles.billingRow}>
-                  <Text style={styles.billingLabel}>IFSC Code</Text>
-                  <Text style={styles.billingColon}>:</Text>
-                  <Text style={styles.billingValue}>{activeInvoice.bank.ifscCode}</Text>
-                </View>
-              ) : null}
-              {activeInvoice.bank.upiId ? (
-                <View style={styles.billingRow}>
-                  <Text style={styles.billingLabel}>Instant UPI VPA</Text>
-                  <Text style={styles.billingColon}>:</Text>
-                  <Text style={styles.billingValue}>{activeInvoice.bank.upiId}</Text>
-                </View>
-              ) : null}
-            </View>
-          ) : (
-            <View style={styles.bankCol} />
-          )}
+          {(() => {
+            const displayBank = activeInvoice.bank;
+            if (!displayBank || !(displayBank.accountNumber || displayBank.bankName)) return null;
 
-          {/* Signature Block */}
-          <View style={styles.signCol}>
-            <View style={styles.signSvgBox}>
-              <Svg viewBox="0 0 200 60">
-                <Path
-                  d="M10 40 C 30 10, 45 55, 60 25 C 75 -5, 85 45, 105 30 C 120 15, 130 50, 150 20 C 160 5, 175 35, 195 25"
-                  stroke="#33077C"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <Path
-                  d="M30 48 C 65 42, 110 50, 180 45"
-                  stroke="#4309A2"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                />
-              </Svg>
-            </View>
-            <View style={styles.signBorder}>
-              <Text style={styles.signCompany}>{activeInvoice.company.name}</Text>
-              <View style={styles.signBadgeRow}>
-                <Svg viewBox="0 0 16 16" style={styles.signCheckIcon}>
-                  <Circle cx="8" cy="8" r="7" stroke="#10B981" strokeWidth="1.5" fill="none" />
-                  <Path d="M4.5 8.2 L6.8 10.5 L11.5 5.8" stroke="#10B981" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-                </Svg>
-                <Text style={styles.signAuthText}>Authorized Signatory</Text>
+            return (
+              <View style={styles.bankCol}>
+                <Text style={styles.sectionTitle}>Billing Information:</Text>
+                {displayBank.accountName ? (
+                  <View style={styles.billingRow}>
+                    <Text style={styles.billingLabel}>Account Name</Text>
+                    <Text style={styles.billingColon}>:</Text>
+                    <Text style={styles.billingValue}>{displayBank.accountName}</Text>
+                  </View>
+                ) : null}
+                <View style={styles.billingRow}>
+                  <Text style={styles.billingLabel}>Bank Account</Text>
+                  <Text style={styles.billingColon}>:</Text>
+                  <Text style={styles.billingValue}>
+                    {displayBank.accountNumber || '-'} {displayBank.bankName ? `(${displayBank.bankName})` : ''}
+                  </Text>
+                </View>
+                {displayBank.ifscCode ? (
+                  <View style={styles.billingRow}>
+                    <Text style={styles.billingLabel}>IFSC Code</Text>
+                    <Text style={styles.billingColon}>:</Text>
+                    <Text style={styles.billingValue}>{displayBank.ifscCode}</Text>
+                  </View>
+                ) : null}
+                {displayBank.upiId ? (
+                  <View style={styles.billingRow}>
+                    <Text style={styles.billingLabel}>Instant UPI VPA</Text>
+                    <Text style={styles.billingColon}>:</Text>
+                    <Text style={styles.billingValue}>{displayBank.upiId}</Text>
+                  </View>
+                ) : null}
               </View>
-            </View>
+            );
+          })()}
+        </View>
+
+        {/* 8. Bottom Footer Section (Pinned to bottom of the page) */}
+        <View style={{ marginTop: 'auto', paddingTop: 16 }}>
+          {/* Electronic Document Disclaimer (Both Invoice and Proforma Invoice) */}
+          <View style={{ paddingTop: 4, alignItems: 'center' }}>
+            <Text style={{ fontSize: 8, fontFamily: PDF_FONT, color: '#64748B', textAlign: 'center' }}>
+              This is an electronically generated document, no signature is required.
+            </Text>
           </View>
         </View>
       </Page>

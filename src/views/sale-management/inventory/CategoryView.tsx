@@ -13,12 +13,12 @@ import {
   Ban,
   FileSpreadsheet,
   Loader2,
-  Layers,
   Sparkles,
   AlertCircle,
 } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { toast } from "../../../utils/toast";
+import { fetchAllReportRows, runReport } from '../../../utils/reportData';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { Button } from '../../../components/common/Button';
@@ -445,13 +445,37 @@ export const CategoryView: React.FC = () => {
   });
 
   // Export to Excel
-  const handleExport = () => {
-    const dataToExport = isApiConnected ? categories : filteredCategories;
-    if (dataToExport.length === 0) {
-      toast.error('No categories available to export.');
-      return;
-    }
+  const fetchCategoryReportPage = async (reportPage: number, reportPageSize: number) => {
+    const res = await categoryApi.getCategories({
+      page_no: reportPage,
+      page_size: reportPageSize,
+      pagination_required: true,
+      search: appliedSearch.trim() || undefined,
+      sortOrder: 'desc',
+      status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
+    });
+    const items: CategoryItem[] =
+      res?.success && Array.isArray(res.data)
+        ? res.data.map((item, idx) =>
+            mapApiCategoryToCategoryItem(item, (reportPage - 1) * reportPageSize + idx)
+          )
+        : [];
+    return {
+      items,
+      totalRecords: res?.pagination?.totalRecords,
+      totalPages: res?.pagination?.totalPages,
+      hasNextPage: res?.pagination?.hasNextPage,
+    };
+  };
 
+  const handleExport = () =>
+    runReport({
+      label: 'categories',
+      load: () => fetchAllReportRows(fetchCategoryReportPage),
+      onRows: (rows) => exportCategoriesExcel(rows),
+    });
+
+  const exportCategoriesExcel = (dataToExport: CategoryItem[]) => {
     const excelRows = dataToExport.map((c, idx) => ({
       sNo: idx + 1,
       code: c.code || '',
@@ -896,7 +920,7 @@ export const CategoryView: React.FC = () => {
           isOpen={isDetailModalOpen}
           onClose={() => setIsDetailModalOpen(false)}
           title={selectedCategoryDetail ? selectedCategoryDetail.categoryName : 'Category Details'}
-          subtitle={selectedCategoryDetail?.code ? `Category Code: ${selectedCategoryDetail.code}` : 'Category specification & linked subcategories'}
+          subtitle={selectedCategoryDetail?.code ? `Category Code: ${selectedCategoryDetail.code}` : 'Category specification & details'}
           maxWidth="2xl"
           headerGradient={true}
           showBackIcon={true}
@@ -911,7 +935,7 @@ export const CategoryView: React.FC = () => {
               </div>
             ) : selectedCategoryDetail ? (
               <>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200/80">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200/80">
                   <div>
                     <span className="text-[11px] font-medium text-slate-400 block mb-0.5">Code</span>
                     <span className="font-mono font-bold text-[#33077C] text-xs">
@@ -941,54 +965,14 @@ export const CategoryView: React.FC = () => {
                       {selectedCategoryDetail.productCount ?? 0}
                     </span>
                   </div>
-                  <div>
-                    <span className="text-[11px] font-medium text-slate-400 block mb-0.5">Subcategories</span>
-                    <span className="font-bold text-slate-800 text-xs">
-                      {selectedCategoryDetail.subcategories?.length ?? 0}
-                    </span>
-                  </div>
                 </div>
 
-                {/* Subcategories List */}
-                <div>
-                  <h4 className="text-xs font-bold text-slate-800 mb-2 flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <Layers className="w-3.5 h-3.5 text-[#4309A2]" />
-                      <span>Linked Subcategories</span>
-                    </span>
-                    <span className="text-[11px] text-slate-500 font-normal">
-                      {selectedCategoryDetail.subcategories?.length || 0} items
-                    </span>
-                  </h4>
-                  {(!selectedCategoryDetail.subcategories || selectedCategoryDetail.subcategories.length === 0) ? (
-                    <div className="py-8 text-center text-slate-400 bg-slate-50/60 rounded-xl border border-dashed border-slate-200 font-medium">
-                      No linked subcategories configured for this category.
-                    </div>
-                  ) : (
-                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                      {selectedCategoryDetail.subcategories.map((sub, idx) => (
-                        <div
-                          key={sub.id || idx}
-                          className="p-2.5 rounded-lg border border-slate-200 bg-white flex items-center justify-between text-xs"
-                        >
-                          <span className="font-semibold text-slate-800">
-                            {sub.code && <span className="font-mono text-[10px] text-slate-500 mr-2">{sub.code}</span>}
-                            {sub.subcategory || sub.name}
-                          </span>
-                          <span
-                            className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
-                              sub.status === 'Active'
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                : 'bg-slate-100 text-slate-600 border border-slate-200'
-                            }`}
-                          >
-                            {sub.status}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                {selectedCategoryDetail.description && (
+                  <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/80">
+                    <span className="text-[11px] font-medium text-slate-400 block mb-1">Description</span>
+                    <p className="text-xs text-slate-700 leading-relaxed">{selectedCategoryDetail.description}</p>
+                  </div>
+                )}
 
                 <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400 font-medium">
                   <span>

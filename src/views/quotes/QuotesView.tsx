@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import {
   Plus,
   Search,
@@ -55,7 +55,6 @@ import {
 import {
   quoteApi,
   baseApi,
-  useGetPlatformQuotesQuery,
   organizationApi,
   subOrganizationApi,
   platformLeadApi,
@@ -98,6 +97,7 @@ export interface Quotation {
   productName: string;
   status: 'DRAFT' | 'SENT' | 'ACCEPTED' | 'EXPIRED' | 'DECLINED' | 'CONVERTED';
   amount: number;
+  discountAmount?: number;
   hasAttachment: boolean;
   notes?: string;
   createdAt?: string;
@@ -303,9 +303,10 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     };
   }, [isSuperAdmin, isOrgSuperAdmin, currentUser]);
 
-  // Real backend quotes state
+  // Real backend quotes state (same pattern as InvoicesView)
   const [quotes, setQuotes] = useState<Quotation[]>([]);
   const [totalRecords, setTotalRecords] = useState(0);
+  const [isLoadingQuotes, setIsLoadingQuotes] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Helper to format ISO date to readable string
@@ -344,17 +345,31 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       productName: item.productName || 'Quotation',
       status: item.status,
       amount: Number(item.amount) || 0,
+      discountAmount: Number(item.discountAmount) || 0,
       hasAttachment: false,
       notes: item.notes || '',
       createdAt: formatIsoDate(item.createdAt) || formatIsoDate(item.date),
       updatedAt: formatIsoDate(item.updatedAt),
-      items: (item.items || []).map((it, idx) => ({
-        id: it.id || `item_${idx}`,
-        description: it.title || it.description || '',
-        quantity: Number(it.quantity) || 1,
-        unitPrice: Number(it.unitPrice) || 0,
-        total: Number(it.amount) || (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0),
-      })),
+      items: (() => {
+        const rawList = (item.items || []).map((it, idx) => ({
+          id: it.id || `item_${idx}`,
+          description: it.title || it.description || '',
+          quantity: Number(it.quantity) || 1,
+          unitPrice: Number(it.unitPrice) || 0,
+          discount: (it as any).discount || 0,
+          total: Number(it.amount) || (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0),
+        }));
+        // If quotation has an overall discountAmount from backend but individual line items didn't store item.discount:
+        const totalLineDisc = rawList.reduce((acc, it) => acc + (it.discount || 0), 0);
+        const overallDisc = Number(item.discountAmount) || 0;
+        if (overallDisc > 0 && totalLineDisc === 0 && rawList.length > 0) {
+          rawList[0].discount = overallDisc;
+          const lineGross = rawList[0].quantity * rawList[0].unitPrice;
+          const lineTaxable = Math.max(0, lineGross - overallDisc);
+          rawList[0].total = lineTaxable + (lineTaxable * 0.18);
+        }
+        return rawList;
+      })(),
     };
   };
 
@@ -395,6 +410,8 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
   const navigate = useNavigate();
   const location = useLocation();
+  const { quoteId: routeQuoteId } = useParams<{ quoteId?: string }>();
+  const isDuplicateRoute = location.pathname.endsWith('/duplicate');
 
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedQuote, setSelectedQuote] = useState<Quotation | null>(null);
@@ -425,8 +442,40 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       cancelled = true;
     };
   }, [selectedQuoteId]);
+
+  // The quote record may not carry the customer's address / tax ids; fill the gaps from the client record
+  // so the view and print show the full Billing To details.
+  const selectedQuoteCustomerId = selectedQuote?.customerId;
+  const selectedQuoteOrgId = selectedQuote?.organizationId;
+  useEffect(() => {
+    if (!selectedQuoteId || !selectedQuoteCustomerId) return;
+    // Platform super admin quotes are billed to an organization, not a client, so there is no client to load.
+    if (isSuperAdmin && !isOrgSuperAdmin) return;
+    let cancelled = false;
+    platformClientApi
+      .getClientById(selectedQuoteCustomerId, selectedQuoteOrgId || undefined)
+      .then((res) => {
+        const c: any = res?.data;
+        if (cancelled || !c) return;
+        setSelectedQuote((cur) => {
+          if (!cur || cur.id !== selectedQuoteId) return cur;
+          return {
+            ...cur,
+            customerLocation: cur.customerLocation || c.address || c.location || '',
+            customerGstin: cur.customerGstin || c.gstNumber || '',
+            customerPan: cur.customerPan || c.panNumber || '',
+          };
+        });
+      })
+      .catch(() => {
+        /* keep the quote data */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedQuoteId, selectedQuoteCustomerId, selectedQuoteOrgId, isSuperAdmin, isOrgSuperAdmin]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(
-    initialCreateOpen || location.pathname === '/quotes/new'
+    initialCreateOpen || location.pathname === '/quotes/new' || !!routeQuoteId
   );
 
   // Platform Administrator: the organization list feeds the Select Organization dropdown (form) and the
@@ -491,7 +540,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
           clientsMap.set(c.id, {
             id: c.id,
             name: c.contactPerson || displayName,
-            company: displayName,
+            company: c.legalName || displayName,
             code: (c as any).code || '',
             contactPerson: c.contactPerson || '',
             email: c.email || '',
@@ -598,44 +647,83 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   // Quotations list: RTK Query hook (no result is kept after leaving the page). Anything that changes a quotation
   // invalidates the 'Quotation' tag, and the list below refetches by itself.
   const dispatch = useAppDispatch();
-  const [scopeTick, setScopeTick] = useState(0); // bumps when the header's sub-org / branch selection changes
+  // Header scope state (sub-org and branch)
+  const [activeSubOrgId, setActiveSubOrgId] = useState(() => localStorage.getItem('active_sub_organization_id') || '');
+  const [activeSubOrgName, setActiveSubOrgName] = useState(() => localStorage.getItem('active_sub_organization') || 'All');
+  const [activeBranchId, setActiveBranchId] = useState(() => localStorage.getItem('active_branch_id_sales') || localStorage.getItem('active_branch_id') || '');
+  const [activeBranchName, setActiveBranchName] = useState(() => localStorage.getItem('active_branch_sales') || localStorage.getItem('active_branch') || 'All');
 
-  const quoteListParams = useMemo(() => {
-    const orgId = currentUser?.organizationId || getStoredOrganizationId();
-    const activeSubOrgId = localStorage.getItem('active_sub_organization_id');
-    const activeSubOrgName = localStorage.getItem('active_sub_organization');
+  const fetchLiveQuotes = useCallback(async () => {
+    setIsLoadingQuotes(true);
+    try {
+      const orgId = currentUser?.organizationId || getStoredOrganizationId();
+      const subOrgId = localStorage.getItem('active_sub_organization_id');
+      const subOrgName = localStorage.getItem('active_sub_organization');
+      const branchId = localStorage.getItem('active_branch_id_sales') || localStorage.getItem('active_branch_id');
+      const branchName = localStorage.getItem('active_branch_sales') || localStorage.getItem('active_branch');
 
-    const params: any = {
-      page: currentPage,
-      limit: pageSize,
-      search: appliedSearch.trim() || undefined,
-      status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
-      sortBy: 'createdAt' as const,
-      sortOrder: 'desc' as const,
-    };
+      const params: any = {
+        page: currentPage,
+        limit: pageSize,
+        search: appliedSearch.trim() || undefined,
+        status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
+        sortBy: 'createdAt',
+        sortOrder: 'desc',
+      };
 
-    // Parameter scoping according to API spec:
-    // - Super Admin: sees only documents they created. Passing organization_id narrows documents billed to that organization.
-    // - Tenant logins: must pass own organization_id (outside scope returns 403).
-    if (isSuperAdmin && !isOrgSuperAdmin) {
-      if (appliedBilledOrgId && appliedBilledOrgId !== 'ALL') {
-        params.organization_id = appliedBilledOrgId;
+      if (isSuperAdmin && !isOrgSuperAdmin) {
+        if (appliedBilledOrgId && appliedBilledOrgId !== 'ALL') {
+          params.organization_id = appliedBilledOrgId;
+        }
+      } else {
+        if (orgId) params.organization_id = orgId;
+        if (subOrgId && subOrgName && subOrgName !== 'All') {
+          params.sub_organization_id = subOrgId;
+        }
+        if (branchId && branchName && branchName !== 'All') {
+          params.branch_id = branchId;
+        }
       }
-      return params;
-    }
-    if (orgId) params.organization_id = orgId;
-    if (activeSubOrgId && activeSubOrgName && activeSubOrgName !== 'All') {
-      params.sub_organization_id = activeSubOrgId;
-    }
-    const activeBranchId = localStorage.getItem('active_branch_id_sales') || localStorage.getItem('active_branch_id');
-    const activeBranchName = localStorage.getItem('active_branch_sales') || localStorage.getItem('active_branch');
-    if (activeBranchId && activeBranchName && activeBranchName !== 'All') {
-      params.branch_id = activeBranchId;
-    }
-    return params;
-  }, [currentPage, pageSize, appliedSearch, appliedStatus, appliedBilledOrgId, scopeTick, currentUser?.organizationId, isSuperAdmin, isOrgSuperAdmin]);
 
-  const quotesQuery = useGetPlatformQuotesQuery(quoteListParams);
+      const res = await quoteApi.getQuotes(params);
+      if (res && res.data) {
+        const mapped = res.data.map(mapApiQuoteToUi);
+        mapped.sort((a, b) => {
+          const parseSeq = (str?: string) => {
+            const match = (str || '').match(/(?:EST-(?:\d{4}-)?)(\d+)/i);
+            return match ? parseInt(match[1], 10) : 0;
+          };
+          const seqA = parseSeq(a.estimateNumber);
+          const seqB = parseSeq(b.estimateNumber);
+          if (seqA !== seqB) return seqB - seqA;
+          return (b.estimateNumber || '').localeCompare(a.estimateNumber || '');
+        });
+        setQuotes(mapped);
+        setTotalRecords(res.pagination?.totalRecords ?? mapped.length);
+      }
+    } catch (err: any) {
+      console.error('Failed to load quotes:', err);
+      showToast('error', 'Failed to Load Quotes', err?.response?.data?.error?.message || err?.message || 'Could not fetch quotes');
+      setQuotes([]);
+      setTotalRecords(0);
+    } finally {
+      setIsLoadingQuotes(false);
+    }
+  }, [
+    currentPage,
+    pageSize,
+    appliedSearch,
+    appliedStatus,
+    appliedBilledOrgId,
+    isSuperAdmin,
+    isOrgSuperAdmin,
+    currentUser?.organizationId,
+    showToast,
+  ]);
+
+  useEffect(() => {
+    fetchLiveQuotes();
+  }, [fetchLiveQuotes]);
 
   // Helper to compute the next sequential estimate number from existing quotations
   const nextPredictedEstimateNumber = useMemo(() => {
@@ -644,12 +732,10 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     let maxSeq = 0;
     let seqLength = 4;
 
-    const listToCheck = quotesQuery.data?.data || quotes;
-    if (Array.isArray(listToCheck)) {
-      listToCheck.forEach((q: any) => {
+    if (Array.isArray(quotes)) {
+      quotes.forEach((q: any) => {
         const estNum = q.estimateNumber || '';
         if (estNum) {
-          // Match patterns like EST-2026-0013 or EST-0013
           const match = estNum.match(/(?:EST-(?:\d{4}-)?)(\d+)/i);
           if (match && match[1]) {
             const num = parseInt(match[1], 10);
@@ -664,7 +750,14 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
     const nextSeq = maxSeq + 1;
     return `${prefix}${String(nextSeq).padStart(seqLength, '0')}`;
-  }, [quotesQuery.data?.data, quotes]);
+  }, [quotes]);
+
+  // A duplicate is saved as a new quotation, so it gets the next estimate number
+  useEffect(() => {
+    if (isDuplicateRoute && !editingQuoteId && !newEstimateNumber && nextPredictedEstimateNumber) {
+      setNewEstimateNumber(nextPredictedEstimateNumber);
+    }
+  }, [isDuplicateRoute, editingQuoteId, newEstimateNumber, nextPredictedEstimateNumber]);
 
   useEffect(() => {
     if (location.pathname === '/quotes/new') {
@@ -698,51 +791,32 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     setIsCreateModalOpen(false);
     navigate('/quotes');
   };
-  const isLoadingQuotes = quotesQuery.isFetching;
 
-  useEffect(() => {
-    if (quotesQuery.data?.data) {
-      const mapped = quotesQuery.data.data.map(mapApiQuoteToUi);
-      // Sort in descending order of estimate number so highest/newest appears at the top
-      mapped.sort((a, b) => {
-        const parseSeq = (str?: string) => {
-          const match = (str || '').match(/(?:EST-(?:\d{4}-)?)(\d+)/i);
-          return match ? parseInt(match[1], 10) : 0;
-        };
-        const seqA = parseSeq(a.estimateNumber);
-        const seqB = parseSeq(b.estimateNumber);
-        if (seqA !== seqB) return seqB - seqA;
-        return (b.estimateNumber || '').localeCompare(a.estimateNumber || '');
-      });
-      setQuotes(mapped);
-      setTotalRecords(quotesQuery.data.pagination?.totalRecords ?? quotesQuery.data.data.length);
-    }
-  }, [quotesQuery.data]);
-
-  useEffect(() => {
-    if (!quotesQuery.isError) return;
-    const err: any = quotesQuery.error;
-    console.error('Failed to load quotes:', err);
-    showToast('error', 'Failed to Load Quotes', err?.data?.error?.message || err?.error || 'Could not fetch quotes');
-    setQuotes([]);
-    setTotalRecords(0);
-  }, [quotesQuery.isError]);
-
-  /** Marks every cached quotation list stale so the visible one reloads. Used after any change and by Refresh. */
+  /** Refetches live quotes from the backend. Used after any change and by Refresh. */
   const fetchQuotes = () => {
-    dispatch(baseApi.util.invalidateTags([{ type: 'PlatformQuote', id: 'LIST' }]));
+    fetchLiveQuotes();
   };
 
   useEffect(() => {
-    const handleFilterChange = () => {
+    const handleSubOrg = (e: any) => {
+      const name = e?.detail?.name || localStorage.getItem('active_sub_organization') || 'All';
+      const id = e?.detail?.subOrganizationId || e?.detail?.id || localStorage.getItem('active_sub_organization_id') || '';
+      setActiveSubOrgName(name);
+      setActiveSubOrgId(id);
       setCurrentPage(1);
-      setScopeTick((t) => t + 1);
     };
-    window.addEventListener('subOrgChanged', handleFilterChange);
-    window.addEventListener('branchChanged', handleFilterChange);
+    const handleBranch = (e: any) => {
+      const name = e?.detail?.branch || e?.detail?.name || localStorage.getItem('active_branch_sales') || localStorage.getItem('active_branch') || 'All';
+      const id = e?.detail?.branchId || e?.detail?.id || localStorage.getItem('active_branch_id_sales') || localStorage.getItem('active_branch_id') || '';
+      setActiveBranchName(name);
+      setActiveBranchId(id);
+      setCurrentPage(1);
+    };
+    window.addEventListener('subOrgChanged', handleSubOrg);
+    window.addEventListener('branchChanged', handleBranch);
     return () => {
-      window.removeEventListener('subOrgChanged', handleFilterChange);
-      window.removeEventListener('branchChanged', handleFilterChange);
+      window.removeEventListener('subOrgChanged', handleSubOrg);
+      window.removeEventListener('branchChanged', handleBranch);
     };
   }, []);
 
@@ -844,15 +918,15 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const [isDeletingQuote, setIsDeletingQuote] = useState(false);
 
   // Quotation From (seller) details
-  const [quotationFromCompany, setQuotationFromCompany] = useState(() => (isSuperAdmin && !isOrgSuperAdmin ? 'Yaa Creations' : ''));
-  const [quotationFromLogo, setQuotationFromLogo] = useState(() => (isSuperAdmin && !isOrgSuperAdmin ? '/yaa-creations-logo.png' : ''));
+  const [quotationFromCompany, setQuotationFromCompany] = useState('');
+  const [quotationFromLogo, setQuotationFromLogo] = useState('');
   const companyLogoInputRef = useRef<HTMLInputElement>(null);
-  const [quotationFromGst, setQuotationFromGst] = useState(() => (isSuperAdmin && !isOrgSuperAdmin ? '27AABCA1234F1Z8' : ''));
-  const [quotationFromPhone, setQuotationFromPhone] = useState(() => (isSuperAdmin && !isOrgSuperAdmin ? '+91 98765 43210' : ''));
-  const [quotationFromEmail, setQuotationFromEmail] = useState(() => (isSuperAdmin && !isOrgSuperAdmin ? 'billing@yaacreations.com' : ''));
-  const [quotationFromAddress, setQuotationFromAddress] = useState(() => (isSuperAdmin && !isOrgSuperAdmin ? 'No.108 Marutham Paradise Apartment, Urapakkam, Chennai,' : ''));
+  const [quotationFromGst, setQuotationFromGst] = useState('');
+  const [quotationFromPhone, setQuotationFromPhone] = useState('');
+  const [quotationFromEmail, setQuotationFromEmail] = useState('');
+  const [quotationFromAddress, setQuotationFromAddress] = useState('');
   const [isEditingFrom, setIsEditingFrom] = useState(false);
-  const [quotationFromPan, setQuotationFromPan] = useState(() => (isSuperAdmin && !isOrgSuperAdmin ? 'ABCDE1234F' : ''));
+  const [quotationFromPan, setQuotationFromPan] = useState('');
 
   // Platform administrator: seller ("Sale Configuration" / "Billing From") details come from the company-details API
   // (RTK Query, tag SuperAdminDetail). Fetched only while the new/edit quotation form or a quotation view is open.
@@ -956,6 +1030,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
         phone: matchedSubOrg.phone || matchedSubOrg.whatsapp || quotationFromPhone || activeOrgDetails?.phone || undefined,
         email: matchedSubOrg.email || quotationFromEmail || activeOrgDetails?.email || undefined,
         address: matchedSubOrg.address || matchedSubOrg.location || quotationFromAddress || activeOrgDetails?.address || undefined,
+        logo: matchedSubOrg.logo || matchedSubOrg.logoUrl || cachedOrg?.logo || cachedOrg?.logoUrl || quotationFromLogo || activeOrgDetails?.logo || undefined,
       };
     }
 
@@ -966,6 +1041,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       phone: cachedOrg?.phone || cachedOrg?.whatsapp || quotationFromPhone || activeOrgDetails?.phone || undefined,
       email: cachedOrg?.email || quotationFromEmail || activeOrgDetails?.email || undefined,
       address: cachedOrg?.address || cachedOrg?.location || quotationFromAddress || activeOrgDetails?.address || undefined,
+      logo: cachedOrg?.logo || cachedOrg?.logoUrl || quotationFromLogo || activeOrgDetails?.logo || undefined,
     };
   };
   const [selectedProductSuiteName, setSelectedProductSuiteName] = useState('Yaa connect');
@@ -1211,7 +1287,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     );
   };
 
-  const populateQuoteForm = (quote: Quotation, isEditMode: boolean) => {
+  const populateQuoteForm = (quote: Quotation, isEditMode: boolean, skipNavigate = false) => {
     setFormErrors({});
     if (isEditMode) {
       setEditingQuoteId(quote.id);
@@ -1313,8 +1389,28 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     }
 
     setIsCreateModalOpen(true);
-    navigate('/quotes/new');
+    // Edit / duplicate get their own URL so the page keeps working across the route change and on refresh
+    if (!skipNavigate) navigate(isEditMode ? `/quotes/${quote.id}/edit` : `/quotes/${quote.id}/duplicate`);
   };
+
+  // Edit / duplicate routes: the route change remounts this view, so reload the quotation by id and fill the form
+  const loadedRouteQuoteId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!routeQuoteId || loadedRouteQuoteId.current === routeQuoteId) return;
+    loadedRouteQuoteId.current = routeQuoteId;
+    setIsCreateModalOpen(true);
+    quoteApi
+      .getQuoteById(routeQuoteId)
+      .then((res) => {
+        if (!res?.success || !res.data) throw new Error('Quotation not found');
+        populateQuoteForm(mapApiQuoteToUi(res.data), !isDuplicateRoute, true);
+      })
+      .catch(() => {
+        showToast('error', 'Load Failed', 'Could not load the quotation.');
+        navigate('/quotes');
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeQuoteId]);
 
   const handleEditQuote = (quote: Quotation) => {
     populateQuoteForm(quote, true);
@@ -1457,7 +1553,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       } else {
         // Create new quote (or duplicate)
         const payload: CreateQuoteRequest = {
-          estimateNumber: newEstimateNumber.trim() || undefined,
+          estimateNumber: newEstimateNumber.trim() || (isNumberingReady ? nextPredictedEstimateNumber : '') || undefined,
           quotationManualNumber: quotationManualNumber.trim() || undefined,
           createdDate: createdDate ? ddmmyyyyToIso(createdDate) : undefined,
           date: estimateDate ? ddmmyyyyToIso(estimateDate) : new Date().toISOString().split('T')[0],
@@ -1524,34 +1620,37 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
   const getStatusBadge = (status: Quotation['status']) => {
     const s = (status || '').toUpperCase();
-    let dotColor = 'bg-[#94a3b8]';
+    let pill = 'bg-slate-100 text-slate-700 border-slate-300';
+    let dot = 'bg-slate-400';
     let label = 'Draft';
 
     if (s === 'ACCEPTED') {
-      dotColor = 'bg-[#10b981]';
+      pill = 'bg-emerald-50/90 text-emerald-700 border-emerald-300/80';
+      dot = 'bg-emerald-500';
       label = 'Accepted';
     } else if (s === 'SENT') {
-      dotColor = 'bg-[#33077C]';
+      pill = 'bg-sky-50 text-sky-700 border-sky-300';
+      dot = 'bg-sky-500';
       label = 'Sent';
     } else if (s === 'EXPIRED') {
-      dotColor = 'bg-[#f59e0b]';
+      pill = 'bg-amber-50 text-amber-700 border-amber-300';
+      dot = 'bg-amber-500';
       label = 'Expired';
     } else if (s === 'DECLINED') {
-      dotColor = 'bg-[#f43f5e]';
+      pill = 'bg-rose-50 text-rose-700 border-rose-300';
+      dot = 'bg-rose-500';
       label = 'Declined';
     } else if (s === 'CONVERTED') {
-      dotColor = 'bg-[#8b5cf6]';
+      pill = 'bg-purple-50 text-[#33077C] border-purple-300';
+      dot = 'bg-[#33077C]';
       label = 'Converted';
-    } else {
-      dotColor = 'bg-[#94a3b8]';
-      label = 'Draft';
     }
 
     return (
-      <div className="inline-flex items-center justify-center gap-2 text-xs font-semibold text-slate-800 select-none">
-        <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
-        <span className="text-xs font-semibold text-slate-800 tracking-tight">{label}</span>
-      </div>
+      <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-bold shadow-2xs whitespace-nowrap select-none ${pill}`}>
+        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />
+        <span>{label}</span>
+      </span>
     );
   };
 
@@ -1563,7 +1662,8 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
     // Calculate totals matching invoice breakdown
     const rawSubtotal = activeQuote.items.reduce((acc, item) => acc + item.quantity * item.unitPrice, 0);
-    const rawDiscount = activeQuote.items.reduce((acc, item) => acc + (item.discount || 0), 0);
+    const itemDiscTotal = activeQuote.items.reduce((acc, item) => acc + (item.discount || 0), 0);
+    const rawDiscount = itemDiscTotal > 0 ? itemDiscTotal : (Number(activeQuote.discountAmount) || 0);
     const taxableSubtotal = Math.max(0, rawSubtotal - rawDiscount);
     const taxTotal = taxableSubtotal * 0.18; // Standard 18% GST matching invoice
     const halfTax = taxTotal / 2;
@@ -1675,11 +1775,13 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
             {/* Right: Company Logo */}
             <div className="flex items-center sm:justify-end print:justify-end gap-4 min-w-0 flex-1">
-              <img
-                src={(isPlatformAdmin && viewSeller?.logo) || quotationFromLogo || activeOrgDetails?.logo || "/yaa-creations-logo.png"}
-                alt={previewSellerDetails.name || quotationFromCompany || activeOrgDetails?.name || "Company Logo"}
-                className="h-16 sm:h-20 object-contain max-w-[280px]"
-              />
+              {((isPlatformAdmin && viewSeller?.logo) || quotationFromLogo || activeOrgDetails?.logo || previewSellerDetails.logo) ? (
+                <img
+                  src={(isPlatformAdmin && viewSeller?.logo) || quotationFromLogo || activeOrgDetails?.logo || previewSellerDetails.logo}
+                  alt={previewSellerDetails.name || quotationFromCompany || activeOrgDetails?.name || "Company Logo"}
+                  className="h-20 sm:h-24 print:h-24 object-contain max-w-[340px]"
+                />
+              ) : null}
             </div>
           </div>
 
@@ -1752,15 +1854,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                   </span>
                   <span className="text-slate-700 flex-1">{activeQuote.customerCompany || activeQuote.customerName || '-'}</span>
                 </div>
-                {activeQuote.customerName && activeQuote.customerCompany && activeQuote.customerName !== activeQuote.customerCompany && (
-                  <div className="flex items-start text-xs sm:text-sm leading-relaxed">
-                    <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
-                      <span>Contact Person</span>
-                      <span>:</span>
-                    </span>
-                    <span className="text-slate-700 flex-1">{activeQuote.customerName}</span>
-                  </div>
-                )}
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>GSTIN / Tax ID</span>
@@ -1791,7 +1884,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
-                    <span>Address / Location</span>
+                    <span>Company Address</span>
                     <span>:</span>
                   </span>
                   <span className="text-slate-700 flex-1">{activeQuote.customerLocation || '-'}</span>
@@ -1849,22 +1942,22 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                           {it.quantity}
                         </td>
                         <td className="border border-slate-200 px-2.5 sm:px-3 py-3 text-center font-medium text-slate-800 font-sans">
-                          ₹{it.unitPrice.toFixed(2)}
+                          ₹{it.unitPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         <td className="border border-slate-200 px-3 sm:px-4 py-3 text-right font-medium text-slate-800 font-sans">
-                          ₹{itemSub.toFixed(2)}
+                          ₹{itemSub.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         <td className="border border-slate-200 px-2.5 sm:px-3 py-3 text-right font-medium text-slate-800 font-sans">
-                          ₹{itemDisc.toFixed(2)}
+                          ₹{itemDisc.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         <td className="border border-slate-200 px-2.5 sm:px-3 py-3 text-right text-slate-600 font-sans">
-                          ₹{itemHalfTax.toFixed(2)}
+                          ₹{itemHalfTax.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         <td className="border border-slate-200 px-2.5 sm:px-3 py-3 text-right text-slate-600 font-sans">
-                          ₹{itemHalfTax.toFixed(2)}
+                          ₹{itemHalfTax.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         <td className="border border-slate-200 px-3 sm:px-4 py-3 text-right font-bold text-slate-900 font-sans">
-                          ₹{itemTotal.toFixed(2)}
+                          ₹{itemTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                       </tr>
                     );
@@ -1883,25 +1976,31 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                             <tr>
                               <td className="py-1.5 text-left font-medium text-xs sm:text-sm text-slate-600">Subtotal</td>
                               <td className="py-1.5 text-right font-semibold text-xs sm:text-sm text-slate-800 font-sans whitespace-nowrap">
-                                ₹{rawSubtotal.toFixed(2)}
+                                ₹{rawSubtotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
                             </tr>
                             <tr>
                               <td className="py-1.5 text-left font-medium text-xs sm:text-sm text-slate-600">Discount</td>
                               <td className="py-1.5 text-right font-semibold text-xs sm:text-sm text-slate-800 font-sans whitespace-nowrap">
-                                {rawDiscount > 0 ? `-₹${rawDiscount.toFixed(2)}` : '₹0.00'}
+                                {rawDiscount > 0 ? `-₹${rawDiscount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '₹0.00'}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="py-1.5 text-left font-medium text-xs sm:text-sm text-slate-600">Amount (After Discount)</td>
+                              <td className="py-1.5 text-right font-semibold text-xs sm:text-sm text-slate-800 font-sans whitespace-nowrap">
+                                ₹{taxableSubtotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
                             </tr>
                             <tr>
                               <td className="py-1.5 text-left font-medium text-xs sm:text-sm text-slate-600">GST Total (18%)</td>
                               <td className="py-1.5 text-right font-semibold text-xs sm:text-sm text-slate-800 font-sans whitespace-nowrap">
-                                ₹{taxTotal.toFixed(2)}
+                                ₹{taxTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
                             </tr>
                             <tr className="border-t border-slate-200">
                               <td className="pt-2.5 pb-1.5 text-left font-bold text-sm sm:text-base text-slate-800">Grand Total</td>
                               <td className="pt-2.5 pb-1.5 text-right font-bold text-base sm:text-lg text-slate-800 font-sans whitespace-nowrap">
-                                ₹{computedGrandTotal.toFixed(2)}
+                                ₹{computedGrandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
                             </tr>
                           </tbody>
@@ -1914,53 +2013,12 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
             </div>
           </div>
 
-          {/* 6. Bottom Section: Authorized Signatory */}
-          <div className="flex justify-end pt-6 break-inside-avoid">
-            {/* Right Column: Signature Block */}
-            <div className="space-y-2.5 text-xs sm:text-sm flex flex-col justify-end items-end pb-2">
-              <div className="invoice-signature-section w-full max-w-sm flex flex-col items-end pt-2">
-                <div className="text-right space-y-2 shrink-0 w-full">
-
-                  {/* Hand-drawn Cursive Signature SVG graphic */}
-                  <div className="flex justify-end py-1">
-                    <div className="relative inline-block px-4 py-1">
-                      <svg
-                        className="w-44 h-12 text-[#33077C]"
-                        viewBox="0 0 200 60"
-                        fill="none"
-                        xmlns="http://www.w3.org/2000/svg"
-                      >
-                        <path
-                          d="M10 40 C 30 10, 45 55, 60 25 C 75 -5, 85 45, 105 30 C 120 15, 130 50, 150 20 C 160 5, 175 35, 195 25"
-                          stroke="currentColor"
-                          strokeWidth="2.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                        <path
-                          d="M30 48 C 65 42, 110 50, 180 45"
-                          stroke="#4309A2"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                        />
-                      </svg>
-                    </div>
-                  </div>
-
-                  {/* Stamp & Authorized Label */}
-                  <div className="border-t border-slate-200 pt-2 flex flex-col items-end">
-                    <span className="font-extrabold text-slate-900 text-sm tracking-tight block">
-                      {quotationFromCompany || activeOrgDetails?.name || 'Authorized'}
-                    </span>
-                    <div className="flex items-center justify-center gap-1.5">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                      <span className="text-[11px] text-slate-600 font-extrabold uppercase tracking-wider">
-                        Authorized Signatory
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
+          {/* 6. Bottom Footer Section */}
+          <div className="pt-8 mt-auto border-t border-slate-200/80">
+            <div className="text-center pt-2">
+              <p className="text-[11px] sm:text-xs text-slate-400 italic">
+                This is an electronically generated document, no signature is required.
+              </p>
             </div>
           </div>
         </div>
@@ -2017,9 +2075,10 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                   <div className="px-7 py-4.5 bg-[#33077C] text-white flex flex-wrap sm:flex-nowrap items-center justify-between gap-3">
                     <div className="flex items-center gap-6">
                       <h2 className="text-base font-bold text-white tracking-tight whitespace-nowrap">
-                        Sale Configuration
+                        Company Details
                       </h2>
                     </div>
+                    {isPlatformAdmin && (
                     <button
                       type="button"
                       disabled={isSavingSeller}
@@ -2034,6 +2093,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                     >
                       {isSavingSeller ? 'Saving...' : isEditingFrom ? 'Done' : 'Edit'}
                     </button>
+                    )}
                   </div>
 
                   {/* Card Body */}
@@ -2050,7 +2110,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                                 <img
                                   src={quotationFromLogo}
                                   alt="Company Logo"
-                                  className="h-9 sm:h-10 object-contain rounded"
+                                  className="h-14 sm:h-16 max-w-[200px] object-contain rounded"
                                 />
                               </div>
                             </div>
@@ -2105,13 +2165,13 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                                 <Upload className="w-3.5 h-3.5" />
                                 <span>Change Logo</span>
                               </button>
-                              {quotationFromLogo !== '/yaa-creations-logo.png' && (
+                              {quotationFromLogo && (
                                 <button
                                   type="button"
-                                  onClick={() => setQuotationFromLogo('/yaa-creations-logo.png')}
+                                  onClick={() => setQuotationFromLogo('')}
                                   className="px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
                                 >
-                                  Reset
+                                  Remove
                                 </button>
                               )}
                             </div>
@@ -2317,7 +2377,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                   <div className="px-4 sm:px-7 py-4 sm:py-4.5 bg-[#33077C] text-white flex items-center justify-between gap-2 rounded-t-2xl">
                     <div className="flex items-center gap-3.5">
                       <h2 className="text-base font-bold text-white tracking-tight">
-                        {isSuperAdmin && !isOrgSuperAdmin ? 'Organization / Bill To' : 'Client & Billing Party'}
+                        {isSuperAdmin && !isOrgSuperAdmin ? 'Bill To / Organization Details' : 'Bill To / Customer Details'}
                       </h2>
                     </div>
                     <div className="flex items-center gap-2">
@@ -2403,27 +2463,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                               }`}
                           />
                           <div className="absolute right-3 flex items-center gap-1.5">
-                            {(selectedClientId || clientSearchQuery) && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedClientId('');
-                                  setClientSearchQuery('');
-                                  setCustomerName('');
-                                  setCustomerCompany('');
-                                  setCustomerEmail('');
-                                  setCustomerPhone('');
-                                  setCustomerLocation('');
-                                  setCustomerGstId('');
-                                  setCustomerPan('');
-                                }}
-                                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 cursor-pointer"
-                                title="Clear selection"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            )}
                             <button
                               type="button"
                               onClick={() => setIsCompanyProductDropdownOpen(!isCompanyProductDropdownOpen)}
@@ -2442,7 +2481,8 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                           <div className="dropdown-menu absolute left-0 top-full mt-2 z-50 bg-white rounded-2xl border border-slate-200 shadow-xl p-2 w-full min-w-0 sm:min-w-[320px] max-w-[calc(100vw-2rem)] space-y-1.5 animate-in fade-in zoom-in-95 duration-100">
                             <div className="max-h-60 overflow-y-auto space-y-1 pt-0.5">
                               {(() => {
-                                const q = clientSearchQuery.trim().toLowerCase();
+                                const showingSelected = !!(selectedClientLabel || customerCompany) && clientSearchQuery === (selectedClientLabel || customerCompany);
+                                const q = showingSelected ? '' : clientSearchQuery.trim().toLowerCase();
                                 const list = availableClients.filter(
                                   (c) =>
                                     !q ||
@@ -2469,7 +2509,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                                         handleClientSelect(client.id);
                                         setClientSearchQuery(displayName);
                                         setIsCompanyProductDropdownOpen(false);
-                                        showToast('success', isSuperAdmin && !isOrgSuperAdmin ? 'Organization Selected' : 'Client Selected', `Selected "${displayName}".`);
                                       }}
                                       className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs transition-all cursor-pointer flex items-center justify-between gap-3 ${isSelected
                                           ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
@@ -2519,7 +2558,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                               <span className="text-slate-700">: {customerEmail || '-'}</span>
                             </div>
                             <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">Location / Region</span>
+                              <span className="font-bold text-slate-800">Address</span>
                               <span className="text-slate-700">: {customerLocation || '-'}</span>
                             </div>
                           </div>
@@ -2728,24 +2767,31 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                 <div style={{ borderRadius: '4px' }} className="w-full max-w-sm border border-slate-200 !rounded-[4px] overflow-hidden shadow-sm bg-white text-xs sm:text-[13px]">
                   <div className="flex justify-between items-center px-5 py-3 border-b border-slate-100">
                     <span className="text-slate-600 font-medium">Sub Total</span>
-                    <span className="font-bold text-slate-900">₹{subTotal.toFixed(2)}</span>
+                    <span className="font-bold text-slate-900">₹{subTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
 
                   {totalDiscount > 0 && (
                     <div className="flex justify-between items-center px-5 py-3 border-b border-slate-100">
                       <span className="text-slate-600 font-medium">Discount</span>
-                      <span className="font-semibold text-rose-600">-₹{totalDiscount.toFixed(2)}</span>
+                      <span className="font-semibold text-rose-600">-₹{totalDiscount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                  )}
+
+                  {totalDiscount > 0 && (
+                    <div className="flex justify-between items-center px-5 py-3 border-b border-slate-100">
+                      <span className="text-slate-600 font-medium">Amount (After Discount)</span>
+                      <span className="font-semibold text-slate-900">₹{taxableSubtotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                   )}
 
                   <div className="flex justify-between items-center px-5 py-3 border-b border-slate-100">
                     <span className="text-slate-600 font-medium">Estimated Tax</span>
-                    <span className="font-semibold text-slate-900">₹{totalTax.toFixed(2)}</span>
+                    <span className="font-semibold text-slate-900">₹{totalTax.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
 
                   <div className="flex justify-between items-center px-5 py-3.5 bg-[#33077C] text-white font-bold">
                     <span className="text-xs sm:text-sm uppercase tracking-wider">Total</span>
-                    <span className="text-sm sm:text-base tracking-wide">{grandTotal.toFixed(2)}</span>
+                    <span className="text-sm sm:text-base tracking-wide">₹{grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                 </div>
               </div>
@@ -3083,31 +3129,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                                       setActiveStatusDropdownId(quote.id);
                                     }
                                   }}
-                                  className="status-dropdown-btn inline-flex items-center gap-2 px-1.5 py-1 rounded-lg text-xs font-semibold text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer select-none"
+                                  className="status-dropdown-btn inline-flex items-center gap-1 rounded-full hover:opacity-80 transition-opacity cursor-pointer select-none"
                                 >
-                                  <span
-                                    className={`w-2 h-2 rounded-full shrink-0 ${quote.status === 'ACCEPTED'
-                                      ? 'bg-[#10b981]'
-                                      : quote.status === 'SENT'
-                                        ? 'bg-[#33077C]'
-                                        : quote.status === 'DECLINED'
-                                          ? 'bg-[#f43f5e]'
-                                          : quote.status === 'EXPIRED'
-                                            ? 'bg-[#f59e0b]'
-                                            : 'bg-[#94a3b8]'
-                                      }`}
-                                  />
-                                  <span className="text-xs font-semibold text-slate-800 tracking-tight">
-                                    {quote.status === 'SENT'
-                                      ? 'Sent'
-                                      : quote.status === 'DECLINED'
-                                        ? 'Declined'
-                                        : quote.status === 'ACCEPTED'
-                                          ? 'Accepted'
-                                          : quote.status === 'EXPIRED'
-                                            ? 'Expired'
-                                            : 'Draft'}
-                                  </span>
+                                  {getStatusBadge(quote.status)}
                                   <ChevronDown className="w-3.5 h-3.5 text-slate-400 stroke-[2.2]" />
                                 </button>
                               </div>
@@ -3131,7 +3155,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                             <div>
                               <button
                                 onClick={() => setSelectedQuote(quote)}
-                                className="font-bold text-slate-900 hover:text-orange-600 text-sm transition-colors cursor-pointer text-left block"
+                                className="font-bold text-slate-900 hover:text-[#4309A2] text-sm transition-colors cursor-pointer text-left block"
                               >
                                 {quote.estimateNumber}
                               </button>

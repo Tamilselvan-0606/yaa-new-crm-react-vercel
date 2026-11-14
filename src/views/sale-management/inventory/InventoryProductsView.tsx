@@ -52,6 +52,7 @@ import { Button } from "../../../components/common/Button";
 import { Pagination } from "../../../components/common/Pagination";
 import { exportTableToExcel } from "../../../utils/excelExport";
 import { toast } from "../../../utils/toast";
+import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import { BATCH_PREFIX, cleanBatchNo } from "../utils/textUtils";
 import { BatchPrefixInput } from "../utils/BatchPrefixInput";
@@ -110,8 +111,8 @@ export const DEFAULT_COMMERCE_UNITS: Array<{
   status: number;
 }> = [];
 
-import { AiProductImageAssist } from "./AiProductImageAssist";
 import { ProductBulkUploadModal } from "./ProductBulkUploadModal";
+import { DateInput } from "../../../components/common/DateInput";
 
 export interface ProductFormValues {
   itemType: "Product" | "Service";
@@ -239,30 +240,11 @@ const TAX_RATE_OPTIONS = [
   { label: "None", value: "None" },
   { label: "Exempted", value: "Exempted" },
   { label: "GST @ 0%", value: "GST @ 0%" },
-  { label: "GST @ 0.1%", value: "GST @ 0.1%" },
   { label: "GST @ 0.25%", value: "GST @ 0.25%" },
-  { label: "GST @ 1.5%", value: "GST @ 1.5%" },
   { label: "GST @ 3%", value: "GST @ 3%" },
   { label: "GST @ 5%", value: "GST @ 5%" },
-  { label: "GST @ 12%", value: "GST @ 12%" },
   { label: "GST @ 18%", value: "GST @ 18%" },
-  { label: "GST @ 28%", value: "GST @ 28%" },
   { label: "GST @ 40%", value: "GST @ 40%" },
-  { label: "GST @ 28% + Cess", value: "GST @ 28% + Cess" },
-];
-
-const COMMON_HSN_CODES = [
-  { code: "1006", desc: "Rice & Basmati Grain" },
-  { code: "1101", desc: "Wheat Flour & Atta / Maida" },
-  { code: "0713", desc: "Dried Legumes, Toor Dal, Moong Dal" },
-  { code: "1512", desc: "Sunflower & Edible Refined Oils" },
-  { code: "0405", desc: "Butter, Pure Cow Ghee & Dairy Spreads" },
-  { code: "0902", desc: "Tea, Black Tea & Green Tea" },
-  { code: "0901", desc: "Coffee, Roasted Coffee Beans" },
-  { code: "1902", desc: "Instant Noodles, Pasta & Macaroni" },
-  { code: "1701", desc: "Cane Sugar & Refined White Sugar" },
-  { code: "2501", desc: "Iodized Cooking Salt & Rock Salt" },
-  { code: "3402", desc: "Washing Powder, Liquid Detergent & Soaps" },
 ];
 
 // =========================================================================
@@ -622,6 +604,161 @@ export const CategorySelectField: React.FC<CategorySelectProps> = ({
 };
 
 // =========================================================================
+// CUSTOM UNIT SELECT COMPONENT (same look as the Category dropdown)
+// =========================================================================
+export interface UnitSelectOption {
+  id: string;
+  label: string;
+}
+
+export interface UnitSelectProps {
+  value: string;
+  options: UnitSelectOption[];
+  onSelect: (id: string) => void;
+  onOpenAddUnit: () => void;
+  onOpen?: () => void;
+  error?: string;
+}
+
+export const UnitSelectField: React.FC<UnitSelectProps> = ({
+  value,
+  options,
+  onSelect,
+  onOpenAddUnit,
+  onOpen,
+  error,
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const handleOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    if (isOpen) {
+      document.addEventListener("mousedown", handleOutside);
+      setTimeout(() => searchInputRef.current?.focus(), 50);
+    }
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [isOpen]);
+
+  const filtered = options.filter((o) =>
+    o.label.toLowerCase().includes(searchQuery.toLowerCase().trim()),
+  );
+  const selected = options.find((o) => o.id === value);
+
+  return (
+    <div ref={dropdownRef} className="relative w-full">
+      <FormLabel>Unit</FormLabel>
+      <div
+        onClick={() => {
+          if (!isOpen) onOpen?.();
+          setIsOpen(!isOpen);
+        }}
+        className={`relative w-full h-11 px-4 bg-white rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
+          isOpen
+            ? "border-[#4309A2] ring-4 ring-[#4309A2]/10"
+            : error
+              ? "border-rose-400 ring-2 ring-rose-100"
+              : selected
+                ? "border-slate-300 hover:border-slate-400"
+                : "border-slate-200 hover:border-slate-300"
+        }`}
+      >
+        <span
+          className={`text-xs sm:text-[13px] font-medium truncate ${selected ? "text-slate-900 font-semibold" : "text-slate-400"}`}
+        >
+          {selected?.label || "Select Unit"}
+        </span>
+        <span className="text-[10px] text-slate-500 font-black ml-2 select-none">
+          {isOpen ? "▲" : "▼"}
+        </span>
+      </div>
+
+      {isOpen && (
+        <div className="absolute left-0 top-full mt-1.5 w-full min-w-0 sm:min-w-[260px] max-w-[calc(100vw-2.5rem)] bg-white rounded-2xl shadow-2xl border border-slate-200 p-2.5 z-50 animate-in fade-in zoom-in-95 duration-100">
+          <div className="relative mb-2">
+            <div className="flex items-center w-full h-9 px-3 bg-white border border-slate-200 rounded-full focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/10 transition-all shadow-2xs">
+              <Search className="w-3.5 h-3.5 text-slate-400 shrink-0 mr-2" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                placeholder="Search Unit"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-transparent text-xs font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="text-slate-400 hover:text-slate-600 p-0.5 ml-1"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setIsOpen(false);
+              onOpenAddUnit();
+            }}
+            className="w-full px-3 py-2 text-left text-xs font-bold text-[#33077C] hover:bg-[#33077C]/10 rounded-xl flex items-center gap-2 transition-colors cursor-pointer mb-1"
+          >
+            <Plus className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
+            <span>+ Add New Unit</span>
+          </button>
+
+          <div className="max-h-48 overflow-y-auto space-y-1 p-0.5">
+            {filtered.length === 0 ? (
+              <div className="py-4 text-center text-xs text-slate-400 font-medium">
+                No units found
+              </div>
+            ) : (
+              filtered.map((opt) => {
+                const isSelected = value === opt.id;
+                return (
+                  <div
+                    key={opt.id}
+                    onClick={() => {
+                      onSelect(opt.id);
+                      setIsOpen(false);
+                    }}
+                    className={`w-full px-3 py-2 rounded-xl text-left text-xs font-medium flex items-center gap-2.5 cursor-pointer transition-colors ${
+                      isSelected
+                        ? "bg-[#33077C]/10 text-[#33077C] font-bold"
+                        : "text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <div
+                      className={`w-4 h-4 rounded-[4px] border flex items-center justify-center transition-all shrink-0 ${
+                        isSelected
+                          ? "border-[#33077C] bg-[#33077C] text-white"
+                          : "border-slate-400 bg-white hover:border-[#33077C]"
+                      }`}
+                    >
+                      {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                    </div>
+                    <span className="truncate">{opt.label}</span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// =========================================================================
 // CUSTOM SUBCATEGORY SELECT COMPONENT
 // =========================================================================
 export interface SubcategorySelectProps {
@@ -813,7 +950,6 @@ export const InventoryProductsView: React.FC = () => {
   // Categories with their ids (the AI suggests an id of an existing category; the form itself works with names).
   const [masterCategories, setMasterCategories] = useState<{ id: string; name: string }[]>([]);
   // "Suggested by AI: …" notice, shown until the modal closes.
-  const [aiFilledNotice, setAiFilledNotice] = useState("");
 
   // Master Subcategories List State (dynamically populated via commerce subcategory master API)
   const [masterSubcategories, setMasterSubcategories] = useState<
@@ -1015,6 +1151,7 @@ export const InventoryProductsView: React.FC = () => {
   /**
    * Fetch live categories to populate dropdowns in Add/Edit modal and filter (strictly on-demand)
    */
+  const [inactiveCategoryNames, setInactiveCategoryNames] = useState<string[]>([]);
   const fetchLiveCategories = useCallback(async () => {
     if (isFetchingCategoriesRef.current) return;
     isFetchingCategoriesRef.current = true;
@@ -1028,6 +1165,11 @@ export const InventoryProductsView: React.FC = () => {
           res.data
             .map((c) => ({ id: c.id, name: (c.categoryName || c.name || "").trim() }))
             .filter((c) => c.id && c.name),
+        );
+        setInactiveCategoryNames(
+          res.data
+            .filter((c) => String((c as any).status || "").toLowerCase() === "inactive")
+            .map((c) => (c.categoryName || c.name || "").trim()),
         );
         const catNames = res.data
           .map((c) => c.categoryName || c.name || "")
@@ -1162,6 +1304,7 @@ export const InventoryProductsView: React.FC = () => {
             ),
           );
           toast.success(`Product "${item.productName}" set to ${nextStatus}.`);
+          void loadProducts(true);
           return;
         }
         toast.error(
@@ -1243,8 +1386,6 @@ export const InventoryProductsView: React.FC = () => {
   const [selectedSecondaryUnit, setSelectedSecondaryUnit] = useState("None");
   const [unitSearchQuery, setUnitSearchQuery] = useState("");
   const [customUnitCode, setCustomUnitCode] = useState("");
-  const [isHsnModalOpen, setIsHsnModalOpen] = useState(false);
-  const [hsnSearchQuery, setHsnSearchQuery] = useState("");
 
   // Live Units from Commerce API
   const [apiUnits, setApiUnits] = useState<ApiUnit[]>([]);
@@ -1631,7 +1772,6 @@ export const InventoryProductsView: React.FC = () => {
   ]);
 
   useEffect(() => {
-    if (!isModalOpen) setAiFilledNotice("");
   }, [isModalOpen]);
 
   const handleOpenAddModal = (
@@ -1981,6 +2121,7 @@ export const InventoryProductsView: React.FC = () => {
   };
 
   const MANAGED_KEYS = [
+    "unit",
     "category",
     "subcategory",
     "productName",
@@ -2032,6 +2173,7 @@ export const InventoryProductsView: React.FC = () => {
     isSubmitted,
     formData.category,
     formData.subcategory,
+    formData.unit,
     formData.batchNo,
     formData.productName,
     formData.salePrice,
@@ -2363,6 +2505,7 @@ export const InventoryProductsView: React.FC = () => {
               );
               saveSucceeded = true;
               if (!keepOpenAfterSave) setIsModalOpen(false);
+              void loadProducts(true);
               return;
             }
             toast.error("The item could not be updated. Please try again.");
@@ -2420,6 +2563,7 @@ export const InventoryProductsView: React.FC = () => {
                 `Item "${created.productName}" added successfully!`,
               );
               saveSucceeded = true;
+              void loadProducts(true);
               if (!keepOpenAfterSave) setIsModalOpen(false);
               return;
             }
@@ -3101,12 +3245,65 @@ export const InventoryProductsView: React.FC = () => {
     );
   };
 
-  const handleExport = () => {
-    if (filteredProducts.length === 0) {
-      toast.error("No products available to export.");
-      return;
-    }
+  const fetchProductReportPage = async (reportPage: number, reportPageSize: number) => {
+    const res = await productApi.getProducts({
+      page_no: reportPage,
+      page_size: reportPageSize,
+      pagination_required: true,
+      search: appliedSearch.trim() || undefined,
+      sortOrder: "desc",
+      status: appliedStatus !== "ALL" ? appliedStatus : undefined,
+      category: appliedCategory !== "ALL" ? appliedCategory : undefined,
+      itemType:
+        appliedType !== "ALL"
+          ? (appliedType as "Product" | "Service")
+          : undefined,
+    });
+    const items: ProductItem[] =
+      res?.success && Array.isArray(res.data)
+        ? res.data.map((item, idx) =>
+            mapApiProductToProductItem(
+              item,
+              (reportPage - 1) * reportPageSize + idx,
+            ),
+          )
+        : [];
+    return {
+      items,
+      totalRecords: res?.pagination?.totalRecords,
+      totalPages: res?.pagination?.totalPages,
+      hasNextPage: res?.pagination?.hasNextPage,
+    };
+  };
 
+  const handleExport = () =>
+    runReport({
+      label: "products",
+      load: async () => {
+        const all = await fetchAllReportRows(fetchProductReportPage);
+        const q = appliedSearch.toLowerCase().trim();
+        return all.filter((item) => {
+          const matchesSearch =
+            q === "" ||
+            item.productCode.toLowerCase().includes(q) ||
+            item.productName.toLowerCase().includes(q) ||
+            item.category.toLowerCase().includes(q) ||
+            (item.hsnCode && item.hsnCode.toLowerCase().includes(q));
+          const matchesCategory =
+            appliedCategory === "ALL" || item.category === appliedCategory;
+          const matchesType =
+            appliedType === "ALL" || item.itemType === appliedType;
+          const matchesStatus =
+            appliedStatus === "ALL" || item.status === appliedStatus;
+          return (
+            matchesSearch && matchesCategory && matchesType && matchesStatus
+          );
+        });
+      },
+      onRows: (reportProducts) => exportProductsExcel(reportProducts),
+    });
+
+  const exportProductsExcel = (filteredProducts: ProductItem[]) => {
     const excelRows = filteredProducts.map((p, index) => ({
       sNo: index + 1,
       itemType: p.itemType,
@@ -3119,7 +3316,10 @@ export const InventoryProductsView: React.FC = () => {
       salePrice: Number(p.salePrice || 0),
       salePriceTaxType: p.salePriceTaxType,
       purchasePrice: Number(p.purchasePrice || 0),
-      taxRate: Number(p.taxRate || 0),
+      taxRate: (() => {
+        const m = String(p.taxRate ?? "").match(/(\d+(?:\.\d+)?)\s*%/);
+        return m ? `${m[1]}%` : "-";
+      })(),
       openingStock: Number(
         (p.currentStock !== undefined ? p.currentStock : p.openingStock) || 0,
       ),
@@ -3186,12 +3386,6 @@ export const InventoryProductsView: React.FC = () => {
     (u) =>
       u.name.toLowerCase().includes(unitSearchQuery.toLowerCase()) ||
       u.shortCode.toLowerCase().includes(unitSearchQuery.toLowerCase()),
-  );
-
-  const filteredHsn = COMMON_HSN_CODES.filter(
-    (h) =>
-      h.code.includes(hsnSearchQuery) ||
-      h.desc.toLowerCase().includes(hsnSearchQuery.toLowerCase()),
   );
 
   return (
@@ -3850,7 +4044,9 @@ export const InventoryProductsView: React.FC = () => {
                         subcategory: "",
                       })
                     }
-                    categories={categories}
+                    categories={categories.filter(
+                      (c) => !inactiveCategoryNames.includes(c.trim()) || c === formData.category,
+                    )}
                     onOpenAddCategoryModal={() =>
                       setIsAddCategoryModalOpen(true)
                     }
@@ -3941,23 +4137,24 @@ export const InventoryProductsView: React.FC = () => {
                       onChange={(e) =>
                         setFormData({ ...formData, hsnCode: e.target.value })
                       }
-                      className={`${FORM_INPUT_CLS} pr-10`}
+                      className={FORM_INPUT_CLS}
                     />
-                    <button
-                      type="button"
-                      onClick={() => setIsHsnModalOpen(true)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-[#33077C] transition-colors cursor-pointer"
-                      title="Search HSN / SAC Codes"
-                    >
-                      <Search className="w-4 h-4" />
-                    </button>
                   </div>
                 </div>
                 {/* 2.1 Select Unit Button */}
                 <div className="md:col-span-4">
-                  <button
-                    type="button"
-                    onClick={() => {
+                  <UnitSelectField
+                    value={formData.baseUnitId || ""}
+                    options={allAvailableUnits.map((u) => ({ id: u.id, label: formatUnitOption(u) }))}
+                    error={errors.unit?.message}
+                    onOpen={loadUnits}
+                    onSelect={(id) => {
+                      const u = allAvailableUnits.find((x) => x.id === id);
+                      if (!u) return;
+                      setSelectedBaseUnit(formatUnitOption(u));
+                      setFormData({ ...formData, unit: u.shortCode || u.name || "", baseUnitId: u.id });
+                    }}
+                    onOpenAddUnit={() => {
                       loadUnits();
                       if (formData.baseUnitId) {
                         const matched = allAvailableUnits.find(
@@ -4012,14 +4209,7 @@ export const InventoryProductsView: React.FC = () => {
                       }
                       setIsUnitModalOpen(true);
                     }}
-                    className="w-full h-11 px-3 bg-[#33077C]/10 hover:bg-[#33077C]/15 text-[#33077C] border border-[#33077C]/25 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer shadow-2xs flex items-center justify-center gap-1.5 truncate"
-                  >
-                    <span>
-                      {formData.unit && formData.unit !== "None"
-                        ? `Unit: ${formData.unit}`
-                        : "Select Unit"}
-                    </span>
-                  </button>
+                  />
                   <FormError message={errors.unit?.message} showIcon />
                 </div>
 
@@ -4087,49 +4277,6 @@ export const InventoryProductsView: React.FC = () => {
                     </button>
                   )}
                   <FormError message={errors.itemImage?.message} showIcon />
-                  {formData.itemType === "Product" && (itemImageState || formData.itemImage) && !isUploadingImage && (
-                    <AiProductImageAssist
-                      image={itemImageState || formData.itemImage}
-                      productId={editingProduct?.id}
-                      current={{
-                        productName: formData.productName || "",
-                        description: formData.description || "",
-                        category: formData.category || "",
-                        subcategory: formData.subcategory || "",
-                        unit: formData.unit || "",
-                      }}
-                      masters={{
-                        categories: masterCategories,
-                        subcategories: masterSubcategories.map((sc) => ({
-                          id: sc.id,
-                          name: sc.subcategory || sc.name || "",
-                          categoryName: sc.category || sc.categoryName,
-                        })),
-                        units: allAvailableUnits.map((u) => ({ id: u.id, name: u.name, shortCode: u.shortCode })),
-                      }}
-                      onApply={(values, labels) => {
-                        const { baseUnitId, unit, category, subcategory, ...rest } = values;
-                        const next: Partial<ProductFormValues> = { ...rest };
-                        if (category !== undefined) {
-                          next.category = category;
-                          next.subcategory = subcategory ?? "";
-                        }
-                        if (unit !== undefined) {
-                          next.unit = unit;
-                          next.baseUnitId = baseUnitId;
-                          const u = allAvailableUnits.find((x) => x.id === baseUnitId);
-                          if (u) setSelectedBaseUnit(formatUnitOption(u));
-                        }
-                        setFormData(next);
-                        setAiFilledNotice(labels.join(", "));
-                      }}
-                    />
-                  )}
-                  {aiFilledNotice && (
-                    <p className="text-[11px] font-semibold text-[#33077C] mt-1">
-                      Suggested by AI: {aiFilledNotice}. Please review before saving.
-                    </p>
-                  )}
                 </div>
               </div>
 
@@ -4493,6 +4640,12 @@ export const InventoryProductsView: React.FC = () => {
                               {tax.label}
                             </option>
                           ))}
+                          {formData.taxRate &&
+                            !TAX_RATE_OPTIONS.some((t) => t.value === formData.taxRate) && (
+                              <option value={formData.taxRate}>
+                                {formData.taxRate} (old slab)
+                              </option>
+                            )}
                         </select>
                       </div>
                     </div>
@@ -4610,13 +4763,11 @@ export const InventoryProductsView: React.FC = () => {
                         {/* 2. Manufacturing Date (MFG) */}
                         <div>
                           <FormLabel>Mfg Date</FormLabel>
-                          <input
-                            type="date"
+                          <DateInput
                             value={formData.mfgDate || ""}
-                            onChange={(e) => {
+                            onChange={(v) => ((e) => {
                               setValue("mfgDate", e.target.value);
-                            }}
-                            className={`${FORM_INPUT_CLS} cursor-pointer`}
+                            })({ target: { value: v } } as any)}
                           />
                           <span className="text-[10px] text-slate-400 mt-1 block">
                             Manufacturing date
@@ -4626,13 +4777,11 @@ export const InventoryProductsView: React.FC = () => {
                         {/* 3. Expiry Date (EXP) */}
                         <div>
                           <FormLabel>Expiry Date</FormLabel>
-                          <input
-                            type="date"
+                          <DateInput
                             value={formData.expDate || ""}
-                            onChange={(e) => {
+                            onChange={(v) => ((e) => {
                               setValue("expDate", e.target.value);
-                            }}
-                            className={`${FORM_INPUT_CLS} cursor-pointer`}
+                            })({ target: { value: v } } as any)}
                           />
                           <FormError
                             message={errors.expDate?.message}
@@ -4739,73 +4888,6 @@ export const InventoryProductsView: React.FC = () => {
 
             {/* Modal Body - CRM Card Layout */}
             <div className="p-4 sm:p-6 space-y-5 bg-[#fafbfc] flex-1 overflow-y-auto">
-              {/* Card 1: Unit Selection */}
-              <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-4">
-                <div className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  Unit Configuration
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* BASE UNIT */}
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      Base Unit <span className="text-rose-500">*</span>
-                    </label>
-                    <div className="relative">
-                      <select
-                        value={selectedBaseUnit}
-                        onChange={(e) => setSelectedBaseUnit(e.target.value)}
-                        className="w-full h-11 px-3.5 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 outline-none cursor-pointer focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all shadow-2xs"
-                      >
-                        <option value="">Select Base Unit</option>
-                        {allAvailableUnits.map((u) => {
-                          const formatted = formatUnitOption(u);
-                          return (
-                            <option key={u.id} value={formatted}>
-                              {formatted}
-                            </option>
-                          );
-                        })}
-                      </select>
-                    </div>
-                    <FormError
-                      message={
-                        unitDoneAttempted &&
-                        (!selectedBaseUnit || selectedBaseUnit === "None")
-                          ? "Please select a base unit."
-                          : undefined
-                      }
-                      showIcon
-                    />
-                  </div>
-
-                  {/* SECONDARY UNIT */}
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      Secondary Unit
-                    </label>
-                    <div className="relative">
-                      <select
-                        value={selectedSecondaryUnit}
-                        onChange={(e) =>
-                          setSelectedSecondaryUnit(e.target.value)
-                        }
-                        className="w-full h-11 px-3.5 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 outline-none cursor-pointer focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all shadow-2xs"
-                      >
-                        <option value="None">None</option>
-                        {allAvailableUnits.map((u) => {
-                          const formatted = formatUnitOption(u);
-                          return (
-                            <option key={u.id} value={formatted}>
-                              {formatted}
-                            </option>
-                          );
-                        })}
-                      </select>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
               {/* Card 2: Add Custom Unit Manually */}
               <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-3.5">
                 <div className="flex items-center justify-between">
@@ -5048,69 +5130,6 @@ export const InventoryProductsView: React.FC = () => {
                 )}
                 <span>Save</span>
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 8. HSN / SAC SEARCH MODAL */}
-      {/* ========================================================================= */}
-      {isHsnModalOpen && (
-        <div
-          className="fixed inset-0 z-60 flex items-center justify-center p-2.5 sm:p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-100"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsHsnModalOpen(false);
-          }}
-        >
-          <div className="relative w-full max-w-lg bg-white rounded-xl sm:rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90dvh]">
-            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 sm:py-4 border-b border-slate-100 bg-[#33077C] text-white shrink-0">
-              <h3 className="text-base font-bold text-white">
-                Search HSN / SAC Code
-              </h3>
-              <button
-                type="button"
-                onClick={() => setIsHsnModalOpen(false)}
-                className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-4 space-y-3">
-              <div className="relative">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder="Search by HSN code or description..."
-                  value={hsnSearchQuery}
-                  onChange={(e) => setHsnSearchQuery(e.target.value)}
-                  className="w-full h-10 pl-9 pr-3 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-[#4309A2] focus:bg-white"
-                />
-              </div>
-
-              <div className="space-y-1.5 max-h-72 overflow-y-auto p-1">
-                {filteredHsn.map((h) => (
-                  <div
-                    key={h.code}
-                    onClick={() => {
-                      setFormData({ ...formData, hsnCode: h.code });
-                      setIsHsnModalOpen(false);
-                    }}
-                    className="p-3 rounded-xl border border-slate-200 hover:border-[#33077C] hover:bg-purple-50/40 cursor-pointer transition-all flex items-center justify-between"
-                  >
-                    <div>
-                      <div className="text-xs font-bold text-slate-800">
-                        HSN: {h.code}
-                      </div>
-                      <div className="text-[11px] text-slate-500">{h.desc}</div>
-                    </div>
-                    <span className="text-xs font-bold text-[#33077C]">
-                      Select
-                    </span>
-                  </div>
-                ))}
-              </div>
             </div>
           </div>
         </div>
@@ -5770,17 +5789,15 @@ export const InventoryProductsView: React.FC = () => {
 
                               {/* AS OF DATE */}
                               <td className="py-2.5 px-3 border-r border-slate-200">
-                                <input
-                                  type="date"
+                                <DateInput
                                   value={item.asOfDate || ""}
-                                  onChange={(e) =>
+                                  onChange={(v) => ((e) =>
                                     handleBulkItemChange(
                                       item.id,
                                       "asOfDate",
                                       e.target.value,
-                                    )
-                                  }
-                                  className="h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-700 outline-none cursor-pointer transition-all"
+                                    ))({ target: { value: v } } as any)}
+                                  heightClass="h-8"
                                 />
                               </td>
 

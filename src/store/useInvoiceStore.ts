@@ -67,8 +67,10 @@ export interface SavedInvoice {
     address: string;
     email: string;
     phone: string;
+    logo?: string;
   };
   bank?: {
+    id?: string;
     bankName: string;
     accountName: string;
     accountNumber: string;

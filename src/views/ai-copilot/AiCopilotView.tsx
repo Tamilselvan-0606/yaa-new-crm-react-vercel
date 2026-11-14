@@ -1049,7 +1049,7 @@ export const AiCopilotView: React.FC = () => {
                   </div>
                 )}
                 <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" multiple hidden
-                  onChange={(e) => { const files = Array.from(e.target.files ?? []); e.target.value = ''; void addImages(files); }} />
+                  onChange={(e) => { const files = Array.from(e.target.files ?? []) as File[]; e.target.value = ''; void addImages(files); }} />
                 <div className={`flex items-end gap-2 rounded-[26px] border pl-2 pr-1.5 py-1.5 transition-[border-color,box-shadow] ${disabled ? 'border-slate-200 bg-slate-50' : 'bg-white border-violet-300/70 focus-within:border-[#7C3AED] focus-within:ring-4 focus-within:ring-violet-500/10'}`}>
                   <button type="button" onClick={() => fileInputRef.current?.click()} disabled={disabled || sending || attachments.length >= MAX_IMAGES}
                     aria-label="Attach image" title="Attach image (JPG, PNG, WebP · up to 3 MB)"
@@ -1062,7 +1062,7 @@ export const AiCopilotView: React.FC = () => {
                     onChange={(e) => setInput(e.target.value.slice(0, maxChars))}
                     onKeyDown={onKeyDown}
                     onPaste={(e) => {
-                      const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'));
+                      const files = (Array.from(e.clipboardData.files) as File[]).filter((f) => f.type.startsWith('image/'));
                       if (files.length) { e.preventDefault(); void addImages(files); }
                     }}
                     rows={1}

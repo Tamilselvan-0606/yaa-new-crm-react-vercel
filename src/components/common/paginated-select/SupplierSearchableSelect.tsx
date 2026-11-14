@@ -13,11 +13,13 @@ export interface SupplierSearchableSelectProps {
   } | null;
   onAddNewSupplier?: () => void;
   allowNone?: boolean;
+  noneLabel?: string;
   disabled?: boolean;
   placeholder?: string;
   className?: string;
   triggerClassName?: string;
   size?: 'sm' | 'md' | 'lg';
+  allowClear?: boolean;
 }
 
 export const SupplierSearchableSelect: React.FC<SupplierSearchableSelectProps> = ({
@@ -26,11 +28,13 @@ export const SupplierSearchableSelect: React.FC<SupplierSearchableSelectProps> =
   selectedSupplier,
   onAddNewSupplier,
   allowNone = false,
+  noneLabel = 'Select',
   disabled = false,
   placeholder = 'Select or search supplier...',
   className = '',
   triggerClassName = '',
   size = 'md',
+  allowClear = true,
 }) => {
   // The supplier list is loaded ONCE when the page / form opens; typing in the search box filters that list on the
   // screen and never calls the API again.
@@ -84,8 +88,8 @@ export const SupplierSearchableSelect: React.FC<SupplierSearchableSelectProps> =
 
   const staticOptions: SearchableOption[] = useMemo(() => {
     if (!allowNone) return [];
-    return [{ value: '', label: 'None / Unassigned' }];
-  }, [allowNone]);
+    return [{ value: '', label: noneLabel }];
+  }, [allowNone, noneLabel]);
 
   return (
     <SearchableSelect
@@ -103,6 +107,7 @@ export const SupplierSearchableSelect: React.FC<SupplierSearchableSelectProps> =
       className={className}
       triggerClassName={triggerClassName}
       size={size}
+      allowClear={allowClear}
     />
   );
 };

@@ -132,17 +132,25 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const res = await api.login(email, password);
       if (res.success && res.user) {
-        const roleFlags = getRoleFlags(res.user.role);
+        // Trigger GET /auth/me right after login so the session starts from the server's current profile
+        // (organization, sub-organization, role, memberships). Falls back to the login response if it fails.
+        let sessionUser = res.user;
+        try {
+          sessionUser = (await api.getCurrentUser()) || res.user;
+        } catch {
+          sessionUser = res.user;
+        }
+        const roleFlags = getRoleFlags(sessionUser.role);
 
         set({
-          currentUser: res.user,
-          role: res.user.role,
+          currentUser: sessionUser,
+          role: sessionUser.role,
           ...roleFlags,
           token: res.token,
           isLoading: false,
         });
-        toast.success(`Welcome back, ${res.user.name}`, {
-          description: `Logged in as ${res.user.role} (${res.user.department})`,
+        toast.success(`Welcome back, ${sessionUser.name}`, {
+          description: `Logged in as ${sessionUser.role} (${sessionUser.department})`,
         });
         reminderFetch.at = 0; // a new session must not reuse the previous user's cool-down
         get().refreshReminders();

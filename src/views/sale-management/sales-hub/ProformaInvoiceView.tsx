@@ -77,6 +77,7 @@ import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { toast } from "../../../utils/toast";
+import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   printBusinessDocument,
@@ -109,6 +110,7 @@ import {
   UUID_REGEX,
   ApiStockBatch,
   clientProductApi,
+  isProductActive,
 } from "../../../api";
 import { useAppDispatch } from "../../../hooks/redux";
 import { baseApi } from "../../../api/baseApi";
@@ -312,6 +314,7 @@ const validateProformaForm = (
 };
 import { AddCustomerModal } from "./AddCustomerModal";
 import { AddItemModal } from "../inventory/AddItemModal";
+import { DateInput } from "../../../components/common/DateInput";
 
 // Helper for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -402,14 +405,10 @@ const TAX_RATE_OPTIONS = [
   { label: "Select Tax", rate: 0 },
   { label: "Exempted (0%)", rate: 0 },
   { label: "GST @ 0%", rate: 0 },
-  { label: "GST @ 0.1%", rate: 0.1 },
   { label: "GST @ 0.25%", rate: 0.25 },
-  { label: "GST @ 1.5%", rate: 1.5 },
   { label: "GST @ 3%", rate: 3 },
   { label: "GST @ 5%", rate: 5 },
-  { label: "GST @ 12%", rate: 12 },
   { label: "GST @ 18%", rate: 18 },
-  { label: "GST @ 28%", rate: 28 },
   { label: "GST @ 40%", rate: 40 },
 ];
 
@@ -885,6 +884,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       // 1. First attempt: standard pagination_required: true
       try {
         const res = await productApi.getProducts({
+          activeOnly: true,
           page_no: 1,
           page_size: 100,
           pagination_required: true,
@@ -901,6 +901,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       if (prods.length === 0) {
         try {
           const res2 = await productApi.getProducts({
+            activeOnly: true,
             search: searchQuery?.trim() || undefined,
             page_size: 100,
             pagination_required: false,
@@ -920,7 +921,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
             limit: 100,
             search: searchQuery?.trim() || undefined,
           });
-          const cItems = unpackProducts(cRes);
+          const cItems = unpackProducts(cRes).filter(isProductActive);
           if (cItems.length > 0) {
             prods = cItems.map((cp: any) => ({
               id: cp.id,
@@ -937,39 +938,16 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         }
       }
 
-      // 4. Fourth attempt: fallback to stockApi
-      if (prods.length === 0) {
-        try {
-          const sRes = await stockApi.getStocks({
-            pagination_required: false,
-            page_size: 100,
-          });
-          const rawStocks = unpackProducts(sRes);
-          if (rawStocks.length > 0) {
-            prods = rawStocks.map((s: any) => ({
-              id: s.productId || s.id,
-              productId: s.productId || s.id,
-              productName: s.productName,
-              productCode: s.sku,
-              salePrice: s.unitPrice || 0,
-              unit: s.unit || "PCS",
-              category: s.category || "",
-            }));
-          }
-        } catch (sErr) {
-          console.warn("stockApi load fallback error:", sErr);
-        }
-      }
-
-      if (prods.length > 0) {
-        const mapped = prods.map((p, idx) =>
-          mapApiProductToProductItem(p, idx),
-        );
+      const activeProds = prods.filter(isProductActive);
+      const mapped = activeProds.map((p, idx) =>
+        mapApiProductToProductItem(p, idx),
+      );
+      if (!searchQuery?.trim()) {
+        setLiveProducts(mapped);
+      } else if (activeProds.length > 0) {
         setLiveProducts((prev) => {
           const map = new Map<string, ProductItemModel>();
-          if (searchQuery?.trim()) {
-            prev.forEach((p) => map.set(p.id, p));
-          }
+          prev.filter(isProductActive).forEach((p) => map.set(p.id, p));
           mapped.forEach((p) => map.set(p.id, p));
           return Array.from(map.values());
         });
@@ -1059,6 +1037,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         sellingPrice?: number;
         expDate?: string;
       }>;
+      status?: string;
     }> = [];
 
     const seenIds = new Set<string>();
@@ -1159,6 +1138,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 
     // 1. Live Products from /commerce/products
     liveProducts.forEach((p) => {
+      if (!isProductActive(p)) return;
       const pid = String(p.id || "");
       if (pid && !seenIds.has(pid)) {
         seenIds.add(pid);
@@ -1190,36 +1170,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
             (p as any).imageUrl ||
             "",
           batches,
-        });
-      }
-    });
-
-    // 2. Live Stocks from /commerce/stocks
-    sourceStocks.forEach((s) => {
-      const pid = String(s.productId || s.id || "");
-      if (pid && !seenIds.has(pid)) {
-        seenIds.add(pid);
-        const sku = s.sku || "";
-        const name = s.productName || "Unnamed Product";
-        const batches = getBatchesForProduct(pid, sku, name, s.batches);
-        list.push({
-          productId: pid,
-          id: pid,
-          productName: name,
-          sku: sku,
-          unitPrice: Number(s.unitPrice) || 0,
-          category: s.category || "",
-          unit: s.unit || "PCS",
-          taxPercent: extractTaxPercent(
-            (s as any).taxRate ?? (s as any).taxPercent,
-          ),
-          hsnCode: (s as any).hsnCode || "",
-          imageUrl:
-            (s as any).images?.[0] ||
-            (s as any).image ||
-            (s as any).imageUrl ||
-            "",
-          batches,
+          status: p.status || "Active",
         });
       }
     });
@@ -3053,8 +3004,9 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   }, [liveProformas]);
 
   // Displayed Proforma Invoices: Live API data merged with local cache and cross-module lineage
-  const displayProformas = useMemo(() => {
-    const combined = liveProformas.map((item) => ({
+  const applyProformaFilters = useCallback(
+    (list: ReturnType<typeof mapApiProformaToSaleProforma>[]) => {
+    const combined = list.map((item) => ({
       ...item,
       convertedAt: (item as any).convertedAt || undefined,
     }));
@@ -3074,7 +3026,34 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       const matchesPeriod = checkDateMatchesPeriod(p.date, appliedPeriod);
       return matchesSearch && matchesStatus && matchesPeriod;
     });
-  }, [liveProformas, appliedSearch, appliedStatus, appliedPeriod]);
+    },
+    [appliedSearch, appliedStatus, appliedPeriod],
+  );
+  const displayProformas = useMemo(
+    () => applyProformaFilters(liveProformas),
+    [liveProformas, applyProformaFilters],
+  );
+
+  // Report pages: same list API + applied filters as fetchProformas, any page.
+  const fetchProformasReportPage = async (pageNo: number, size: number) => {
+    const params: ProformaFilterParams = {
+      page_no: pageNo,
+      page_size: size,
+      pagination_required: true,
+      sortOrder: "desc",
+    };
+    if (appliedSearch.trim()) params.search = appliedSearch.trim();
+    if (appliedStatus && appliedStatus !== "ALL") params.status = appliedStatus;
+    if (appliedPeriod) params.period = mapPeriodToApiPeriod(appliedPeriod);
+    const response = await commerceProformaApi.getProformas(params);
+    const list = Array.isArray(response?.data) ? response.data : [];
+    return {
+      items: list.map(mapApiProformaToSaleProforma),
+      totalRecords: response?.pagination?.totalRecords,
+      totalPages: response?.pagination?.totalPages,
+      hasNextPage: response?.pagination?.hasNextPage,
+    };
+  };
 
   // Metrics Calculation
   const metrics = useMemo(() => {
@@ -3377,11 +3356,9 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                     Invoice Date
                   </span>
                   <div className="relative w-40 sm:w-48">
-                    <input
-                      type="date"
+                    <DateInput
                       value={formData.date}
-                      {...fieldAttr("date")}
-                      onChange={(e) => {
+                      onChange={(v) => ((e) => {
                         fe.clearError("date");
                         fe.clearError("validUntil");
                         const newDate = e.target.value;
@@ -3397,8 +3374,9 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                           date: newDate,
                           validUntil: computedValidUntil,
                         }));
-                      }}
-                      className={`w-full h-9 px-3 bg-white border hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors ${fe.errors.date ? "border-rose-400" : "border-slate-200"}`}
+                      })({ target: { value: v } } as any)}
+                      {...fieldAttr("date")}
+                      heightClass="h-9"
                     />
                   </div>
                 </div>
@@ -3470,7 +3448,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 
             {/* 4. BILLING TABLE (THE GRID - CRM THEME) */}
             <div className="mt-6 overflow-x-auto border border-slate-200 rounded-xl min-h-[380px] pb-36">
-              <table className="w-full text-xs border-collapse">
+              <table className="w-full min-w-[1250px] text-xs border-collapse">
                 {/* Table Header */}
                 <thead>
                   <tr className="bg-[#33077C] text-white font-bold uppercase text-[10.5px] border-b border-[#4309A2] tracking-wider select-none">
@@ -3934,9 +3912,21 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                                   {p.category}
                                                 </span>
                                               )}
-                                              <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
-                                                Active
-                                              </span>
+                                              {(p as any).status ? (
+                                                <span
+                                                  className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
+                                                    String((p as any).status).toLowerCase() === "inactive"
+                                                      ? "bg-rose-50 text-rose-700 border-rose-200/60"
+                                                      : "bg-emerald-50 text-emerald-700 border-emerald-200/60"
+                                                  }`}
+                                                >
+                                                  {(p as any).status}
+                                                </span>
+                                              ) : (
+                                                <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
+                                                  Active
+                                                </span>
+                                              )}
                                             </div>
                                             <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5 flex-wrap">
                                               <span className="font-mono text-slate-600">
@@ -4247,7 +4237,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                       {/* DISCOUNT % and AMOUNT (conditional) */}
                       {columnSettings.showDiscount && (
                         <>
-                          <td className="p-1.5 border-r border-slate-200 w-16">
+                          <td className="p-1.5 border-r border-slate-200 w-24 min-w-[96px]">
                             <input
                               type="number"
                               min="0"
@@ -4277,7 +4267,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                             />
                           </td>
 
-                          <td className="p-1.5 border-r border-slate-200 w-24">
+                          <td className="p-1.5 border-r border-slate-200 w-28 min-w-[120px]">
                             <input
                               type="number"
                               step="0.01"
@@ -4308,7 +4298,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                       )}
 
                       {/* TAX % (Select) */}
-                      <td className="p-1.5 border-r border-slate-200 w-28">
+                      <td className="p-1.5 border-r border-slate-200 w-28 min-w-[110px]">
                         <select
                           value={row.taxPercent}
                           {...fieldAttr(`items.${idx}.taxPercent`)}
@@ -4327,6 +4317,11 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                               {t.label}
                             </option>
                           ))}
+                          {!TAX_RATE_OPTIONS.some((t) => t.rate === Number(row.taxPercent || 0)) && (
+                            <option value={row.taxPercent}>
+                              GST @ {row.taxPercent}% (old slab)
+                            </option>
+                          )}
                         </select>
                         <FormError
                           message={fe.errors[`items.${idx}.taxPercent`]}
@@ -4334,12 +4329,12 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                       </td>
 
                       {/* TAX AMOUNT */}
-                      <td className="p-1.5 border-r border-slate-200 w-24 text-right pr-3 font-medium text-slate-700">
+                      <td className="p-1.5 border-r border-slate-200 w-28 min-w-[110px] text-right pr-3 font-medium text-slate-700">
                         {row.taxAmount ? Number(row.taxAmount).toFixed(2) : "0"}
                       </td>
 
                       {/* AMOUNT (ROW TOTAL) */}
-                      <td className="p-1.5 border-r border-slate-200 text-right pr-3 font-bold text-slate-900">
+                      <td className="p-1.5 border-r border-slate-200 min-w-[130px] text-right pr-3 font-bold text-slate-900">
                         {Number(row.total || 0).toLocaleString("en-IN", {
                           minimumFractionDigits: 2,
                         })}
@@ -4789,13 +4784,20 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   // =========================================================================
   // VIEW MODE: LIST (Master Proforma Invoices Table View as in screenshot 1)
   // Export to Excel
-  const handleExportExcel = () => {
-    if (displayProformas.length === 0) {
-      toast.error("No proforma invoices to export");
-      return;
-    }
+  const reportTotals = (list: { amount?: number | string; status?: string }[]) => ({
+    totalVal: list.reduce((sum, p) => sum + (Number(p.amount) || 0), 0),
+    openVal: list
+      .filter((p) => p.status === "Open")
+      .reduce((sum, p) => sum + (Number(p.amount) || 0), 0),
+  });
 
-    const excelRows = displayProformas.map((p) => {
+  const handleExportExcel = () =>
+    runReport<ReturnType<typeof mapApiProformaToSaleProforma>>({
+      label: "proforma invoices",
+      load: async () =>
+        applyProformaFilters(await fetchAllReportRows(fetchProformasReportPage)),
+      onRows: (rows) => {
+    const excelRows = rows.map((p) => {
       const createdDt = formatDateTime(p.createdAt || p.date);
       const convertedAt = resolveDocumentConvertedAt("Proforma", p as any);
       const convertedDt = formatDateTime(convertedAt);
@@ -4817,7 +4819,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       filename: `Proforma_Invoices_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Proforma Invoices",
       title: "YAA CREATIONS CRM - PROFORMA INVOICE REPORT",
-      subtitle: `Filter: ${appliedPeriod} | Total Proformas: ${displayProformas.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
+      subtitle: `Filter: ${appliedPeriod} | Total Proformas: ${rows.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
       columns: [
         {
           header: "Proforma S.No.",
@@ -4858,25 +4860,26 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       data: excelRows,
       summaryRow: {
         proformaNo: "TOTAL",
-        partyName: `${displayProformas.length} Proformas`,
-        amount: metrics.totalVal,
-        balance: metrics.openVal,
+        partyName: `${rows.length} Proformas`,
+        amount: reportTotals(rows).totalVal,
+        balance: reportTotals(rows).openVal,
       },
     });
 
     toast.success(
-      `Proforma Invoices Excel report downloaded (${displayProformas.length} records)!`,
+      `Proforma Invoices Excel report downloaded (${rows.length} records)!`,
     );
-  };
+      },
+    });
 
   // Print Proforma Table Report via universal printUtils
-  const handlePrintTableReport = () => {
-    if (displayProformas.length === 0) {
-      toast.error("No proforma invoices to print.");
-      return;
-    }
-
-    const printRows = displayProformas.map((p) => {
+  const handlePrintTableReport = () =>
+    runReport<ReturnType<typeof mapApiProformaToSaleProforma>>({
+      label: "proforma invoices",
+      load: async () =>
+        applyProformaFilters(await fetchAllReportRows(fetchProformasReportPage)),
+      onRows: (rows) => {
+    const printRows = rows.map((p) => {
       const createdDt = formatDateTime(p.createdAt || p.date);
       const convertedAt = resolveDocumentConvertedAt("Proforma", p as any);
       const convertedDt = formatDateTime(convertedAt);
@@ -4896,7 +4899,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 
     printTableReport({
       title: "PROFORMA INVOICE REGISTER",
-      subtitle: `Filter: ${appliedPeriod} | Total Records: ${displayProformas.length}`,
+      subtitle: `Filter: ${appliedPeriod} | Total Records: ${rows.length}`,
       columns: [
         {
           header: "Proforma No.",
@@ -4947,17 +4950,18 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       data: printRows,
       summaryRow: {
         proformaNo: "TOTAL",
-        partyName: `${displayProformas.length} Proformas`,
-        amount: metrics.totalVal,
-        balance: metrics.openVal,
+        partyName: `${rows.length} Proformas`,
+        amount: reportTotals(rows).totalVal,
+        balance: reportTotals(rows).openVal,
       },
       metrics: [
-        { label: "Total Value", value: metrics.totalVal },
-        { label: "Open Amount", value: metrics.openVal },
-        { label: "Total Proformas", value: displayProformas.length },
+        { label: "Total Value", value: reportTotals(rows).totalVal },
+        { label: "Open Amount", value: reportTotals(rows).openVal },
+        { label: "Total Proformas", value: rows.length },
       ],
     });
-  };
+      },
+    });
 
   // =========================================================================
   // VIEW MODE: LIST (Master Proforma Invoices Table View matching CRM Theme)
@@ -5715,6 +5719,17 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                     })}
                   </span>
                 </div>
+                {Number(previewProforma.discount) > 0 && (
+                  <div className="flex justify-between">
+                    <span>Discount:</span>
+                    <span className="font-semibold text-emerald-600">
+                      -₹
+                      {Number(previewProforma.discount).toLocaleString("en-IN", {
+                        minimumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                )}
                 {previewProforma.taxAmount !== undefined &&
                   previewProforma.taxAmount > 0 && (
                     <div className="flex justify-between">

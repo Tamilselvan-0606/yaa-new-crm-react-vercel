@@ -1,3 +1,4 @@
+import { fetchAllReportRows, runReport } from '../../../utils/reportData';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { CustomerSearchableSelect } from '../../../components/common/paginated-select';
 import { SalesRepSearchableSelect } from './SalesRepSearchableSelect';
@@ -99,6 +100,7 @@ import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS, handleNo
 
 import { formatDate } from '../utils/dateUtils';
 import { CustomerCell } from '../utils/CustomerCell';
+import { DateInput } from "../../../components/common/DateInput";
 type CollectionTab = 'all' | 'due-today' | 'overdue' | 'promise-to-pay' | 'collected';
 type CollectionsSubView =
   | 'dashboard'
@@ -601,7 +603,11 @@ export const CollectionsView: React.FC = () => {
     isCancelled?: boolean;
   }
 
-  const collectionItems = useMemo<CollectionItem[]>(() => {
+  const buildCollectionItems = (
+    apiInvoices: ApiCollectionInvoiceItem[],
+    apiAssignments: CustomerAssignmentItem[],
+    sales: SaleTransaction[],
+  ): CollectionItem[] => {
     const itemsMap = new Map<string, CollectionItem>();
 
     // 1. Process apiInvoices (authoritative for collection follow-ups & assignments)
@@ -804,11 +810,17 @@ export const CollectionsView: React.FC = () => {
     }
 
     return Array.from(itemsMap.values());
-  }, [apiInvoices, apiAssignments, sales, customers, liveReps, todayStr]);
+  };
+
+  const collectionItems = useMemo<CollectionItem[]>(
+    () => buildCollectionItems(apiInvoices, apiAssignments, sales),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [apiInvoices, apiAssignments, sales, customers, liveReps, todayStr],
+  );
 
   // Client-side filtering by Tab, Rep, Customer, Due Date, Status, Payment Status, Search
-  const filteredItems = useMemo<CollectionItem[]>(() => {
-    return collectionItems.filter((item) => {
+  const applyCollectionFilters = (items: CollectionItem[]): CollectionItem[] => {
+    return items.filter((item) => {
       // Exclude cancelled invoices from active collection dues
       if (item.isCancelled) {
         return false;
@@ -877,17 +889,23 @@ export const CollectionsView: React.FC = () => {
 
       return true;
     });
-  }, [
-    collectionItems,
-    activeTab,
-    selectedRepFilter,
-    selectedCustomerFilter,
-    dueDateFilter,
-    statusFilter,
-    paymentStatusFilter,
-    appliedSearch,
-    todayStr,
-  ]);
+  };
+
+  const filteredItems = useMemo<CollectionItem[]>(
+    () => applyCollectionFilters(collectionItems),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      collectionItems,
+      activeTab,
+      selectedRepFilter,
+      selectedCustomerFilter,
+      dueDateFilter,
+      statusFilter,
+      paymentStatusFilter,
+      appliedSearch,
+      todayStr,
+    ],
+  );
 
   // Aggregated metrics across all eligible receivables for dashboard consistency
   const {
@@ -1582,8 +1600,63 @@ export const CollectionsView: React.FC = () => {
     setActiveActionId(null);
   };
 
+  // Report: loads every page of the same collection / invoice APIs with the applied filters,
+  // then builds and filters the rows exactly like the on-screen table.
+  const loadCollectionReportItems = async (): Promise<CollectionItem[]> => {
+    const [reportInvoices, reportSales, assignRes] = await Promise.all([
+      fetchAllReportRows(async (page, size) => {
+        const res = await collectionApi.getCollectionInvoices({
+          search: appliedSearch || undefined,
+          salesRepresentativeId: selectedRepFilter !== 'ALL' ? selectedRepFilter : undefined,
+          customerId: selectedCustomerFilter !== 'ALL' ? selectedCustomerFilter : undefined,
+          dueDateFilter: dueDateFilter !== 'ALL' ? dueDateFilter : undefined,
+          status: statusFilter !== 'ALL' ? statusFilter : undefined,
+          paymentStatus: paymentStatusFilter !== 'ALL' ? paymentStatusFilter : undefined,
+          page,
+          limit: size,
+        });
+        return {
+          items: res?.success && Array.isArray(res.data) ? res.data : [],
+          totalRecords: res?.pagination?.totalRecords,
+          totalPages: res?.pagination?.totalPages,
+          hasNextPage: res?.pagination?.hasNextPage,
+        };
+      }),
+      fetchAllReportRows(async (page, size) => {
+        const res = await commerceInvoiceApi.getInvoices({
+          pagination_required: true,
+          page_no: page,
+          page_size: size,
+          search: appliedSearch || undefined,
+          customerId: selectedCustomerFilter !== 'ALL' ? selectedCustomerFilter : undefined,
+          status: statusFilter !== 'ALL' ? statusFilter : undefined,
+          paymentStatus: paymentStatusFilter !== 'ALL' ? paymentStatusFilter : undefined,
+        });
+        return {
+          items:
+            res?.success && Array.isArray(res.data)
+              ? res.data.map(mapApiInvoiceToSaleTransaction)
+              : [],
+          totalRecords: res?.pagination?.totalRecords,
+          totalPages: res?.pagination?.totalPages,
+          hasNextPage: res?.pagination?.hasNextPage,
+        };
+      }),
+      collectionApi.getCustomerAssignments({ limit: 200 }).catch(() => null),
+    ]);
+    const reportAssignments =
+      assignRes?.success && Array.isArray(assignRes.data) ? assignRes.data : apiAssignments;
+    return applyCollectionFilters(
+      buildCollectionItems(reportInvoices, reportAssignments, reportSales),
+    );
+  };
+
   // Helper: Export table to Excel
-  const handleExportExcel = () => {
+  const handleExportExcel = () =>
+    runReport({
+      label: 'collection records',
+      load: loadCollectionReportItems,
+      onRows: (reportItems) => {
     exportTableToExcel({
       filename: `Collections_Report_${todayStr}`,
       title: 'Collections Report',
@@ -1600,19 +1673,20 @@ export const CollectionsView: React.FC = () => {
         { header: 'Collection Status', key: 'status' },
         { header: 'Payment Status', key: 'paymentStatus' },
       ],
-      data: filteredItems,
+      data: reportItems,
     });
     toast.success('Collection records exported to Excel');
-  };
+      },
+    });
 
   // Helper: Print Collections Report via universal printUtils
-  const handlePrintTableReport = () => {
-    if (filteredItems.length === 0) {
-      toast.error('No collection records to print.');
-      return;
-    }
+  const handlePrintTableReport = () =>
+    runReport({
+      label: 'collection records',
+      load: loadCollectionReportItems,
+      onRows: (reportItems) => {
 
-    const printRows = filteredItems.map((item) => ({
+    const printRows = reportItems.map((item) => ({
       customerName: item.customerName,
       customerPhone: item.customerPhone || '-',
       invoiceNumber: item.invoiceNumber,
@@ -1627,7 +1701,7 @@ export const CollectionsView: React.FC = () => {
 
     printTableReport({
       title: 'COLLECTIONS & RECEIVABLES REPORT',
-      subtitle: `Filter: ${activeTab} | Total Records: ${filteredItems.length}`,
+      subtitle: `Filter: ${activeTab} | Total Records: ${reportItems.length}`,
       columns: [
         { header: 'Customer Name', key: 'customerName', align: 'left', width: '20%' },
         { header: 'Invoice No.', key: 'invoiceNumber', align: 'center', width: '14%' },
@@ -1641,13 +1715,14 @@ export const CollectionsView: React.FC = () => {
       data: printRows,
       summaryRow: {
         customerName: 'TOTAL',
-        invoiceNumber: `${filteredItems.length} Invoices`,
-        invoiceTotal: filteredItems.reduce((acc, i) => acc + (Number(i.invoiceTotal) || 0), 0),
-        paidAmount: filteredItems.reduce((acc, i) => acc + (Number(i.paidAmount) || 0), 0),
-        outstandingAmount: filteredItems.reduce((acc, i) => acc + (Number(i.outstandingAmount) || 0), 0),
+        invoiceNumber: `${reportItems.length} Invoices`,
+        invoiceTotal: reportItems.reduce((acc, i) => acc + (Number(i.invoiceTotal) || 0), 0),
+        paidAmount: reportItems.reduce((acc, i) => acc + (Number(i.paidAmount) || 0), 0),
+        outstandingAmount: reportItems.reduce((acc, i) => acc + (Number(i.outstandingAmount) || 0), 0),
       },
     });
-  };
+      },
+    });
 
   // Helper: Format raw timestamps into human-readable friendly dates with relative indicators
   const formatTimelineTimestamp = (rawDate?: string): { formatted: string; relative: string } => {
@@ -2936,15 +3011,13 @@ export const CollectionsView: React.FC = () => {
               {/* Payment Date */}
               <div>
                 <FormLabel required>Payment Date</FormLabel>
-                <input
-                  type="date"
+                <DateInput
                   value={paymentDate}
-                  data-field="paymentDate"
-                  onChange={(e) => {
+                  onChange={(v) => ((e) => {
                     setPaymentDate(e.target.value);
                     payFE.clearError('paymentDate');
-                  }}
-                  className={FORM_INPUT_CLS}
+                  })({ target: { value: v } } as any)}
+                  data-field="paymentDate"
                   required
                 />
                 <FormError message={payFE.errors.paymentDate} />
@@ -3144,16 +3217,14 @@ export const CollectionsView: React.FC = () => {
                 {/* Follow-up Date */}
                 <div>
                   <FormLabel required>Follow-up Date</FormLabel>
-                  <input
-                    type="date"
+                  <DateInput
                     value={followUpDate}
-                    data-field="followUpDate"
-                    onChange={(e) => {
+                    onChange={(v) => ((e) => {
                       setFollowUpDate(e.target.value);
                       fuFE.clearError('followUpDate');
                       fuFE.clearError('nextFollowUp');
-                    }}
-                    className={FORM_INPUT_CLS}
+                    })({ target: { value: v } } as any)}
+                    data-field="followUpDate"
                     required
                   />
                   <FormError message={fuFE.errors.followUpDate} />
@@ -3193,15 +3264,13 @@ export const CollectionsView: React.FC = () => {
                 {/* Next Follow-up */}
                 <div>
                   <FormLabel>Next Follow-up</FormLabel>
-                  <input
-                    type="date"
+                  <DateInput
                     value={nextFollowUpDate}
-                    data-field="nextFollowUp"
-                    onChange={(e) => {
+                    onChange={(v) => ((e) => {
                       setNextFollowUpDate(e.target.value);
                       fuFE.clearError('nextFollowUp');
-                    }}
-                    className={FORM_INPUT_CLS}
+                    })({ target: { value: v } } as any)}
+                    data-field="nextFollowUp"
                   />
                   <FormError message={fuFE.errors.nextFollowUp} />
                 </div>
@@ -3211,15 +3280,13 @@ export const CollectionsView: React.FC = () => {
                   <>
                     <div>
                       <FormLabel required>Promise Date</FormLabel>
-                      <input
-                        type="date"
+                      <DateInput
                         value={followUpPromiseDate}
-                        data-field="promiseDate"
-                        onChange={(e) => {
+                        onChange={(v) => ((e) => {
                           setFollowUpPromiseDate(e.target.value);
                           fuFE.clearError('promiseDate');
-                        }}
-                        className={FORM_INPUT_CLS}
+                        })({ target: { value: v } } as any)}
+                        data-field="promiseDate"
                         required={followUpHasPromise}
                       />
                       <FormError message={fuFE.errors.promiseDate} />
@@ -3348,15 +3415,13 @@ export const CollectionsView: React.FC = () => {
 
             <div>
               <FormLabel required>Promised Payment Date</FormLabel>
-              <input
-                type="date"
+              <DateInput
                 value={promiseDate}
-                data-field="promiseDate"
-                onChange={(e) => {
+                onChange={(v) => ((e) => {
                   setPromiseDate(e.target.value);
                   promFE.clearError('promiseDate');
-                }}
-                className={FORM_INPUT_CLS}
+                })({ target: { value: v } } as any)}
+                data-field="promiseDate"
                 required
               />
               <FormError message={promFE.errors.promiseDate} />
@@ -4414,15 +4479,13 @@ export const CollectionsView: React.FC = () => {
 
             <div>
               <FormLabel>Effective From</FormLabel>
-              <input
-                type="date"
+              <DateInput
                 value={assignEffectiveFrom}
-                data-field="assignDate"
-                onChange={(e) => {
+                onChange={(v) => ((e) => {
                   setAssignEffectiveFrom(e.target.value);
                   assignFE.clearError('assignDate');
-                }}
-                className={FORM_INPUT_CLS}
+                })({ target: { value: v } } as any)}
+                data-field="assignDate"
               />
               <FormError message={assignFE.errors.assignDate} />
             </div>

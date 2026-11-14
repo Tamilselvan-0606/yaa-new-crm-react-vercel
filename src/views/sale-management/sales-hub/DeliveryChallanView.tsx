@@ -76,6 +76,7 @@ import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { SearchableSelect } from "../../../components/common/SearchableSelect";
 import { toast } from "../../../utils/toast";
+import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   printBusinessDocument,
@@ -104,7 +105,7 @@ import {
   UUID_REGEX,
 } from "../../../api/commerce/deliveryChallanApi";
 import { customerApi } from "../../../api/commerce/customerApi";
-import { productApi } from "../../../api/commerce/productApi";
+import { productApi, isProductActive } from "../../../api/commerce/productApi";
 import { ApiCustomer } from "../../../api/commerce/customerTypes";
 import { ApiProduct } from "../../../api/commerce/productTypes";
 import {
@@ -151,6 +152,7 @@ import {
   validateLineItems,
 } from "../../../utils/formValidation";
 import { useBatchStock } from "../../../hooks/useBatchStock";
+import { DateInput } from "../../../components/common/DateInput";
 
 const PRODUCT_PICK_MSG = "Please choose the product from the list.";
 const STOCK_REJECTED_MSG =
@@ -309,10 +311,11 @@ const validateChallanForm = (
     // Same per-line formula the form uses for its totals (discount % then GST on the taxable amount).
     const expected = realRows.reduce((sum, it) => {
       const gross = (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0);
-      const taxable = Math.max(
-        0,
-        gross - (gross * (Number(it.discountPercent) || 0)) / 100,
-      );
+      const lineDiscount =
+        Number((it as any).discountAmount) > 0
+          ? Number((it as any).discountAmount)
+          : (gross * (Number(it.discountPercent) || 0)) / 100;
+      const taxable = Math.max(0, gross - lineDiscount);
       return sum + taxable + (taxable * (Number(it.taxPercent) || 0)) / 100;
     }, 0);
     const totalErr = checkTotalConsistency(
@@ -438,14 +441,10 @@ const TAX_RATE_OPTIONS = [
   { label: "Select Tax", rate: 0 },
   { label: "Exempted (0%)", rate: 0 },
   { label: "GST @ 0%", rate: 0 },
-  { label: "GST @ 0.1%", rate: 0.1 },
   { label: "GST @ 0.25%", rate: 0.25 },
-  { label: "GST @ 1.5%", rate: 1.5 },
   { label: "GST @ 3%", rate: 3 },
   { label: "GST @ 5%", rate: 5 },
-  { label: "GST @ 12%", rate: 12 },
   { label: "GST @ 18%", rate: 18 },
-  { label: "GST @ 28%", rate: 28 },
   { label: "GST @ 40%", rate: 40 },
 ];
 
@@ -707,6 +706,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       // 1. First attempt: standard pagination_required: true
       try {
         const res = await productApi.getProducts({
+          activeOnly: true,
           page_no: 1,
           page_size: 100,
           pagination_required: true,
@@ -723,6 +723,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       if (prods.length === 0) {
         try {
           const res2 = await productApi.getProducts({
+            activeOnly: true,
             search: searchQuery?.trim() || undefined,
             page_size: 100,
             pagination_required: false,
@@ -742,7 +743,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
             limit: 100,
             search: searchQuery?.trim() || undefined,
           });
-          const cItems = unpackProducts(cRes);
+          const cItems = unpackProducts(cRes).filter(isProductActive);
           if (cItems.length > 0) {
             prods = cItems.map((cp: any) => ({
               id: cp.id,
@@ -759,37 +760,14 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         }
       }
 
-      // 4. Fourth attempt: fallback to stockApi
-      if (prods.length === 0) {
-        try {
-          const sRes = await stockApi.getStocks({
-            pagination_required: false,
-            page_size: 100,
-          });
-          const rawStocks = unpackProducts(sRes);
-          if (rawStocks.length > 0) {
-            prods = rawStocks.map((s: any) => ({
-              id: s.productId || s.id,
-              productId: s.productId || s.id,
-              productName: s.productName,
-              productCode: s.sku,
-              salePrice: s.unitPrice || 0,
-              unit: s.unit || "PCS",
-              category: s.category || "",
-            }));
-          }
-        } catch (sErr) {
-          console.warn("stockApi load fallback error:", sErr);
-        }
-      }
-
-      if (prods.length > 0) {
+      const activeProds = prods.filter(isProductActive);
+      if (!searchQuery?.trim()) {
+        setLiveProducts(activeProds);
+      } else if (activeProds.length > 0) {
         setLiveProducts((prev) => {
           const map = new Map<string, ApiProduct>();
-          if (searchQuery?.trim()) {
-            prev.forEach((p) => map.set(p.id, p));
-          }
-          prods.forEach((p) => map.set(p.id, p));
+          prev.filter(isProductActive).forEach((p) => map.set(p.id, p));
+          activeProds.forEach((p) => map.set(p.id, p));
           return Array.from(map.values());
         });
       }
@@ -1082,6 +1060,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
     // 1. Live Products from /commerce/products
     liveProducts.forEach((p) => {
+      if (!isProductActive(p)) return;
       const pid = String(p.id || "");
       if (!pid) return;
       let tax = 5;
@@ -1121,49 +1100,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           (p as any).imageUrl ||
           "",
         batches,
+        status: (p as any).status || "Active",
       });
-    });
-
-    // 2. Live Stocks from /commerce/stocks
-    liveStocks.forEach((s) => {
-      const pid = String(s.productId || s.id || "");
-      if (pid && !map.has(pid)) {
-        const sku = s.sku || (s as any).itemCode || "";
-        const name = s.productName || (s as any).name || "Unnamed Product";
-        const batches = getBatchesForProduct(pid, sku, name, s.batches);
-        let tax = 5;
-        if (typeof (s as any).taxPercent === "number") {
-          tax = (s as any).taxPercent;
-        } else if ((s as any).taxRate) {
-          const parsed = parseFloat(
-            String((s as any).taxRate).replace(/[^0-9.]/g, ""),
-          );
-          if (!isNaN(parsed)) tax = parsed;
-        }
-        map.set(pid, {
-          id: pid,
-          productId: pid,
-          productName: name,
-          sku: sku,
-          unitPrice: Number(
-            s.unitPrice ??
-              (s as any).salePrice ??
-              (s as any).sellingPrice ??
-              (s as any).price ??
-              0,
-          ),
-          unit: s.unit || "PCS",
-          taxPercent: tax,
-          hsnCode: (s as any).hsnCode || "",
-          category: s.category || "",
-          imageUrl:
-            (s as any).images?.[0] ||
-            (s as any).image ||
-            (s as any).imageUrl ||
-            "",
-          batches,
-        });
-      }
     });
 
     return attachStockQty(Array.from(map.values()), liveStocks).filter(
@@ -2353,13 +2291,42 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   };
 
   // Export to Excel
-  const handleExportExcel = () => {
-    if (challans.length === 0) {
-      toast.error("No delivery challans to export");
-      return;
-    }
+  // Report pages: same list API + applied filters as fetchDeliveryChallans, any page.
+  const fetchChallansReportPage = async (pageNo: number, size: number) => {
+    const res = await commerceDeliveryChallanApi.getChallans({
+      page_no: pageNo,
+      page_size: size,
+      pagination_required: true,
+      search: appliedSearch.trim() || undefined,
+      status: appliedStatus === "ALL" ? undefined : appliedStatus,
+      period: mapPeriodToApiPeriod(appliedPeriod),
+      sortOrder: "desc",
+    });
+    return {
+      items: Array.isArray(res?.data)
+        ? res.data
+            .map((item) => mapApiDeliveryChallanToRecord(item))
+            .filter((c) => !isMockChallan(c))
+        : [],
+      totalRecords: res?.pagination?.totalRecords,
+      totalPages: res?.pagination?.totalPages,
+      hasNextPage: res?.pagination?.hasNextPage,
+    };
+  };
 
-    const excelRows = challans.map((c) => {
+  const reportTotals = (list: DeliveryChallanRecord[]) => ({
+    totalVal: list.reduce((sum, c) => sum + c.amount, 0),
+    openVal: list
+      .filter((c) => c.status === "Open")
+      .reduce((sum, c) => sum + c.amount, 0),
+  });
+
+  const handleExportExcel = () =>
+    runReport<DeliveryChallanRecord>({
+      label: "delivery challans",
+      load: () => fetchAllReportRows(fetchChallansReportPage),
+      onRows: (rows) => {
+    const excelRows = rows.map((c) => {
       const createdDt = formatDateTime(c.createdAt);
       const convertedAt = resolveDocumentConvertedAt("Challan", c as any);
       const convertedDt = formatDateTime(convertedAt);
@@ -2383,7 +2350,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       filename: `Delivery_Challans_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Delivery Challans",
       title: "YAA CREATIONS CRM - DELIVERY CHALLAN REPORT",
-      subtitle: `Filter: ${appliedPeriod} | Total Records: ${challans.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
+      subtitle: `Filter: ${appliedPeriod} | Total Records: ${rows.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
       columns: [
         {
           header: "Created Date & Time",
@@ -2421,25 +2388,25 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       data: excelRows,
       summaryRow: {
         createdDt: "TOTAL",
-        partyName: `${challans.length} Challans`,
-        amount: challans.reduce((sum, c) => sum + (c.amount || 0), 0),
-        balance: challans.reduce((sum, c) => sum + (c.balance || 0), 0),
+        partyName: `${rows.length} Challans`,
+        amount: rows.reduce((sum, c) => sum + (c.amount || 0), 0),
+        balance: rows.reduce((sum, c) => sum + (c.balance || 0), 0),
       },
     });
 
     toast.success(
-      `Delivery Challans Excel report downloaded (${challans.length} records)!`,
+      `Delivery Challans Excel report downloaded (${rows.length} records)!`,
     );
-  };
+      },
+    });
 
   // Print Delivery Challans Table Report via universal printUtils
-  const handlePrintTableReport = () => {
-    if (challans.length === 0) {
-      toast.error("No delivery challans to print.");
-      return;
-    }
-
-    const printRows = challans.map((c) => {
+  const handlePrintTableReport = () =>
+    runReport<DeliveryChallanRecord>({
+      label: "delivery challans",
+      load: () => fetchAllReportRows(fetchChallansReportPage),
+      onRows: (rows) => {
+    const printRows = rows.map((c) => {
       const createdDt = formatDateTime(c.createdAt);
       const convertedAt = resolveDocumentConvertedAt("Challan", c as any);
       const convertedDt = formatDateTime(convertedAt);
@@ -2457,7 +2424,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
     printTableReport({
       title: "DELIVERY CHALLAN REGISTER",
-      subtitle: `Filter: ${appliedPeriod} | Total Challans: ${challans.length}`,
+      subtitle: `Filter: ${appliedPeriod} | Total Challans: ${rows.length}`,
       columns: [
         {
           header: "Challan No.",
@@ -2508,17 +2475,18 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       data: printRows,
       summaryRow: {
         challanNo: "TOTAL",
-        partyName: `${challans.length} Challans`,
-        amount: metrics.totalVal,
-        balance: metrics.openVal,
+        partyName: `${rows.length} Challans`,
+        amount: reportTotals(rows).totalVal,
+        balance: reportTotals(rows).openVal,
       },
       metrics: [
-        { label: "Total Value", value: metrics.totalVal },
-        { label: "Open Amount", value: metrics.openVal },
-        { label: "Total Challans", value: challans.length },
+        { label: "Total Value", value: reportTotals(rows).totalVal },
+        { label: "Open Amount", value: reportTotals(rows).openVal },
+        { label: "Total Challans", value: rows.length },
       ],
     });
-  };
+      },
+    });
 
   // Metrics
   const metrics = useMemo(() => {
@@ -2867,19 +2835,18 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                   <label className="font-medium text-slate-600 w-24 sm:w-auto text-right">
                     Challan Date
                   </label>
-                  <input
-                    type="date"
+                  <DateInput
                     value={activeTab.formData.invoiceDate}
-                    {...fieldAttr("invoiceDate")}
-                    onChange={(e) => {
+                    onChange={(v) => ((e) => {
                       fe.clearError("invoiceDate");
                       fe.clearError("dueDate");
                       updateActiveTabFormData((prev) => ({
                         ...prev,
                         invoiceDate: e.target.value,
                       }));
-                    }}
-                    className={`w-40 sm:w-48 h-9 px-3 bg-white border hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors ${fe.errors.invoiceDate ? "border-rose-400" : "border-slate-200"}`}
+                    })({ target: { value: v } } as any)}
+                    {...fieldAttr("invoiceDate")}
+                    heightClass="h-9"
                   />
                 </div>
                 {(fe.errors.invoiceDate || fe.errors.dueDate) && (
@@ -2920,7 +2887,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
             )}
             {/* 4. BILLING TABLE (THE GRID - CRM THEME) */}
             <div className="mt-6 overflow-x-auto border border-slate-200 rounded-xl min-h-[380px] pb-36">
-              <table className="w-full text-xs border-collapse">
+              <table className="w-full min-w-[1250px] text-xs border-collapse">
                 {/* Table Header */}
                 <thead>
                   <tr className="bg-[#33077C] text-white font-bold uppercase text-[10.5px] border-b border-[#4309A2] tracking-wider select-none">
@@ -3372,9 +3339,21 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                                                   {p.category}
                                                 </span>
                                               )}
-                                              <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
-                                                Active
-                                              </span>
+                                              {(p as any).status ? (
+                                                <span
+                                                  className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
+                                                    String((p as any).status).toLowerCase() === "inactive"
+                                                      ? "bg-rose-50 text-rose-700 border-rose-200/60"
+                                                      : "bg-emerald-50 text-emerald-700 border-emerald-200/60"
+                                                  }`}
+                                                >
+                                                  {(p as any).status}
+                                                </span>
+                                              ) : (
+                                                <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
+                                                  Active
+                                                </span>
+                                              )}
                                             </div>
                                             <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5 flex-wrap">
                                               <span className="font-mono text-slate-600">
@@ -3531,7 +3510,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                             )}
                         </select>
                       </td>
-                      <td className="py-2.5 px-2">
+                      <td className="py-2.5 px-2 min-w-[120px]">
                         <input
                           type="number"
                           min="0"
@@ -3552,7 +3531,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                         <FormError message={fe.errors[`items.${idx}.price`]} />
                       </td>
                       {columnSettings.showDiscount && (
-                        <td className="py-2.5 px-2">
+                        <td className="py-2.5 px-2 min-w-[200px]">
                           <div className="flex items-center gap-1">
                             <input
                               type="number"
@@ -3584,7 +3563,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                           />
                         </td>
                       )}
-                      <td className="py-2.5 px-2">
+                      <td className="py-2.5 px-2 min-w-[150px]">
                         <select
                           value={rowItem.taxPercent || 0}
                           {...fieldAttr(`items.${idx}.taxPercent`)}
@@ -3603,12 +3582,17 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                               {tx.label}
                             </option>
                           ))}
+                          {!TAX_RATE_OPTIONS.some((tx) => tx.rate === Number(rowItem.taxPercent || 0)) && (
+                            <option value={rowItem.taxPercent}>
+                              GST @ {rowItem.taxPercent}% (old slab)
+                            </option>
+                          )}
                         </select>
                         <FormError
                           message={fe.errors[`items.${idx}.taxPercent`]}
                         />
                       </td>
-                      <td className="py-2.5 px-4 text-right font-bold text-slate-900">
+                      <td className="py-2.5 px-4 min-w-[130px] text-right font-bold text-slate-900">
                         ₹
                         {rowItem.total?.toLocaleString("en-IN", {
                           minimumFractionDigits: 2,
@@ -4916,6 +4900,17 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                     )}
                   </span>
                 </div>
+                {Number(previewChallan.discount) > 0 && (
+                  <div className="flex justify-between">
+                    <span>Discount:</span>
+                    <span className="font-semibold text-emerald-600">
+                      -₹
+                      {Number(previewChallan.discount).toLocaleString("en-IN", {
+                        minimumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                )}
                 {previewChallan.taxAmount !== undefined &&
                   previewChallan.taxAmount > 0 && (
                     <div className="flex justify-between">

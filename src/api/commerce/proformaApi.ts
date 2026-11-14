@@ -1,3 +1,4 @@
+import { resolveGrossSubtotal } from "../../utils/financialCalculations";
 import { baseClient, baseApi } from '../baseApi';
 import { SaleProductItem } from '../../store/useSalesManagementStore';
 import {
@@ -135,7 +136,7 @@ export const mapApiProformaToSaleProforma = (apiP: ApiProformaInvoice): SaleProf
     ? apiP.items.map((it, idx) => mapApiProformaItemToSaleProductItem(it, idx, parentWithGst))
     : [];
 
-  const subtotal = Number(apiP.subtotal ?? apiP.subTotal ?? 0);
+  const subtotal = resolveGrossSubtotal(mappedItems, Number(apiP.subtotal ?? apiP.subTotal ?? 0));
   const totalDiscount = Number(apiP.discount ?? apiP.discountAmount ?? apiP.overallDiscount ?? 0);
 
   // Status mapping

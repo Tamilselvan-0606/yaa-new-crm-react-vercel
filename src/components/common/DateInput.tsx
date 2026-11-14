@@ -7,6 +7,14 @@ interface DateInputProps {
   onChange: (value: string) => void;
   error?: boolean;
   placeholder?: string;
+  /** Height/size classes for the wrapper (default h-11) */
+  heightClass?: string;
+  disabled?: boolean;
+  min?: string;
+  max?: string;
+  title?: string;
+  /** Extra attributes (e.g. data-field for scroll-to-error) go onto the native input. */
+  [attr: `data-${string}`]: string | undefined;
 }
 
 /** Formats yyyy-mm-dd as dd/mm/yyyy without timezone shifts. */
@@ -19,13 +27,25 @@ export const formatDMY = (iso: string): string => {
  * Date field that always displays dd/mm/yyyy regardless of browser locale.
  * A transparent native date input sits on top so the native picker still works.
  */
-export const DateInput: React.FC<DateInputProps> = ({ value, onChange, error, placeholder = 'dd/mm/yyyy' }) => {
+export const DateInput: React.FC<DateInputProps> = ({
+  value,
+  onChange,
+  error,
+  placeholder = 'dd/mm/yyyy',
+  heightClass = 'h-11',
+  disabled,
+  min,
+  max,
+  title,
+  ...rest
+}) => {
   const ref = useRef<HTMLInputElement>(null);
   const display = formatDMY(value);
 
   return (
     <div
-      className={`relative w-full h-11 bg-white rounded-xl transition-all focus-within:ring-4 ${
+      title={title}
+      className={`relative w-full ${heightClass} ${disabled ? 'bg-slate-50 opacity-70' : 'bg-white'} rounded-xl transition-all focus-within:ring-4 ${
         error
           ? 'border border-red-500 focus-within:border-red-500 focus-within:ring-red-500/10'
           : 'border border-slate-200 hover:border-slate-300 focus-within:border-[#4309A2] focus-within:ring-[#4309A2]/10'
@@ -41,6 +61,10 @@ export const DateInput: React.FC<DateInputProps> = ({ value, onChange, error, pl
         ref={ref}
         type="date"
         value={value}
+        disabled={disabled}
+        min={min}
+        max={max}
+        {...rest}
         onChange={(e) => onChange(e.target.value)}
         onClick={() => {
           try {
@@ -49,7 +73,7 @@ export const DateInput: React.FC<DateInputProps> = ({ value, onChange, error, pl
             /* picker unavailable; native behaviour still applies */
           }
         }}
-        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+        className={`absolute inset-0 w-full h-full opacity-0 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
       />
     </div>
   );

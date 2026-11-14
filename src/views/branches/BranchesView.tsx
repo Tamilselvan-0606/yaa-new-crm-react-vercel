@@ -421,7 +421,7 @@ export const BranchesView: React.FC = () => {
           return true;
         })
         .forEach((br) => {
-          branchMap.set(br.name.toLowerCase(), {
+          branchMap.set(br.id || br.code || br.name.toLowerCase(), {
             ...br,
             organizationType: br.organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management'),
           });
@@ -578,7 +578,7 @@ export const BranchesView: React.FC = () => {
       ['district', formData.district, requiredWhen(locationMeta.districtRequired, 'District is required')],
       ['organizationType', formData.organizationType, [required('Branch Type is required')]],
       ['address', formData.address, [required('Address is required')]],
-      ['pincode', formData.pincode, [required('Pincode is required'), pincodeMatching(locationMeta.pincodeRegex, locationMeta.pincodeFormat)]],
+      ['pincode', formData.pincode, [required('Pincode is required'), pincodeMatching()]],
       ['email', formData.email, [required('Email is required'), emailAddress]],
       ['password', formData.password, when(isCreate, [required('Password is required'), minLength(8, 'Password must be at least 8 characters')])],
       ['status', formData.status, [required('Status is required')]],
@@ -1207,6 +1207,21 @@ export const BranchesView: React.FC = () => {
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Select Sub-Organization
               </label>
+              {editingBranch ? (
+                <input
+                  type="text"
+                  readOnly
+                  disabled
+                  value={
+                    formData.subOrganizationId === '__PARENT_ORG__' || !formData.subOrganizationId
+                      ? (defaultOrgName ? `${defaultOrgName} (Main Organization)` : 'Main Organization')
+                      : subOrganizations.find((s) => s.id === formData.subOrganizationId)?.name ||
+                        (loadingSubOrgs ? 'Loading...' : '')
+                  }
+                  title="Sub-organization cannot be modified"
+                  className="w-full h-11 px-4 bg-slate-100/80 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 cursor-not-allowed select-none outline-none"
+                />
+              ) : (
               <CustomSelect
                 value={formData.subOrganizationId}
                 onChange={(val) => {
@@ -1236,6 +1251,7 @@ export const BranchesView: React.FC = () => {
                 placeholder="Select Sub-Organization"
                 error={!!formErrors.subOrganizationId}
               />
+              )}
               {formErrors.subOrganizationId && (
                 <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.subOrganizationId}</p>
               )}
@@ -1386,11 +1402,11 @@ export const BranchesView: React.FC = () => {
               label="Pincode"
               required
               inputMode="numeric"
-              maxLength={10}
+              maxLength={6}
               value={formData.pincode}
               error={formErrors.pincode}
               placeholder="e.g. 600001"
-              onValueChange={(v) => updateField('pincode', cleanPincode(v, locationMeta.pincodeRegex))}
+              onValueChange={(v) => updateField('pincode', cleanPincode(v))}
             />
             {/* Address */}
             <div className="md:col-span-3">

@@ -1,3 +1,4 @@
+import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
 import { CommonTableHead } from "../../../components/common/CommonTableHead";
 import { CustomerSearchableSelect } from "../../../components/common/paginated-select";
@@ -110,6 +111,7 @@ import {
   commerceInvoiceApi,
   mapApiInvoiceToSaleTransaction,
 } from "../../../api/commerce/invoiceApi";
+import { DateInput } from "../../../components/common/DateInput";
 
 // Helper for DD/MM/YYYY <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -451,6 +453,50 @@ export const PaymentInView: React.FC = () => {
       selectedFirm,
     ],
   );
+
+  // Report: one page of the same list API with the applied filters
+  const fetchPaymentInReportPage = async (page: number, size: number) => {
+    const params: PaymentInFilterParams = {
+      page_no: page,
+      page_size: size,
+      pagination_required: true,
+      sortOrder: "desc",
+    };
+    if (appliedSearch) params.search = appliedSearch;
+    if (startDate) params.from = startDate;
+    if (endDate) params.to = endDate;
+    if (
+      selectedPeriod &&
+      selectedPeriod !== "All Time" &&
+      selectedPeriod !== "Custom"
+    ) {
+      const pMap: Record<string, string> = {
+        Today: "today",
+        "This Week": "this_week",
+        "This Month": "this_month",
+        "Last Month": "last_month",
+        "This Quarter": "this_quarter",
+        "This Year": "this_year",
+      };
+      if (pMap[selectedPeriod]) params.period = pMap[selectedPeriod];
+    }
+    if (selectedPaymentType && selectedPaymentType !== "All") {
+      params.paymentType = selectedPaymentType;
+    }
+    if (selectedFirm && selectedFirm !== "All" && UUID_REGEX.test(selectedFirm)) {
+      params.customerId = selectedFirm;
+    }
+    const res = await commercePaymentInApi.getPaymentIns(params);
+    return {
+      items:
+        res?.success && Array.isArray(res.data)
+          ? res.data.map(mapApiPaymentInToSalePaymentIn)
+          : [],
+      totalRecords: res?.pagination?.totalRecords,
+      totalPages: res?.pagination?.totalPages,
+      hasNextPage: res?.pagination?.hasNextPage,
+    };
+  };
 
   // Load Customers for filter dropdown (Runs once on mount)
   const hasLoadedCustomersRef = useRef(false);
@@ -1425,13 +1471,13 @@ export const PaymentInView: React.FC = () => {
   }, [paymentIns, currentPage, pageSize]);
 
   // Export to Excel
-  const handleExportCSV = () => {
-    if (paymentIns.length === 0) {
-      toast.error("No payment records to export");
-      return;
-    }
+  const handleExportCSV = () =>
+    runReport({
+      label: "payment receipts",
+      load: () => fetchAllReportRows(fetchPaymentInReportPage),
+      onRows: (rows) => {
 
-    const excelRows = paymentIns.map((p, idx) => ({
+    const excelRows = rows.map((p, idx) => ({
       srNo: idx + 1,
       receiptNo: p.receiptNo,
       date: isoToDdmmyyyy(p.date),
@@ -1447,7 +1493,7 @@ export const PaymentInView: React.FC = () => {
       filename: `Payment_In_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Payment Receipts",
       title: "YAA CREATIONS CRM - PAYMENT-IN REPORT",
-      subtitle: `Filter: ${selectedPeriod} | Total Records: ${paymentIns.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
+      subtitle: `Filter: ${selectedPeriod} | Total Records: ${rows.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
       columns: [
         { header: "#", key: "srNo", align: "center", width: 8 },
         { header: "Date", key: "date", align: "center", width: 15 },
@@ -1478,24 +1524,28 @@ export const PaymentInView: React.FC = () => {
       data: excelRows,
       summaryRow: {
         srNo: "TOTAL",
-        partyName: `${paymentIns.length} Receipts`,
-        receivedAmount: totalAmount,
+        partyName: `${rows.length} Receipts`,
+        receivedAmount: rows.reduce(
+          (acc, p) => acc + (Number(p.receivedAmount) || 0),
+          0,
+        ),
       },
     });
 
     toast.success(
-      `Payment-In Excel report downloaded (${paymentIns.length} records)!`,
+      `Payment-In Excel report downloaded (${rows.length} records)!`,
     );
-  };
+      },
+    });
 
   // Print Payment-In Table Report via universal printUtils
-  const handlePrintTableReport = () => {
-    if (paymentIns.length === 0) {
-      toast.error("No payment records to print.");
-      return;
-    }
+  const handlePrintTableReport = () =>
+    runReport({
+      label: "payment receipts",
+      load: () => fetchAllReportRows(fetchPaymentInReportPage),
+      onRows: (rows) => {
 
-    const printRows = paymentIns.map((p, idx) => ({
+    const printRows = rows.map((p, idx) => ({
       index: idx + 1,
       receiptNo: p.receiptNo || "-",
       paymentDate: p.paymentDate,
@@ -1507,7 +1557,7 @@ export const PaymentInView: React.FC = () => {
 
     printTableReport({
       title: "PAYMENT-IN TRANSACTIONS REPORT",
-      subtitle: `Total Payments: ${paymentIns.length}`,
+      subtitle: `Total Payments: ${rows.length}`,
       columns: [
         { header: "#", key: "index", align: "center", width: "6%" },
         {
@@ -1541,14 +1591,15 @@ export const PaymentInView: React.FC = () => {
       data: printRows,
       summaryRow: {
         receiptNo: "TOTAL",
-        partyName: `${paymentIns.length} Receipts`,
-        receivedAmount: paymentIns.reduce(
+        partyName: `${rows.length} Receipts`,
+        receivedAmount: rows.reduce(
           (acc, p) => acc + (Number(p.receivedAmount) || 0),
           0,
         ),
       },
     });
-  };
+      },
+    });
 
   const handleResetFilters = () => {
     setPendingSearch("");
@@ -2259,15 +2310,13 @@ export const PaymentInView: React.FC = () => {
                 {/* Date */}
                 <div>
                   <FormLabel required>Payment Date</FormLabel>
-                  <input
-                    type="date"
+                  <DateInput
                     value={formDate}
-                    data-field="date"
-                    onChange={(e) => {
+                    onChange={(v) => ((e) => {
                       setFormDate(e.target.value);
                       payFE.clearError("date");
-                    }}
-                    className={FORM_INPUT_CLS}
+                    })({ target: { value: v } } as any)}
+                    data-field="date"
                   />
                   <FormError message={payFE.errors.date} />
                 </div>

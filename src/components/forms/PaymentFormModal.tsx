@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from 'react';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { PaymentSchema, PaymentFormData } from '../../schemas';
-import { PaymentItem } from '../../types';
-import { Modal } from '../common/Modal';
-import { useAuth } from '../../context/AuthContext';
-import { useCreatePlatformPaymentMutation, clientProductApi } from '../../api';
+import React, { useEffect, useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { PaymentSchema, PaymentFormData } from "../../schemas";
+import { PaymentItem } from "../../types";
+import { Modal } from "../common/Modal";
+import { DateInput } from "../common/DateInput";
+import { useAuth } from "../../context/AuthContext";
+import { useCreatePlatformPaymentMutation, clientProductApi } from "../../api";
 
 interface PaymentFormModalProps {
   isOpen: boolean;
@@ -21,8 +22,11 @@ export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
   onSuccess,
 }) => {
   const { showToast } = useAuth();
-  const [createPayment, { isLoading: isSubmittingPayment }] = useCreatePlatformPaymentMutation();
-  const [products, setProducts] = useState<Array<{ id: string; name: string }>>([]);
+  const [createPayment, { isLoading: isSubmittingPayment }] =
+    useCreatePlatformPaymentMutation();
+  const [products, setProducts] = useState<Array<{ id: string; name: string }>>(
+    [],
+  );
 
   useEffect(() => {
     if (!isOpen) return;
@@ -33,7 +37,7 @@ export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
           setProducts(res.data);
         }
       } catch (err) {
-        console.warn('Failed to fetch products for payment form:', err);
+        console.warn("Failed to fetch products for payment form:", err);
       }
     };
     fetchProducts();
@@ -44,26 +48,27 @@ export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
     handleSubmit,
     reset,
     watch,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<PaymentFormData>({
     resolver: zodResolver(PaymentSchema),
     defaultValues: {
-      customerId: 'cust_direct_entry',
-      customerName: '',
-      productOrService: '',
-      plan: 'Standard Tier',
+      customerId: "cust_direct_entry",
+      customerName: "",
+      productOrService: "",
+      plan: "Standard Tier",
       amount: 0,
-      dueDate: new Date().toISOString().split('T')[0],
-      paymentDate: new Date().toISOString().split('T')[0],
-      paymentMethod: 'Bank Transfer',
-      status: 'Paid',
-      notes: '',
+      dueDate: new Date().toISOString().split("T")[0],
+      paymentDate: new Date().toISOString().split("T")[0],
+      paymentMethod: "Bank Transfer",
+      status: "Paid",
+      notes: "",
     },
   });
 
   // When products are fetched and no product is selected yet, default to first real product
   useEffect(() => {
-    if (products.length > 0 && !watch('productOrService')) {
+    if (products.length > 0 && !watch("productOrService")) {
       reset((prev) => ({
         ...prev,
         productOrService: products[0].name,
@@ -73,33 +78,35 @@ export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
 
   const onSubmit = async (data: PaymentFormData) => {
     try {
-      const selectedProd = products.find(
-        (p) => p.name === data.productOrService || p.id === data.productOrService
-      );
-
       await createPayment({
         customerName: data.customerName,
         customerId: data.customerId,
         amount: Number(data.amount) || 0,
         productOrService: data.productOrService,
         productName: data.productOrService,
-        productId: selectedProd?.id,
         plan: data.plan,
         paymentMethod: data.paymentMethod,
         status: data.status,
         dueDate: data.dueDate,
-        paymentDate: data.status === 'Paid' ? (data.paymentDate || new Date().toISOString().split('T')[0]) : undefined,
+        paymentDate:
+          data.status === "Paid"
+            ? data.paymentDate || new Date().toISOString().split("T")[0]
+            : undefined,
         referenceNumber: (data as any).transactionId || undefined,
         notes: data.notes,
       }).unwrap();
 
-      showToast('success', 'Payment Recorded', `Payment recorded successfully for ${data.customerName}.`);
+      showToast(
+        "success",
+        "Payment Recorded",
+        `Payment recorded successfully for ${data.customerName}.`,
+      );
       reset();
       if (onSuccess) onSuccess();
       onClose();
     } catch (e: any) {
-      const msg = e?.data?.message || e?.message || 'Failed to record payment.';
-      showToast('error', 'Error', msg);
+      const msg = e?.data?.message || e?.message || "Failed to record payment.";
+      showToast("error", "Error", msg);
     }
   };
 
@@ -108,7 +115,7 @@ export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
       isOpen={isOpen}
       onClose={onClose}
       title="Record Payment / Create Invoice"
-      subtitle="React Hook Form + Zod Financial Ledger"
+      subtitle="Log a customer payment and add it to the payment ledger"
     >
       <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -117,14 +124,20 @@ export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
               Customer / Company Name <span className="text-red-500">*</span>
             </label>
             <input
-              {...register('customerName')}
+              {...register("customerName")}
               type="text"
               placeholder="e.g. Apex Global Solutions"
               className={`w-full px-3 py-2 text-xs border rounded-md outline-none transition-colors ${
-                errors.customerName ? 'border-red-500' : 'border-[#E2E8F0] focus:border-[#33077C]'
+                errors.customerName
+                  ? "border-red-500"
+                  : "border-[#E2E8F0] focus:border-[#33077C]"
               }`}
             />
-            {errors.customerName && <p className="text-[10px] text-red-500 mt-1">{errors.customerName.message}</p>}
+            {errors.customerName && (
+              <p className="text-[10px] text-red-500 mt-1">
+                {errors.customerName.message}
+              </p>
+            )}
           </div>
 
           <div>
@@ -132,23 +145,31 @@ export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
               Amount (₹) <span className="text-red-500">*</span>
             </label>
             <input
-              {...register('amount', { valueAsNumber: true })}
+              {...register("amount", { valueAsNumber: true })}
               type="number"
               step="0.01"
               placeholder="1499.00"
               className={`w-full px-3 py-2 text-xs border rounded-md outline-none transition-colors ${
-                errors.amount ? 'border-red-500' : 'border-[#E2E8F0] focus:border-[#33077C]'
+                errors.amount
+                  ? "border-red-500"
+                  : "border-[#E2E8F0] focus:border-[#33077C]"
               }`}
             />
-            {errors.amount && <p className="text-[10px] text-red-500 mt-1">{errors.amount.message}</p>}
+            {errors.amount && (
+              <p className="text-[10px] text-red-500 mt-1">
+                {errors.amount.message}
+              </p>
+            )}
           </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Product / Service</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Product / Service
+            </label>
             <select
-              {...register('productOrService')}
+              {...register("productOrService")}
               className="w-full px-3 py-2 text-xs border border-[#E2E8F0] rounded-md outline-none focus:border-[#33077C] bg-white"
             >
               {products.length > 0 ? (
@@ -164,9 +185,11 @@ export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Plan Tier</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Plan Tier
+            </label>
             <input
-              {...register('plan')}
+              {...register("plan")}
               type="text"
               placeholder="e.g. Enterprise Tier"
               className="w-full px-3 py-2 text-xs border border-[#E2E8F0] rounded-md outline-none focus:border-[#33077C]"
@@ -176,9 +199,11 @@ export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Payment Method</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Payment Method
+            </label>
             <select
-              {...register('paymentMethod')}
+              {...register("paymentMethod")}
               className="w-full px-3 py-2 text-xs border border-[#E2E8F0] rounded-md outline-none focus:border-[#33077C] bg-white"
             >
               <option value="Stripe">Stripe</option>
@@ -190,9 +215,11 @@ export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Payment Status</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Payment Status
+            </label>
             <select
-              {...register('status')}
+              {...register("status")}
               className="w-full px-3 py-2 text-xs border border-[#E2E8F0] rounded-md outline-none focus:border-[#33077C] bg-white"
             >
               <option value="Paid">Paid</option>
@@ -203,19 +230,29 @@ export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Due Date</label>
-            <input
-              {...register('dueDate')}
-              type="date"
-              className="w-full px-3 py-2 text-xs border border-[#E2E8F0] rounded-md outline-none focus:border-[#33077C] bg-white"
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Due Date
+            </label>
+            <DateInput
+              value={watch("dueDate") || ""}
+              onChange={(v) =>
+                setValue("dueDate", v, {
+                  shouldDirty: true,
+                  shouldValidate: true,
+                })
+              }
+              error={!!errors.dueDate}
+              heightClass="h-[34px]"
             />
           </div>
         </div>
 
         <div>
-          <label className="block text-xs font-semibold text-slate-700 mb-1">Internal Reference / Notes</label>
+          <label className="block text-xs font-semibold text-slate-700 mb-1">
+            Internal Reference / Notes
+          </label>
           <textarea
-            {...register('notes')}
+            {...register("notes")}
             rows={2}
             placeholder="Invoice ID, transaction confirmation, or billing details..."
             className="w-full px-3 py-2 text-xs border border-[#E2E8F0] rounded-md outline-none focus:border-[#33077C]"
@@ -235,7 +272,11 @@ export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
             disabled={isSubmitting || isSubmittingPayment}
             className="w-full sm:w-auto h-11 px-6 bg-[#4309A2] hover:bg-[#e67e00] text-white rounded-xl text-sm font-bold transition-all shadow-md shadow-orange-500/20 hover:scale-[1.02] active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
           >
-            <span>{isSubmitting || isSubmittingPayment ? 'Recording...' : 'Record Payment'}</span>
+            <span>
+              {isSubmitting || isSubmittingPayment
+                ? "Recording..."
+                : "Record Payment"}
+            </span>
           </button>
         </div>
       </form>

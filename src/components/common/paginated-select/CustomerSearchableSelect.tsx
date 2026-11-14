@@ -15,11 +15,13 @@ export interface CustomerSearchableSelectProps {
   } | null;
   onAddNewCustomer?: () => void;
   allowNone?: boolean;
+  noneLabel?: string;
   disabled?: boolean;
   placeholder?: string;
   className?: string;
   triggerClassName?: string;
   size?: 'sm' | 'md' | 'lg';
+  allowClear?: boolean;
 }
 
 export const CustomerSearchableSelect: React.FC<CustomerSearchableSelectProps> = ({
@@ -28,11 +30,13 @@ export const CustomerSearchableSelect: React.FC<CustomerSearchableSelectProps> =
   selectedCustomer,
   onAddNewCustomer,
   allowNone = false,
+  noneLabel = 'Select',
   disabled = false,
   placeholder = 'Select or search customer...',
   className = '',
   triggerClassName = '',
   size = 'md',
+  allowClear = true,
 }) => {
   const fetchPage = useCallback(
     async ({ page, limit, search }: { page: number; limit: number; search: string }) => {
@@ -42,9 +46,12 @@ export const CustomerSearchableSelect: React.FC<CustomerSearchableSelectProps> =
           page_size: limit,
           pagination_required: true,
           search: search || undefined,
+          status: 'Active',
         });
 
-        const data = res?.data || [];
+        const data = (res?.data || []).filter(
+          (c: ApiCustomer) => !c.status || String(c.status).toLowerCase() === 'active',
+        );
         const pagination = res?.pagination;
 
         return {
@@ -108,11 +115,11 @@ export const CustomerSearchableSelect: React.FC<CustomerSearchableSelectProps> =
     return undefined;
   }, [value, options, selectedCustomer]);
 
-  // Static options (e.g. None / Unassigned)
+  // Static options (e.g. Select)
   const staticOptions: SearchableOption[] = useMemo(() => {
     if (!allowNone) return [];
-    return [{ value: '', label: 'None / Unassigned' }];
-  }, [allowNone]);
+    return [{ value: '', label: noneLabel }];
+  }, [allowNone, noneLabel]);
 
   return (
     <SearchableSelect
@@ -135,6 +142,7 @@ export const CustomerSearchableSelect: React.FC<CustomerSearchableSelectProps> =
       className={className}
       triggerClassName={triggerClassName}
       size={size}
+      allowClear={allowClear}
     />
   );
 };

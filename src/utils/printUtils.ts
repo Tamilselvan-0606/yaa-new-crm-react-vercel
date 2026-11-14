@@ -3,6 +3,7 @@ import { pdf } from '@react-pdf/renderer';
 import { toast } from './toast';
 import { BusinessPDFDocument } from '../components/common/pdf/BusinessPDFDocument';
 import { TableReportPDF } from '../components/common/pdf/TableReportPDF';
+import { PaymentReceiptPDF, PaymentReceiptOptions } from '../components/common/pdf/PaymentReceiptPDF';
 import { fetchOrganizationDocumentProfile } from '../hooks/useCompanyDocumentProfile';
 
 /**
@@ -909,6 +910,45 @@ export async function downloadBusinessDocument(
   link.href = url;
   const safeDocNo = (options.docNo || options.docTypeTitle).replace(/[^a-zA-Z0-9_-]/g, '_');
   link.download = filename || `${safeDocNo}.pdf`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+}
+
+/**
+ * Payment receipt PDF: dedicated receipt layout (no qty / rate / tax columns), company details from the organization profile.
+ */
+export async function downloadPaymentReceipt(rawOptions: PaymentReceiptOptions, filename?: string): Promise<void> {
+  const profile = await withCompanyProfile({
+    docTypeTitle: 'PAYMENT RECEIPT',
+    docNo: rawOptions.receiptNo,
+    docDate: rawOptions.paymentDate,
+    partyName: rawOptions.customerName,
+    grandTotal: rawOptions.totalAmount,
+    companyName: rawOptions.companyName,
+    companySubtitle: rawOptions.companySubtitle,
+    companyAddress: rawOptions.companyAddress,
+    companyGstin: rawOptions.companyGstin,
+    companyPhone: rawOptions.companyPhone,
+    companyEmail: rawOptions.companyEmail,
+  });
+  const options: PaymentReceiptOptions = {
+    ...rawOptions,
+    paymentDate: formatPdfDate(rawOptions.paymentDate),
+    dueDate: rawOptions.dueDate ? formatPdfDate(rawOptions.dueDate) : undefined,
+    companyName: profile.companyName,
+    companySubtitle: profile.companySubtitle,
+    companyAddress: profile.companyAddress,
+    companyGstin: profile.companyGstin,
+    companyPhone: profile.companyPhone,
+    companyEmail: profile.companyEmail,
+  };
+  const blob = await pdf(React.createElement(PaymentReceiptPDF, { options }) as any).toBlob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename || `Receipt_${rawOptions.receiptNo.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

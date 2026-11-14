@@ -1,3 +1,4 @@
+import { resolveGrossSubtotal } from "../../utils/financialCalculations";
 import { baseClient, baseApi } from '../baseApi';
 import { SaleProductItem } from '../../store/useSalesManagementStore';
 import {
@@ -134,7 +135,7 @@ export const mapApiSaleOrderToSaleOrderRecord = (apiO: ApiSaleOrder): SaleOrderR
     ? apiO.items.map((it, idx) => mapApiSaleOrderItemToSaleProductItem(it, idx, parentWithGst))
     : [];
 
-  const subtotal = Number(apiO.subtotal ?? apiO.subTotal ?? 0);
+  const subtotal = resolveGrossSubtotal(items, Number(apiO.subtotal ?? apiO.subTotal ?? 0));
   const discount = Number(apiO.discount ?? apiO.discountAmount ?? 0);
   const roundOff = Number(apiO.roundOff ?? 0);
   const amount = Number(apiO.amount ?? apiO.grandTotal ?? subtotal - discount + totalTax + roundOff);

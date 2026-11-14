@@ -1190,7 +1190,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                               <span className="font-bold text-slate-900 text-xs sm:text-[13px] tracking-tight">
                                 {lead.company || lead.name}
                               </span>
-                              <span className="text-xs font-semibold text-orange-600">
+                              <span className="text-xs font-semibold text-[#33077C]">
                                 (
                                 {formatDisplayId(
                                   "LD",

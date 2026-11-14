@@ -1,3 +1,4 @@
+import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
 import { useCompanyDocumentProfile } from "../../../hooks/useCompanyDocumentProfile";
 import { CommonTableHead } from "../../../components/common/CommonTableHead";
@@ -118,6 +119,7 @@ import {
   type FieldErrors,
 } from "../../../utils/formValidation";
 import { FormError } from "../../../components/common/FormError";
+import { DateInput } from "../../../components/common/DateInput";
 
 // Date format helper
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -398,6 +400,46 @@ export const SalesReturnView: React.FC = () => {
       selectedFirm,
     ],
   );
+
+  // Report: one page of the same list API with the applied filters
+  const fetchSalesReturnReportPage = async (page: number, size: number) => {
+    const params: SalesReturnFilterParams = {
+      page_no: page,
+      page_size: size,
+      pagination_required: true,
+      sortOrder: "desc",
+    };
+    if (appliedSearch) params.search = appliedSearch;
+    if (startDate) params.from = startDate;
+    if (endDate) params.to = endDate;
+    if (selectedPeriod && selectedPeriod !== "All Time") {
+      const pMap: Record<string, string> = {
+        Today: "today",
+        "This Week": "this_week",
+        "This Month": "this_month",
+        "Last Month": "last_month",
+        "This Quarter": "this_quarter",
+        "This Financial Year": "this_year",
+      };
+      if (pMap[selectedPeriod]) params.period = pMap[selectedPeriod];
+    }
+    if (selectedStatusFilter && selectedStatusFilter !== "All") {
+      params.status = selectedStatusFilter;
+    }
+    if (selectedFirm !== "ALL FIRMS" && UUID_REGEX.test(selectedFirm)) {
+      params.customerId = selectedFirm;
+    }
+    const res = await commerceSalesReturnApi.getSalesReturns(params);
+    return {
+      items:
+        res?.success && Array.isArray(res.data)
+          ? res.data.map(mapApiSalesReturnToSalesReturn)
+          : [],
+      totalRecords: res?.pagination?.totalRecords,
+      totalPages: res?.pagination?.totalPages,
+      hasNextPage: res?.pagination?.hasNextPage,
+    };
+  };
 
   // Load Customers for firm filter (Runs once on mount)
   const hasLoadedCustomersRef = useRef(false);
@@ -683,13 +725,55 @@ export const SalesReturnView: React.FC = () => {
   }, [filteredTransactions]);
 
   // Real Excel Report Generator
-  const handleExportExcel = () => {
-    if (filteredTransactions.length === 0) {
-      toast.info("No transactions to export.");
-      return;
-    }
+  const handleExportExcel = () =>
+    runReport({
+      label: "sales returns",
+      load: () => fetchAllReportRows(fetchSalesReturnReportPage),
+      onRows: (returns) => {
+    // Same ledger rows / search / firm filtering as the on-screen table
+    const reportTransactions = returns
+      .map<UnifiedTransactionRecord>((ret, index) => {
+        const tot = Number(ret?.returnAmount ?? 0) || 0;
+        const paid = Number(ret?.refundAmount ?? 0) || 0;
+        return {
+          id: ret?.id || `ret_${index}`,
+          date: ret?.returnDate || new Date().toISOString().split("T")[0],
+          refNo: ret?.returnNo || String(index + 1),
+          partyName: ret?.customerName || "Customer",
+          categoryName: ret?.items?.[0]?.productName || "General Goods",
+          type: "Sales Return",
+          total: tot,
+          receivedPaid: paid,
+          balance: Math.max(0, tot - paid),
+          status: ret?.returnStatus || "Approved",
+          originalReturn: ret,
+        };
+      })
+      .sort((a, b) => (b.date > a.date ? 1 : -1))
+      .filter((tx) => {
+        const q = appliedSearch.toLowerCase().trim();
+        const matchesSearch =
+          !q ||
+          tx.partyName.toLowerCase().includes(q) ||
+          tx.refNo.toLowerCase().includes(q) ||
+          tx.type.toLowerCase().includes(q);
+        let matchesFirm = true;
+        if (selectedFirm !== "ALL FIRMS") {
+          const found = customers.find((c) => c.id === selectedFirm);
+          matchesFirm =
+            !found || tx.partyName.toLowerCase() === found.name.toLowerCase();
+        }
+        return matchesSearch && matchesFirm;
+      });
+    const reportTotals = reportTransactions.reduce(
+      (acc, tx) => ({
+        totalSum: acc.totalSum + tx.total,
+        balanceSum: acc.balanceSum + tx.balance,
+      }),
+      { totalSum: 0, balanceSum: 0 },
+    );
 
-    const excelRows = filteredTransactions.map((tx, idx) => ({
+    const excelRows = reportTransactions.map((tx, idx) => ({
       srNo: idx + 1,
       date: isoToDdmmyyyy(tx.date),
       refNo: tx.refNo || "-",
@@ -705,7 +789,7 @@ export const SalesReturnView: React.FC = () => {
       filename: `Sales_Return_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Sales Return",
       title: "YAA CREATIONS CRM - SALES RETURN & TRANSACTION REPORT",
-      subtitle: `Filter: ${selectedPeriod} | Total Records: ${filteredTransactions.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
+      subtitle: `Filter: ${selectedPeriod} | Total Records: ${reportTransactions.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
       columns: [
         { header: "#", key: "srNo", align: "center", width: 8 },
         { header: "Date", key: "date", align: "center", width: 15 },
@@ -743,16 +827,17 @@ export const SalesReturnView: React.FC = () => {
       data: excelRows,
       summaryRow: {
         srNo: "TOTAL",
-        partyName: `${filteredTransactions.length} Transactions`,
-        total: ledgerTotals.totalSum,
-        balance: ledgerTotals.balanceSum,
+        partyName: `${reportTransactions.length} Transactions`,
+        total: reportTotals.totalSum,
+        balance: reportTotals.balanceSum,
       },
     });
 
     toast.success(
-      `Excel report downloaded successfully (${filteredTransactions.length} records)!`,
+      `Excel report downloaded successfully (${reportTransactions.length} records)!`,
     );
-  };
+      },
+    });
 
   // Pagination
   const totalPages = Math.ceil(filteredTransactions.length / pageSize) || 1;
@@ -1999,15 +2084,13 @@ export const SalesReturnView: React.FC = () => {
 
               <div>
                 <FormLabel required>Return Date</FormLabel>
-                <input
-                  type="date"
+                <DateInput
                   value={returnDate}
-                  data-field="returnDate"
-                  onChange={(e) => {
+                  onChange={(v) => ((e) => {
                     setReturnDate(e.target.value);
                     retFE.clearError("returnDate");
-                  }}
-                  className={FORM_INPUT_CLS}
+                  })({ target: { value: v } } as any)}
+                  data-field="returnDate"
                 />
                 <FormError message={retFE.errors.returnDate} />
               </div>
@@ -2049,7 +2132,7 @@ export const SalesReturnView: React.FC = () => {
                 </span>
               </div>
               <div className="overflow-x-auto max-h-60">
-                <table className="w-full text-left text-xs">
+                <table className="w-full min-w-[640px] text-left text-xs">
                   <thead className="bg-[#33077C] text-white font-bold uppercase text-[11px] tracking-wider">
                     <tr>
                       <th className="p-2.5 text-white">Item Name</th>

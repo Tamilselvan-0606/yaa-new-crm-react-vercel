@@ -1,3 +1,4 @@
+import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { PhoneField } from "../../../components/common/PhoneField";
 import {
   LocationFields,
@@ -154,6 +155,7 @@ import {
 
 import { formatDate } from "../utils/dateUtils";
 import { evictApiCache } from "../../../api/queryCache";
+import { DateInput } from "../../../components/common/DateInput";
 
 export const CustomerView: React.FC = () => {
   const navigate = useNavigate();
@@ -1670,6 +1672,10 @@ export const CustomerView: React.FC = () => {
                 setIsDetailModalOpen(true);
                 setReopenDetailAfterEdit(false);
               }
+              // Refetch the list so the server's view of the edited customer is shown
+              evictApiCache(["Customer", "SalesRepresentative"]);
+              lastFetchKeyRef.current = null;
+              loadCustomers(true);
               return;
             }
           } catch (apiErr: any) {
@@ -1834,6 +1840,9 @@ export const CustomerView: React.FC = () => {
             prev ? { ...prev, status: newStatus } : null,
           );
         }
+        evictApiCache(["Customer", "SalesRepresentative"]);
+        lastFetchKeyRef.current = null;
+        loadCustomers(true);
       } catch (apiErr: any) {
         toast.error(
           getApiErrorMessage(
@@ -2068,14 +2077,49 @@ export const CustomerView: React.FC = () => {
     }
   };
 
-  // Export to Excel
-  const handleExportExcel = () => {
-    if (filteredCustomers.length === 0) {
-      toast.error("No customers to export");
-      return;
-    }
+  // Report: one page of the same customer list API with the applied filters
+  const fetchCustomerReportPage = async (page: number, size: number) => {
+    const res = await customerApi.getCustomers({
+      page_no: page,
+      page_size: size,
+      pagination_required: true,
+      search: appliedSearch.trim() || undefined,
+      sortOrder: "desc",
+      status: appliedStatus.toUpperCase() !== "ALL" ? appliedStatus : undefined,
+      customerType:
+        appliedType.toUpperCase() !== "ALL" ? appliedType : undefined,
+    });
+    return {
+      items:
+        res && res.success && Array.isArray(res.data)
+          ? res.data.map((c) => mapApiCustomerToSalesCustomer(c))
+          : [],
+      totalRecords: res?.pagination?.totalRecords,
+      totalPages: res?.pagination?.totalPages,
+      hasNextPage: res?.pagination?.hasNextPage,
+    };
+  };
 
-    const excelRows = filteredCustomers.map((c, idx) => {
+  // Same outstanding filter as the on-screen list
+  const applyOutstandingFilter = (list: SalesCustomer[]) => {
+    if (appliedOutstanding === "With Outstanding") {
+      return list.filter((c) => (c.outstandingAmount || 0) > 0);
+    }
+    if (appliedOutstanding === "Zero Balance") {
+      return list.filter((c) => (c.outstandingAmount || 0) === 0);
+    }
+    return list;
+  };
+
+  // Export to Excel
+  const handleExportExcel = () =>
+    runReport({
+      label: "customers",
+      load: async () =>
+        applyOutstandingFilter(await fetchAllReportRows(fetchCustomerReportPage)),
+      onRows: (reportCustomers) => {
+
+    const excelRows = reportCustomers.map((c, idx) => {
       return {
         sNo: idx + 1,
         customerCode: c.customerCode,
@@ -2098,7 +2142,7 @@ export const CustomerView: React.FC = () => {
       filename: `Customers_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Customers ",
       title: "YAA CREATIONS CRM - CUSTOMER  DIRECTORY",
-      subtitle: `Total Customers: ${filteredCustomers.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
+      subtitle: `Total Customers: ${reportCustomers.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: "#", key: "sNo", align: "center", width: 8 },
         {
@@ -2157,24 +2201,26 @@ export const CustomerView: React.FC = () => {
       data: excelRows,
       summaryRow: {
         sNo: "TOTAL",
-        name: `${filteredCustomers.length} Customers`,
+        name: `${reportCustomers.length} Customers`,
         outstanding: summary.totalReceivable,
       },
     });
 
     toast.success(
-      `Customers Excel report downloaded (${filteredCustomers.length} records)!`,
+      `Customers Excel report downloaded (${reportCustomers.length} records)!`,
     );
-  };
+      },
+    });
 
   // Print Customers Table Report via universal printUtils
-  const handlePrintTableReport = () => {
-    if (filteredCustomers.length === 0) {
-      toast.error("No customers to print.");
-      return;
-    }
+  const handlePrintTableReport = () =>
+    runReport({
+      label: "customers",
+      load: async () =>
+        applyOutstandingFilter(await fetchAllReportRows(fetchCustomerReportPage)),
+      onRows: (reportCustomers) => {
 
-    const printRows = filteredCustomers.map((c, idx) => {
+    const printRows = reportCustomers.map((c, idx) => {
       return {
         sNo: idx + 1,
         customerCode: c.customerCode,
@@ -2194,7 +2240,7 @@ export const CustomerView: React.FC = () => {
 
     printTableReport({
       title: "CUSTOMER DIRECTORY & BALANCE REPORT",
-      subtitle: `Total Customers: ${filteredCustomers.length}`,
+      subtitle: `Total Customers: ${reportCustomers.length}`,
       columns: [
         { header: "#", key: "sNo", align: "center", width: "4%" },
         {
@@ -2237,15 +2283,16 @@ export const CustomerView: React.FC = () => {
       data: printRows,
       summaryRow: {
         sNo: "TOTAL",
-        name: `${filteredCustomers.length} Customers`,
+        name: `${reportCustomers.length} Customers`,
         outstanding: summary.totalReceivable,
       },
       metrics: [
         { label: "Total Receivable", value: summary.totalReceivable },
-        { label: "Total Customers", value: filteredCustomers.length },
+        { label: "Total Customers", value: reportCustomers.length },
       ],
     });
-  };
+      },
+    });
 
   return (
     <div className="space-y-5 pb-16 font-sans">
@@ -2880,7 +2927,7 @@ export const CustomerView: React.FC = () => {
                   1. Basic Information
                 </span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-1">
                 <div>
                   <FormLabel required>Full Name / Contact Person</FormLabel>
                   <input
@@ -3008,8 +3055,8 @@ export const CustomerView: React.FC = () => {
                   2. Address & Location
                 </span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 pt-1">
-                <div className="sm:col-span-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
+                <div className="sm:col-span-2 lg:col-span-4">
                   <FormLabel>Address</FormLabel>
                   <textarea
                     rows={3}
@@ -3023,7 +3070,8 @@ export const CustomerView: React.FC = () => {
                       }
                     }}
                     placeholder="e.g. 452 Ocean Avenue, Suite 400"
-                    className={FORM_INPUT_CLS}
+                    autoComplete="off"
+                    className={FORM_TEXTAREA_CLS}
                   />
                 </div>
 
@@ -3164,6 +3212,7 @@ export const CustomerView: React.FC = () => {
                         setValue("shippingAddress", val);
                       }
                     }}
+                    autoComplete="off"
                     placeholder="Complete billing address for GST invoices..."
                     className={FORM_TEXTAREA_CLS}
                   />
@@ -3200,6 +3249,7 @@ export const CustomerView: React.FC = () => {
                     <textarea
                       rows={2}
                       {...register("shippingAddress")}
+                      autoComplete="off"
                       placeholder="Delivery warehouse or location address..."
                       className={FORM_TEXTAREA_CLS}
                     />
@@ -3216,7 +3266,7 @@ export const CustomerView: React.FC = () => {
                   4. Credit Limit & Payment Due Period
                 </span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 pt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
                 <div>
                   <FormLabel>Credit Limit (₹)</FormLabel>
                   <input
@@ -5261,15 +5311,13 @@ export const CustomerView: React.FC = () => {
             {/* Effective From */}
             <div>
               <FormLabel>Effective From</FormLabel>
-              <input
-                type="date"
+              <DateInput
                 value={repEffectiveFrom}
-                data-field="effectiveFrom"
-                onChange={(e) => {
+                onChange={(v) => ((e) => {
                   setRepEffectiveFrom(e.target.value);
                   repAssignFE.clearError("effectiveFrom");
-                }}
-                className={FORM_INPUT_CLS}
+                })({ target: { value: v } } as any)}
+                data-field="effectiveFrom"
               />
               <FormError message={repAssignFE.errors.effectiveFrom} />
             </div>

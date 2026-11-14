@@ -28,7 +28,7 @@ export const FORM_SELECT_CLS =
 
 // Form Textarea class
 export const FORM_TEXTAREA_CLS =
-  "w-full p-3.5 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all resize-none";
+  "w-full px-4 py-4 leading-relaxed bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all resize-none";
 
 // Standard 3-column / 2-column grid containers for modal forms
 export const FORM_GRID_3_CLS = "grid grid-cols-1 md:grid-cols-3 gap-4";

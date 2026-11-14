@@ -97,6 +97,11 @@ export interface ProductFilterParams {
   category?: string;
   subcategory?: string;
   itemType?: 'Product' | 'Service' | 'ALL' | string;
+  /**
+   * For product pickers / dropdowns: request only Active products and drop any Inactive row from the result, so a
+   * deactivated product can never be chosen. List screens that manage products leave this off.
+   */
+  activeOnly?: boolean;
 }
 
 export interface ProductPagination {

@@ -1,3 +1,4 @@
+import { fetchAllReportRows, runReport } from '../../../utils/reportData';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
@@ -890,15 +891,108 @@ export const SalesRepresentativeView: React.FC = () => {
     };
   }, [reps, totalRecords, repMetricsMap, apiSummary]);
 
-  // ── Export to Excel ──
-  const handleExportExcel = () => {
-    if (reps.length === 0) {
-      toast.error("No sales representatives to export");
-      return;
+  // ── Report: every page of the same sales-representative list API, same filters / merge / sort ──
+  const fetchRepReportPages = (status?: "Active" | "Inactive") =>
+    fetchAllReportRows<ApiSalesRepresentative>(async (page, size) => {
+      const res = await salesRepresentativeApi.getList({
+        page,
+        limit: size,
+        search: appliedSearch || undefined,
+        status,
+      });
+      return {
+        items:
+          res?.success && Array.isArray(res.data)
+            ? res.data.map(normalizeApiRep)
+            : [],
+        totalRecords: res?.pagination?.totalRecords,
+        totalPages: res?.pagination?.totalPages,
+        hasNextPage: res?.pagination?.hasNextPage,
+      };
+    });
+
+  const loadRepReportRows = async (): Promise<ApiSalesRepresentative[]> => {
+    let repList: ApiSalesRepresentative[] = [];
+
+    if (appliedStatus === "ALL") {
+      const [defaultReps, inactiveReps] = await Promise.all([
+        fetchRepReportPages(),
+        fetchRepReportPages("Inactive"),
+      ]);
+      const repMap = new Map<string, ApiSalesRepresentative>();
+      defaultReps.forEach((r) => repMap.set(r.id, r));
+      inactiveReps.forEach((r) => {
+        if (r.status === "Inactive" || !repMap.has(r.id)) repMap.set(r.id, r);
+      });
+      inactiveRepsRef.current.forEach((inactiveRep, id) => {
+        const current = repMap.get(id);
+        repMap.set(id, current ? { ...current, status: "Inactive" } : inactiveRep);
+      });
+      repList = Array.from(repMap.values());
+    } else {
+      repList = await fetchRepReportPages(appliedStatus as "Active" | "Inactive");
+      if (appliedStatus === "Inactive") {
+        const repMap = new Map<string, ApiSalesRepresentative>();
+        repList
+          .filter((r) => r.status === "Inactive")
+          .forEach((r) => repMap.set(r.id, r));
+        inactiveRepsRef.current.forEach((inactiveRep, id) => {
+          if (!repMap.has(id)) repMap.set(id, { ...inactiveRep, status: "Inactive" });
+        });
+        repList = Array.from(repMap.values());
+      } else if (appliedStatus === "Active") {
+        repList = repList.filter(
+          (r) => r.status === "Active" && !inactiveRepsRef.current.has(r.id),
+        );
+      }
     }
 
-    const excelRows = reps.map((r, idx) => {
-      const m = repMetricsMap.get(r.id);
+    if (appliedSearch) {
+      const q = appliedSearch.toLowerCase().trim();
+      repList = repList.filter(
+        (r) =>
+          r.name.toLowerCase().includes(q) ||
+          (r.mobile && r.mobile.includes(q)) ||
+          (r.email && r.email.toLowerCase().includes(q)) ||
+          (r.designation && r.designation.toLowerCase().includes(q)),
+      );
+    }
+
+    return repList.sort((x, y) =>
+      (x.name || "").localeCompare(y.name || "", undefined, { sensitivity: "base" }),
+    );
+  };
+
+  // Same per-rep metrics and KPI totals as the on-screen list, computed for the report rows
+  const getReportRepMetrics = (r: ApiSalesRepresentative) => ({
+    customersCount: Number(r.assignedCustomersCount || 0),
+    invoicesCount: Number(r.assignedInvoicesCount || 0),
+    totalOutstanding: Number(r.totalOutstandingAmount || 0),
+    totalCollected: Number(r.totalCollectedAmount || 0),
+    collectionRatePercent: Number(r.collectionRatePercent || 0),
+  });
+  const getReportKpis = (list: ApiSalesRepresentative[]) => {
+    const totalOutstanding = list.reduce((acc, r) => acc + getReportRepMetrics(r).totalOutstanding, 0);
+    const totalCollected = list.reduce((acc, r) => acc + getReportRepMetrics(r).totalCollected, 0);
+    const activeCount = list.filter((r) => r.status === "Active").length;
+    return {
+      totalCount: list.length,
+      activeCount: apiSummary?.activeCount ?? activeCount,
+      totalOutstanding: apiSummary?.totalOutstanding ?? totalOutstanding,
+      totalCollected: apiSummary?.totalCollected ?? totalCollected,
+    };
+  };
+
+  // ── Export to Excel ──
+  const handleExportExcel = () =>
+    runReport({
+      label: "sales representatives",
+      load: loadRepReportRows,
+      onRows: (reportReps) => {
+    const kpis = getReportKpis(reportReps);
+
+    const excelRows = reportReps.map((r, idx) => {
+      const m = getReportRepMetrics(r);
       return {
         sNo: idx + 1,
         name: r.name,
@@ -918,7 +1012,7 @@ export const SalesRepresentativeView: React.FC = () => {
       filename: `Sales_Reps_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Sales Representatives",
       title: "YAA CREATIONS CRM - SALES REPRESENTATIVES DIRECTORY",
-      subtitle: `Total Reps: ${reps.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
+      subtitle: `Total Reps: ${reportReps.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: "#", key: "sNo", align: "center", width: 8 },
         {
@@ -967,26 +1061,28 @@ export const SalesRepresentativeView: React.FC = () => {
       data: excelRows,
       summaryRow: {
         sNo: "TOTAL",
-        name: `${reps.length} Representatives`,
+        name: `${reportReps.length} Representatives`,
         outstanding: kpis.totalOutstanding,
         collected: kpis.totalCollected,
       },
     });
 
     toast.success(
-      `Sales Representatives Excel report downloaded (${reps.length} records)!`,
+      `Sales Representatives Excel report downloaded (${reportReps.length} records)!`,
     );
-  };
+      },
+    });
 
   // Print Sales Representatives Table Report via universal printUtils
-  const handlePrintTableReport = () => {
-    if (reps.length === 0) {
-      toast.error("No sales representatives to print.");
-      return;
-    }
+  const handlePrintTableReport = () =>
+    runReport({
+      label: "sales representatives",
+      load: loadRepReportRows,
+      onRows: (reportReps) => {
+    const kpis = getReportKpis(reportReps);
 
-    const printRows = reps.map((r, idx) => {
-      const m = repMetricsMap.get(r.id);
+    const printRows = reportReps.map((r, idx) => {
+      const m = getReportRepMetrics(r);
       const outstanding = m ? m.totalOutstanding : Number(r.totalOutstandingAmount || 0);
       const collected = m ? m.totalCollected : Number(r.totalCollectedAmount || 0);
       const collectionRate = `${(m ? m.collectionRatePercent : (r.collectionRatePercent || 0)).toFixed(1)}%`;
@@ -1006,7 +1102,7 @@ export const SalesRepresentativeView: React.FC = () => {
 
     printTableReport({
       title: "SALES REPRESENTATIVES PERFORMANCE REPORT",
-      subtitle: `Total Sales Representatives: ${reps.length}`,
+      subtitle: `Total Sales Representatives: ${reportReps.length}`,
       columns: [
         { header: "#", key: "sNo", align: "center", width: "5%" },
         { header: "Representative", key: "name", align: "left", width: "20%" },
@@ -1020,7 +1116,7 @@ export const SalesRepresentativeView: React.FC = () => {
       data: printRows,
       summaryRow: {
         sNo: "TOTAL",
-        name: `${reps.length} Reps`,
+        name: `${reportReps.length} Reps`,
         outstanding: kpis.totalOutstanding,
         collected: kpis.totalCollected,
       },
@@ -1030,7 +1126,8 @@ export const SalesRepresentativeView: React.FC = () => {
         { label: "Active Representatives", value: kpis.activeCount },
       ],
     });
-  };
+      },
+    });
 
   // ─────────────────────────────────────────────────────────────────────────
   // RENDER

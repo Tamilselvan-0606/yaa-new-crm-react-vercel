@@ -74,9 +74,11 @@ import { printBusinessDocument, printTableReport, downloadBusinessDocument, Docu
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS, FORM_SELECT_CLS, getFormInputCls, handleNonNegativeKeyDown } from '../utils/formUtils';
 import { SaleActionDropdown } from '../utils';
 import { toast } from "../../../utils/toast";
+import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { getNextPaymentOutNumber } from '../../../utils/documentNumbering';
 
 import { formatDate } from '../utils/dateUtils';
+import { DateInput } from "../../../components/common/DateInput";
 const PERIOD_FILTER_OPTIONS = [
   { label: 'Today', value: 'Today' },
   { label: 'All Payment-Out Invoices', value: 'All Payment-Out Invoices' },
@@ -899,12 +901,74 @@ export const PaymentOutView: React.FC = () => {
   const summary = apiSummary ?? localSummary;
 
   // Export Payment-Out Records to Excel
-  const handleExportExcel = () => {
-    if (filteredPayments.length === 0) {
-      toast.error('No payment out records available to export.');
-      return;
-    }
+  const fetchPaymentOutReportPage = async (page: number, size: number) => {
+    const response = await workPaymentOutApi.getPaymentsOut({
+      page,
+      limit: size,
+      search: appliedSearch.trim() || undefined,
+      status: appliedStatus !== 'All' ? appliedStatus : undefined,
+      pagination_required: true,
+    });
+    return {
+      items:
+        response && response.success && Array.isArray(response.data)
+          ? response.data.map(mapApiPaymentOutToUi)
+          : [],
+      totalRecords: response?.pagination?.totalRecords,
+      totalPages: response?.pagination?.totalPages,
+      hasNextPage: response?.pagination?.hasNextPage,
+    };
+  };
 
+  // Same client-side filtering the table applies (status, period, payment mode); search is sent to the API
+  const loadPaymentOutReportRows = async (): Promise<PaymentOut[]> => {
+    const all = await fetchAllReportRows(fetchPaymentOutReportPage);
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
+    return all.filter((p) => {
+      if (appliedStatus !== 'All') {
+        if (p.status?.toLowerCase() !== appliedStatus.toLowerCase()) return false;
+      }
+
+      let matchesPeriod = true;
+      const pDate = p.paymentDate; // 'YYYY-MM-DD'
+      if (appliedPeriod === 'Today') {
+        matchesPeriod = pDate === todayStr;
+      } else if (appliedPeriod === 'This Month') {
+        const curYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        matchesPeriod = pDate.startsWith(curYm);
+      } else if (appliedPeriod === 'Last Month') {
+        const prevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const prevYm = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}`;
+        matchesPeriod = pDate.startsWith(prevYm);
+      } else if (appliedPeriod === 'This Quarter') {
+        const qMonth = Math.floor(now.getMonth() / 3) * 3;
+        const qStart = new Date(now.getFullYear(), qMonth, 1).toISOString().split('T')[0];
+        const qEnd = new Date(now.getFullYear(), qMonth + 3, 0).toISOString().split('T')[0];
+        matchesPeriod = pDate >= qStart && pDate <= qEnd;
+      } else if (appliedPeriod === 'This Year') {
+        matchesPeriod = pDate.startsWith(`${now.getFullYear()}`);
+      } else if (appliedPeriod === 'This Financial Year') {
+        const fyStartYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+        const fyStart = `${fyStartYear}-04-01`;
+        const fyEnd = `${fyStartYear + 1}-03-31`;
+        matchesPeriod = pDate >= fyStart && pDate <= fyEnd;
+      } else if (appliedPeriod === 'Custom' && customStartDate && customEndDate) {
+        matchesPeriod = pDate >= customStartDate && pDate <= customEndDate;
+      }
+      if (!matchesPeriod) return false;
+
+      return (
+        appliedPaymentMode === 'All' ||
+        p.paymentMode?.toLowerCase() === appliedPaymentMode.toLowerCase()
+      );
+    });
+  };
+
+  const handleExportExcel = () => runReport({
+    label: 'payment outs',
+    load: loadPaymentOutReportRows,
+    onRows: (filteredPayments) => {
     const excelRows = filteredPayments.map((p, idx) => ({
       sNo: idx + 1,
       paymentNo: p.paymentNo,
@@ -948,7 +1012,8 @@ export const PaymentOutView: React.FC = () => {
     });
 
     toast.success(`Payment Out Excel report downloaded (${filteredPayments.length} records)!`);
-  };
+    },
+  });
 
   // Print & Download Payment-Out Voucher via universal printUtils
   const buildPaymentOutPrintOptions = (po: PaymentOut): DocumentPrintOptions => {
@@ -1030,12 +1095,10 @@ export const PaymentOutView: React.FC = () => {
   };
 
   // Print Table Report for Payment Out
-  const handlePrintTableReport = () => {
-    if (filteredPayments.length === 0) {
-      toast.info('No payment outs available to print.');
-      return;
-    }
-
+  const handlePrintTableReport = () => runReport({
+    label: 'payment outs',
+    load: loadPaymentOutReportRows,
+    onRows: (filteredPayments) => {
     const printRows = filteredPayments.map((p) => ({
       paymentNo: p.paymentNo,
       paymentDate: p.paymentDate,
@@ -1075,7 +1138,8 @@ export const PaymentOutView: React.FC = () => {
         amount: grandDisbursed,
       },
     });
-  };
+    },
+  });
 
   return (
     <div className="space-y-6 pb-12 font-sans">
@@ -1511,13 +1575,11 @@ export const PaymentOutView: React.FC = () => {
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
               Start Date <span className="text-rose-500">*</span>
             </label>
-            <input
-              type="date"
+            <DateInput
               value={customStartDate}
-              onChange={(e) => {
+              onChange={(v) => ((e) => {
                 setCustomStartDate(e.target.value);
-              }}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#33077C]/20 focus:border-[#33077C]"
+              })({ target: { value: v } } as any)}
             />
           </div>
 
@@ -1525,13 +1587,11 @@ export const PaymentOutView: React.FC = () => {
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
               End Date <span className="text-rose-500">*</span>
             </label>
-            <input
-              type="date"
+            <DateInput
               value={customEndDate}
-              onChange={(e) => {
+              onChange={(v) => ((e) => {
                 setCustomEndDate(e.target.value);
-              }}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#33077C]/20 focus:border-[#33077C]"
+              })({ target: { value: v } } as any)}
             />
             <FormError message={customDateError || undefined} />
           </div>
@@ -1680,10 +1740,10 @@ export const PaymentOutView: React.FC = () => {
             {/* Field 4: Payment Date */}
             <div>
               <FormLabel required>Payment Date</FormLabel>
-              <input
-                type="date"
-                {...register('paymentDate')}
-                className={getFormInputCls(!!errors.paymentDate)}
+              <DateInput
+                value={watch('paymentDate') || ''}
+                onChange={(v) => setValue('paymentDate', v, { shouldValidate: true, shouldDirty: true })}
+                error={!!errors.paymentDate}
               />
               <FormError message={errors.paymentDate?.message} />
             </div>

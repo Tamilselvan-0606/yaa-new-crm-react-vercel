@@ -75,6 +75,7 @@ import { DeleteConfirmationModal } from "../../../components/common/DeleteConfir
 import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
+import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { toast } from "../../../utils/toast";
 import { useNavigate } from "react-router-dom";
 import { useCompanyDocumentProfile } from "../../../hooks/useCompanyDocumentProfile";
@@ -106,6 +107,7 @@ import {
   ApiProduct,
   ApiStockBatch,
 } from "../../../api";
+import { isProductActive } from "../../../api/commerce/productApi";
 import {
   commerceProformaApi,
   mapSaleProformaToPayload,
@@ -178,6 +180,7 @@ import {
 import { useBatchStock } from "../../../hooks/useBatchStock";
 import { FormError } from "../../../components/common/FormError";
 import { evictApiCache } from "../../../api/queryCache";
+import { DateInput } from "../../../components/common/DateInput";
 
 const PRODUCT_PICK_MSG = "Please choose the product from the list.";
 
@@ -421,14 +424,10 @@ const TAX_RATE_OPTIONS = [
   { label: "Select Tax", rate: 0 },
   { label: "Exempted (0%)", rate: 0 },
   { label: "GST @ 0%", rate: 0 },
-  { label: "GST @ 0.1%", rate: 0.1 },
   { label: "GST @ 0.25%", rate: 0.25 },
-  { label: "GST @ 1.5%", rate: 1.5 },
   { label: "GST @ 3%", rate: 3 },
   { label: "GST @ 5%", rate: 5 },
-  { label: "GST @ 12%", rate: 12 },
   { label: "GST @ 18%", rate: 18 },
-  { label: "GST @ 28%", rate: 28 },
   { label: "GST @ 40%", rate: 40 },
 ];
 
@@ -1002,6 +1001,7 @@ export const EstimateQuotationView: React.FC = () => {
       // 1. First attempt: pagination_required: false, page_size: 100
       try {
         const res = await productApi.getProducts({
+          activeOnly: true,
           search: searchQuery?.trim() || undefined,
           page_size: 100,
           pagination_required: false,
@@ -1027,6 +1027,7 @@ export const EstimateQuotationView: React.FC = () => {
       if (prods.length === 0) {
         try {
           const res2 = await productApi.getProducts({
+            activeOnly: true,
             page_no: 1,
             page_size: 100,
             pagination_required: true,
@@ -1046,13 +1047,14 @@ export const EstimateQuotationView: React.FC = () => {
         }
       }
 
-      if (prods.length > 0) {
+      const activeProds = prods.filter(isProductActive);
+      if (!searchQuery?.trim()) {
+        setLiveProducts(activeProds);
+      } else if (activeProds.length > 0) {
         setLiveProducts((prev) => {
           const map = new Map<string, ApiProduct>();
-          if (searchQuery?.trim()) {
-            prev.forEach((p) => map.set(p.id, p));
-          }
-          prods.forEach((p) => map.set(p.id, p));
+          prev.filter(isProductActive).forEach((p) => map.set(p.id, p));
+          activeProds.forEach((p) => map.set(p.id, p));
           return Array.from(map.values());
         });
       }
@@ -1135,6 +1137,7 @@ export const EstimateQuotationView: React.FC = () => {
         sellingPrice?: number;
         expDate?: string;
       }>;
+      status?: string;
     }> = [];
 
     const seenIds = new Set<string>();
@@ -1239,6 +1242,7 @@ export const EstimateQuotationView: React.FC = () => {
 
     // 1. Live Products from /commerce/products
     liveProducts.forEach((p) => {
+      if (!isProductActive(p)) return;
       const pid = String(p.id || "");
       if (pid && !seenIds.has(pid)) {
         seenIds.add(pid);
@@ -1273,36 +1277,7 @@ export const EstimateQuotationView: React.FC = () => {
             (p as any).imageUrl ||
             "",
           batches,
-        });
-      }
-    });
-
-    // 2. Live Stocks from /commerce/stocks
-    sourceStocks.forEach((s) => {
-      const pid = String(s.productId || s.id || "");
-      if (pid && !seenIds.has(pid)) {
-        seenIds.add(pid);
-        const sku = s.sku || "";
-        const name = s.productName || "Unnamed Product";
-        const batches = getBatchesForProduct(pid, sku, name, s.batches);
-        list.push({
-          productId: pid,
-          id: pid,
-          productName: name,
-          sku: sku,
-          unitPrice: Number(s.unitPrice || 0),
-          category: s.category || "",
-          unit: s.unit || "PCS",
-          taxPercent: extractTaxPercent(
-            (s as any).taxRate ?? (s as any).taxPercent,
-          ),
-          hsnCode: (s as any).hsnCode || "",
-          imageUrl:
-            (s as any).images?.[0] ||
-            (s as any).image ||
-            (s as any).imageUrl ||
-            "",
-          batches,
+          status: p.status || "Active",
         });
       }
     });
@@ -1379,10 +1354,9 @@ export const EstimateQuotationView: React.FC = () => {
   }, []);
 
   // Displayed quotations: Instant filtering for search, status, and period across live or local data
-  const displayQuotations = useMemo(() => {
-    const enrichedList = liveQuotations;
-
-    return enrichedList.filter((item) => {
+  const applyQuotationFilters = useCallback(
+    (enrichedList: SaleQuotation[]) =>
+      enrichedList.filter((item) => {
       const q = appliedSearch.toLowerCase().trim();
       const matchesSearch =
         q === "" ||
@@ -1403,8 +1377,34 @@ export const EstimateQuotationView: React.FC = () => {
       const matchesPeriod = checkDateMatchesPeriod(item.date, appliedPeriod);
 
       return matchesSearch && matchesStatus && matchesPeriod;
-    });
-  }, [liveQuotations, appliedSearch, appliedStatus, appliedPeriod]);
+    }),
+    [appliedSearch, appliedStatus, appliedPeriod],
+  );
+  const displayQuotations = useMemo(
+    () => applyQuotationFilters(liveQuotations),
+    [liveQuotations, applyQuotationFilters],
+  );
+
+  // Report pages: same list API + applied filters as fetchQuotations, any page.
+  const fetchQuotationsReportPage = async (pageNo: number, size: number) => {
+    const params: QuotationFilterParams = {
+      page_no: pageNo,
+      page_size: size,
+      pagination_required: true,
+      sortOrder: "desc",
+    };
+    if (appliedSearch.trim()) params.search = appliedSearch.trim();
+    if (appliedStatus && appliedStatus !== "ALL") params.status = appliedStatus;
+    if (appliedPeriod && appliedPeriod !== "all") params.period = appliedPeriod;
+    const response = await quotationApi.getQuotations(params);
+    const list = Array.isArray(response?.data) ? response.data : [];
+    return {
+      items: list.map(mapApiQuotationToSaleQuotation),
+      totalRecords: response?.pagination?.totalRecords,
+      totalPages: response?.pagination?.totalPages,
+      hasNextPage: response?.pagination?.hasNextPage,
+    };
+  };
 
   // Summary Metrics (List view)
   const metrics = useMemo(() => {
@@ -1629,7 +1629,10 @@ export const EstimateQuotationView: React.FC = () => {
       const rate = Number(it.unitPrice) || 0;
       const discPct = Number(it.discountPercent) || 0;
       const base = qty * rate;
-      const discAmt = (base * discPct) / 100;
+      const discAmt =
+        Number((it as any).discountAmount) > 0
+          ? Number((it as any).discountAmount)
+          : (base * discPct) / 100;
       const taxable = Math.max(0, base - discAmt);
       const taxRate = Number(it.taxPercent) || 0;
       const taxAmt = (taxable * taxRate) / 100;
@@ -3222,13 +3225,20 @@ export const EstimateQuotationView: React.FC = () => {
   };
 
   // Export to Excel
-  const handleExport = () => {
-    if (displayQuotations.length === 0) {
-      toast.error("No quotations to export");
-      return;
-    }
+  const reportTotals = (list: SaleQuotation[]) => ({
+    totalAmount: list.reduce((sum, q) => sum + (Number(q.amount) || 0), 0),
+    openAmount: list
+      .filter((q) => q.status === "Open")
+      .reduce((sum, q) => sum + (Number(q.amount) || 0), 0),
+  });
 
-    const excelRows = displayQuotations.map((q) => {
+  const handleExport = () =>
+    runReport<SaleQuotation>({
+      label: "quotations",
+      load: async () =>
+        applyQuotationFilters(await fetchAllReportRows<SaleQuotation>(fetchQuotationsReportPage)),
+      onRows: (rows) => {
+    const excelRows = rows.map((q) => {
       const created = formatDateTime(q.createdAt || q.date);
       const qStages = getQuotationStages(q);
       const isActuallyConverted = Boolean(
@@ -3279,7 +3289,7 @@ export const EstimateQuotationView: React.FC = () => {
       filename: `Estimates_Quotations_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Estimates & Quotations",
       title: "YAA CREATIONS CRM - ESTIMATE & QUOTATION REPORT",
-      subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${displayQuotations.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
+      subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${rows.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
       columns: [
         {
           header: "Estimate No.",
@@ -3326,25 +3336,26 @@ export const EstimateQuotationView: React.FC = () => {
       data: excelRows,
       summaryRow: {
         estimateNo: "TOTAL",
-        partyName: `${displayQuotations.length} Quotations`,
-        amount: metrics.totalAmount,
-        balance: metrics.openAmount,
+        partyName: `${rows.length} Quotations`,
+        amount: reportTotals(rows).totalAmount,
+        balance: reportTotals(rows).openAmount,
       },
     });
 
     toast.success(
-      `Estimates Excel report downloaded (${displayQuotations.length} records)!`,
+      `Estimates Excel report downloaded (${rows.length} records)!`,
     );
-  };
+      },
+    });
 
   // Print Estimates Table Report via universal printUtils
-  const handlePrintTableReport = () => {
-    if (displayQuotations.length === 0) {
-      toast.error("No quotations to print.");
-      return;
-    }
-
-    const printRows = displayQuotations.map((q) => {
+  const handlePrintTableReport = () =>
+    runReport<SaleQuotation>({
+      label: "quotations",
+      load: async () =>
+        applyQuotationFilters(await fetchAllReportRows<SaleQuotation>(fetchQuotationsReportPage)),
+      onRows: (rows) => {
+    const printRows = rows.map((q) => {
       const created = formatDateTime(q.createdAt || q.date);
       const qStages = getQuotationStages(q);
       const isActuallyConverted = Boolean(
@@ -3392,7 +3403,7 @@ export const EstimateQuotationView: React.FC = () => {
 
     printTableReport({
       title: "ESTIMATE & QUOTATION LEDGER",
-      subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${displayQuotations.length}`,
+      subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${rows.length}`,
       columns: [
         {
           header: "Estimate No.",
@@ -3442,17 +3453,18 @@ export const EstimateQuotationView: React.FC = () => {
       data: printRows,
       summaryRow: {
         quotationNo: "TOTAL",
-        partyName: `${displayQuotations.length} Quotations`,
-        amount: metrics.totalAmount,
-        balance: metrics.openAmount,
+        partyName: `${rows.length} Quotations`,
+        amount: reportTotals(rows).totalAmount,
+        balance: reportTotals(rows).openAmount,
       },
       metrics: [
-        { label: "Total Value", value: metrics.totalAmount },
-        { label: "Open Amount", value: metrics.openAmount },
-        { label: "Total Quotations", value: displayQuotations.length },
+        { label: "Total Value", value: reportTotals(rows).totalAmount },
+        { label: "Open Amount", value: reportTotals(rows).openAmount },
+        { label: "Total Quotations", value: rows.length },
       ],
     });
-  };
+      },
+    });
 
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
@@ -3957,29 +3969,30 @@ export const EstimateQuotationView: React.FC = () => {
                     Estimation Date
                   </span>
                   <div className="relative w-40 sm:w-48">
-                    <input
-                      type="date"
+                    <DateInput
                       value={formData.date}
+                      onChange={(v) =>
+                        ((e) => {
+                          fe.clearError("date");
+                          fe.clearError("validUntil");
+                          const newDate = e.target.value;
+                          const days = Number(validUptoDays) || 30;
+                          const d = new Date(
+                            newDate || new Date().toISOString().split("T")[0],
+                          );
+                          d.setDate(d.getDate() + days);
+                          const computedValidUntil = d
+                            .toISOString()
+                            .split("T")[0];
+                          setFormData({
+                            ...formData,
+                            date: newDate,
+                            validUntil: computedValidUntil,
+                          });
+                        })({ target: { value: v } } as any)
+                      }
                       {...fieldAttr("date")}
-                      onChange={(e) => {
-                        fe.clearError("date");
-                        fe.clearError("validUntil");
-                        const newDate = e.target.value;
-                        const days = Number(validUptoDays) || 30;
-                        const d = new Date(
-                          newDate || new Date().toISOString().split("T")[0],
-                        );
-                        d.setDate(d.getDate() + days);
-                        const computedValidUntil = d
-                          .toISOString()
-                          .split("T")[0];
-                        setFormData({
-                          ...formData,
-                          date: newDate,
-                          validUntil: computedValidUntil,
-                        });
-                      }}
-                      className={`w-full h-9 px-3 bg-white border hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors ${fe.errors.date ? "border-rose-400" : "border-slate-200"}`}
+                      heightClass="h-9"
                     />
                   </div>
                 </div>
@@ -4049,7 +4062,7 @@ export const EstimateQuotationView: React.FC = () => {
 
             {/* 4. BILLING TABLE (THE GRID - CRM THEME) */}
             <div className="mt-6 overflow-x-auto border border-slate-200 rounded-xl min-h-[360px] pb-32">
-              <table className="w-full text-xs border-collapse">
+              <table className="w-full min-w-[1250px] text-xs border-collapse">
                 {/* Table Header */}
                 <thead>
                   <tr className="bg-[#33077C] text-white font-bold uppercase text-[10.5px] border-b border-[#4309A2] tracking-wider select-none">
@@ -4511,9 +4524,21 @@ export const EstimateQuotationView: React.FC = () => {
                                                   {p.category}
                                                 </span>
                                               )}
-                                              <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
-                                                Active
-                                              </span>
+                                              {(p as any).status ? (
+                                                <span
+                                                  className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
+                                                    String((p as any).status).toLowerCase() === "inactive"
+                                                      ? "bg-rose-50 text-rose-700 border-rose-200/60"
+                                                      : "bg-emerald-50 text-emerald-700 border-emerald-200/60"
+                                                  }`}
+                                                >
+                                                  {(p as any).status}
+                                                </span>
+                                              ) : (
+                                                <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
+                                                  Active
+                                                </span>
+                                              )}
                                             </div>
                                             <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5 flex-wrap">
                                               <span className="font-mono text-slate-600">
@@ -4847,7 +4872,7 @@ export const EstimateQuotationView: React.FC = () => {
                       {/* DISCOUNT % and AMOUNT (conditional) */}
                       {columnSettings.showDiscount && (
                         <>
-                          <td className="p-1.5 border-r border-slate-200 w-16">
+                          <td className="p-1.5 border-r border-slate-200 w-24 min-w-[96px]">
                             <input
                               type="number"
                               min="0"
@@ -4877,7 +4902,7 @@ export const EstimateQuotationView: React.FC = () => {
                             />
                           </td>
 
-                          <td className="p-1.5 border-r border-slate-200 w-24">
+                          <td className="p-1.5 border-r border-slate-200 w-28 min-w-[120px]">
                             <input
                               type="number"
                               step="0.01"
@@ -4908,7 +4933,7 @@ export const EstimateQuotationView: React.FC = () => {
                       )}
 
                       {/* TAX % (Select) */}
-                      <td className="p-1.5 border-r border-slate-200 w-28">
+                      <td className="p-1.5 border-r border-slate-200 w-28 min-w-[110px]">
                         <select
                           value={row.taxPercent}
                           {...fieldAttr(`items.${idx}.taxPercent`)}
@@ -4927,6 +4952,13 @@ export const EstimateQuotationView: React.FC = () => {
                               {t.label}
                             </option>
                           ))}
+                          {!TAX_RATE_OPTIONS.some(
+                            (t) => t.rate === Number(row.taxPercent || 0),
+                          ) && (
+                            <option value={row.taxPercent}>
+                              GST @ {row.taxPercent}% (old slab)
+                            </option>
+                          )}
                         </select>
                         <FormError
                           message={fe.errors[`items.${idx}.taxPercent`]}
@@ -4934,12 +4966,12 @@ export const EstimateQuotationView: React.FC = () => {
                       </td>
 
                       {/* TAX AMOUNT */}
-                      <td className="p-1.5 border-r border-slate-200 w-24 text-right pr-3 font-medium text-slate-700">
+                      <td className="p-1.5 border-r border-slate-200 w-28 min-w-[110px] text-right pr-3 font-medium text-slate-700">
                         {row.taxAmount ? Number(row.taxAmount).toFixed(2) : "0"}
                       </td>
 
                       {/* AMOUNT (ROW TOTAL) */}
-                      <td className="p-1.5 border-r border-slate-200 text-right pr-3 font-bold text-slate-900">
+                      <td className="p-1.5 border-r border-slate-200 min-w-[130px] text-right pr-3 font-bold text-slate-900">
                         {Number(row.total || 0).toLocaleString("en-IN", {
                           minimumFractionDigits: 2,
                         })}
@@ -5404,30 +5436,6 @@ export const EstimateQuotationView: React.FC = () => {
               Create, track, and convert sales quotations & estimates into
               confirmed invoices.
             </p>
-            <div className="flex items-center gap-2.5 mt-2 flex-wrap">
-              <button
-                type="button"
-                onClick={() => {
-                  // Explicit refresh: skip the cached response and read from the server.
-                  evictApiCache(["Estimation"]);
-                  fetchQuotations(
-                    page,
-                    pageSize,
-                    appliedSearch,
-                    appliedStatus,
-                    appliedPeriod,
-                  );
-                }}
-                disabled={isApiLoading}
-                className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-[#33077C] transition-colors px-2 py-0.5 rounded hover:bg-slate-100 cursor-pointer"
-                title="Sync from API"
-              >
-                <RefreshCw
-                  className={`w-3.5 h-3.5 ${isApiLoading ? "animate-spin text-[#33077C]" : ""}`}
-                />
-                <span>Sync</span>
-              </button>
-            </div>
           </div>
         </div>
 
@@ -5710,7 +5718,9 @@ export const EstimateQuotationView: React.FC = () => {
                               resolveConvertedTarget(item)?.no ||
                               (item.status === "Converted"
                                 ? downstreamByEstimate[
-                                    (item.quotationNo || "").trim().toLowerCase()
+                                    (item.quotationNo || "")
+                                      .trim()
+                                      .toLowerCase()
                                   ]?.no
                                 : undefined)
                             }
@@ -5718,7 +5728,9 @@ export const EstimateQuotationView: React.FC = () => {
                               resolveConvertedTarget(item)?.type ||
                               (item.status === "Converted"
                                 ? downstreamByEstimate[
-                                    (item.quotationNo || "").trim().toLowerCase()
+                                    (item.quotationNo || "")
+                                      .trim()
+                                      .toLowerCase()
                                   ]?.type
                                 : undefined)
                             }
@@ -6116,6 +6128,14 @@ export const EstimateQuotationView: React.FC = () => {
                   Subtotal:{" "}
                   <strong>₹{previewQuotation.subtotal.toLocaleString()}</strong>
                 </div>
+                {previewQuotation.discount ? (
+                  <div className="text-slate-600">
+                    Discount:{" "}
+                    <strong>
+                      -₹{Number(previewQuotation.discount).toLocaleString()}
+                    </strong>
+                  </div>
+                ) : null}
                 {previewQuotation.taxAmount ? (
                   <div className="text-slate-600">
                     Tax:{" "}
@@ -6296,15 +6316,15 @@ export const EstimateQuotationView: React.FC = () => {
                   {/* Due Date Picker */}
                   <div>
                     <FormLabel>Payment / Document Due Date</FormLabel>
-                    <input
-                      type="date"
+                    <DateInput
                       value={convertDueDate}
+                      onChange={(v) =>
+                        ((e) => {
+                          fe.clearError("convertDueDate");
+                          setConvertDueDate(e.target.value);
+                        })({ target: { value: v } } as any)
+                      }
                       {...fieldAttr("convertDueDate")}
-                      onChange={(e) => {
-                        fe.clearError("convertDueDate");
-                        setConvertDueDate(e.target.value);
-                      }}
-                      className={FORM_INPUT_CLS}
                     />
                     <FormError message={fe.errors.convertDueDate} />
                     <FormError message={fe.errors.convertStock} />

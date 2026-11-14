@@ -17,6 +17,13 @@ import {
 
 export * from './productTypes';
 
+/**
+ * Returns true when a product/stock item should be shown in selection dropdowns.
+ * Products whose status is 'Inactive' (case-insensitive) are excluded.
+ */
+export const isProductActive = (p: any): boolean =>
+  String(p?.status || 'Active').toLowerCase() !== 'inactive';
+
 export interface ProductItemModel {
   id: string;
   productId?: string;
@@ -303,6 +310,8 @@ export const productEndpoints = baseApi.injectEndpoints({
           if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
           if (params.status && params.status.toUpperCase() !== 'ALL') {
             queryParams.status = params.status;
+          } else if (params.activeOnly) {
+            queryParams.status = 'Active';
           }
           if (params.category && params.category.toUpperCase() !== 'ALL') {
             queryParams.category = params.category;
@@ -318,6 +327,20 @@ export const productEndpoints = baseApi.injectEndpoints({
           url: '/commerce/products',
           params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
+      },
+      transformResponse: (response: ProductListResponse, _meta, arg) => {
+        const shouldFilterActive = Boolean(
+          arg && (arg.activeOnly || String(arg.status || '').toLowerCase() === 'active')
+        );
+        if (shouldFilterActive && Array.isArray(response?.data)) {
+          return {
+            ...response,
+            data: response.data.filter(
+              (p: any) => String(p?.status || 'Active').toLowerCase() !== 'inactive'
+            ),
+          };
+        }
+        return response;
       },
       providesTags: (result) =>
         result?.data
@@ -444,6 +467,8 @@ export const productApi = {
       if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
       if (params.status && params.status.toUpperCase() !== 'ALL') {
         queryParams.status = params.status;
+      } else if (params.activeOnly) {
+        queryParams.status = 'Active';
       }
       if (params.category && params.category.toUpperCase() !== 'ALL') {
         queryParams.category = params.category;
@@ -459,6 +484,24 @@ export const productApi = {
     const response = await baseClient.get<ProductListResponse>('/commerce/products', {
       params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
     });
+    const shouldFilterActive =
+      params?.activeOnly || String(params?.status || '').toLowerCase() === 'active';
+    if (shouldFilterActive) {
+      const res = response.data as any;
+      if (Array.isArray(res?.data)) {
+        res.data = res.data.filter(isProductActive);
+      }
+      if (Array.isArray(res?.items)) {
+        res.items = res.items.filter(isProductActive);
+      }
+      if (Array.isArray(res?.products)) {
+        res.products = res.products.filter(isProductActive);
+      }
+      if (Array.isArray(res)) {
+        return res.filter(isProductActive) as any;
+      }
+      return res;
+    }
     return response.data;
   },
 

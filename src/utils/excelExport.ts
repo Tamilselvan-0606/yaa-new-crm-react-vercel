@@ -127,7 +127,7 @@ export function exportTableToExcel({
     html += '<tr>';
     columns.forEach((col) => {
       let val = row[col.key];
-      if (val === undefined || val === null) val = '-';
+      if (val === undefined || val === null || (typeof val === 'number' && !Number.isFinite(val)) || val === 'NaN') val = '-';
       const alignClass = col.align === 'center' ? ' class="center"' : col.align === 'right' ? ' class="right"' : '';
 
       if (col.type === 'currency' && typeof val === 'number') {

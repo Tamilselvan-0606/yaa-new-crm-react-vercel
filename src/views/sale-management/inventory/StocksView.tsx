@@ -55,6 +55,7 @@ import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
 import { printBusinessDocument, printTableReport, downloadBusinessDocument, downloadTableReport, DocumentPrintOptions } from "../../../utils/printUtils";
 import { toast } from "../../../utils/toast";
+import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import type { StockListSummary } from "../../../api/commerce/stockTypes";
 import {
@@ -87,6 +88,7 @@ import {
 } from "../../../utils/formValidation";
 
 import { formatDate } from '../utils/dateUtils';
+import { DateInput } from "../../../components/common/DateInput";
 export interface EditStockFormValues {
   productName: string;
   sku: string;
@@ -214,6 +216,7 @@ export const StocksView: React.FC = () => {
   const loadCatalogProducts = useCallback(async () => {
     try {
       const res = await productApi.getProducts({
+        activeOnly: true,
         pagination_required: false,
         page_size: 200,
       });
@@ -1036,12 +1039,58 @@ export const StocksView: React.FC = () => {
       : Math.ceil(totalRecords / pageSize) || 1;
 
   // Export Stocks to Excel
-  const handleExportExcel = () => {
-    if (displayedStocks.length === 0) {
-      toast.error("No stock records available to export.");
-      return;
-    }
+  const fetchStockReportPage = async (reportPage: number, reportPageSize: number) => {
+    const res = await stockApi.getStocks({
+      page_no: reportPage,
+      page_size: reportPageSize,
+      pagination_required: true,
+      search: appliedSearch.trim() || undefined,
+      sortOrder: "desc",
+      category:
+        appliedCategory !== "All" && appliedCategory !== "ALL"
+          ? appliedCategory
+          : undefined,
+      lowStock: appliedStatus === "Low Stock" ? true : undefined,
+    });
+    const items: InventoryStockItem[] =
+      res?.success && Array.isArray(res.data)
+        ? res.data.map((item) => {
+            const stk = mapApiStockToInventoryStockItem(item);
+            return {
+              ...stk,
+              inStock:
+                typeof stk.inStock === "number" && !isNaN(stk.inStock)
+                  ? stk.inStock
+                  : 0,
+            };
+          })
+        : [];
+    return {
+      items,
+      totalRecords: res?.pagination?.totalRecords,
+      totalPages: res?.pagination?.totalPages,
+      hasNextPage: res?.pagination?.hasNextPage,
+    };
+  };
 
+  const loadStocksForReport = async (): Promise<InventoryStockItem[]> => {
+    const all = await fetchAllReportRows(fetchStockReportPage);
+    return all.sort((a, b) => {
+      const timeA = new Date(a.createdAt || a.lastUpdated || 0).getTime();
+      const timeB = new Date(b.createdAt || b.lastUpdated || 0).getTime();
+      if (timeB !== timeA) return timeB - timeA;
+      return String(b.id || "").localeCompare(String(a.id || ""));
+    });
+  };
+
+  const handleExportExcel = () =>
+    runReport({
+      label: "stock records",
+      load: loadStocksForReport,
+      onRows: (rows) => exportStocksExcel(rows),
+    });
+
+  const exportStocksExcel = (displayedStocks: InventoryStockItem[]) => {
     const excelRows = displayedStocks.map((s, idx) => {
       const stockValuation = (s.inStock || 0) * (s.unitCost || 0);
       let stockStatus = "In Stock";
@@ -1209,7 +1258,7 @@ export const StocksView: React.FC = () => {
   };
 
   // Table Report for Stocks
-  const getStocksReportTableOptions = () => {
+  const getStocksReportTableOptions = (displayedStocks: InventoryStockItem[]) => {
     const printRows = displayedStocks.map((s) => ({
       productName: s.productName,
       category: s.category,
@@ -1249,13 +1298,12 @@ export const StocksView: React.FC = () => {
     };
   };
 
-  const handlePrintStocksReport = () => {
-    if (displayedStocks.length === 0) {
-      toast.info('No inventory stock records available to print.');
-      return;
-    }
-    printTableReport(getStocksReportTableOptions());
-  };
+  const handlePrintStocksReport = () =>
+    runReport({
+      label: "stock records",
+      load: loadStocksForReport,
+      onRows: (rows) => printTableReport(getStocksReportTableOptions(rows)),
+    });
 
   const handleDownloadStocksReport = async () => {
     if (displayedStocks.length === 0) {
@@ -1266,7 +1314,7 @@ export const StocksView: React.FC = () => {
     setIsDownloadingStocksReport(true);
     const filename = `Stock_Valuation_Report_${new Date().toISOString().split('T')[0]}.pdf`;
     try {
-      await downloadTableReport(getStocksReportTableOptions(), filename);
+      await downloadTableReport(getStocksReportTableOptions(displayedStocks), filename);
       toast.success('Stock valuation report PDF downloaded successfully!');
     } catch (err) {
       console.error('Failed to download stock report PDF:', err);
@@ -2150,29 +2198,25 @@ export const StocksView: React.FC = () => {
                   <label className="text-xs font-medium text-slate-600 block mb-1.5">
                     Mfg Date
                   </label>
-                  <input
-                    type="date"
+                  <DateInput
                     value={batchMfgDate}
-                    onChange={(e) => {
+                    onChange={(v) => ((e) => {
                       setBatchMfgDate(e.target.value);
                       fe.clearError("expDate");
-                    }}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                    })({ target: { value: v } } as any)}
                   />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-slate-600 block mb-1.5">
                     Expiry Date
                   </label>
-                  <input
-                    type="date"
+                  <DateInput
                     value={batchExpDate}
-                    {...fieldAttr("expDate")}
-                    onChange={(e) => {
+                    onChange={(v) => ((e) => {
                       setBatchExpDate(e.target.value);
                       fe.clearError("expDate");
-                    }}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                    })({ target: { value: v } } as any)}
+                    {...fieldAttr("expDate")}
                   />
                   <FormError message={fe.errors.expDate} showIcon />
                 </div>

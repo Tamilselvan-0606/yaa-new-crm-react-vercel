@@ -38,6 +38,8 @@ export interface SalesReportSummaryResponse {
   data: SalesReportSummary;
 }
 
+const inFlightSummary = new Map<string, Promise<SalesReportSummaryResponse>>();
+
 export const salesReportApi = {
   /**
    * Sales / purchase / stock KPI summary for the reports screens
@@ -53,10 +55,20 @@ export const salesReportApi = {
       if (params.to) queryParams.to = params.to;
       if (params.branchId) queryParams.branchId = params.branchId;
     }
-    const response = await baseClient.get<SalesReportSummaryResponse>(
-      '/commerce/sales/report-summary',
-      { params: Object.keys(queryParams).length > 0 ? queryParams : undefined },
-    );
-    return response.data;
+    // Identical requests made while one is already in flight (several widgets / re-renders asking for the same
+    // range at login) share a single network call.
+    const key = JSON.stringify(queryParams);
+    const pending = inFlightSummary.get(key);
+    if (pending) return pending;
+    const request = baseClient
+      .get<SalesReportSummaryResponse>('/commerce/sales/report-summary', {
+        params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
+      })
+      .then((response) => response.data)
+      .finally(() => {
+        inFlightSummary.delete(key);
+      });
+    inFlightSummary.set(key, request);
+    return request;
   },
 };

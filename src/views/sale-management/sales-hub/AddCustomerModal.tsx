@@ -492,7 +492,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                 1. Basic Information
               </span>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-1">
               <div>
                 <FormLabel required>Full Name / Contact Person</FormLabel>
                 <input
@@ -630,8 +630,8 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                 2. Address & Location
               </span>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 pt-1">
-              <div className="sm:col-span-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
+              <div className="sm:col-span-2 lg:col-span-4">
                 <FormLabel>Address</FormLabel>
                 <textarea
                   rows={3}
@@ -645,7 +645,8 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                     }
                   }}
                   placeholder="e.g. 452 Ocean Avenue, Suite 400"
-                  className={FORM_INPUT_CLS}
+                  autoComplete="off"
+                  className={FORM_TEXTAREA_CLS}
                 />
               </div>
 
@@ -784,6 +785,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                       setValue("shippingAddress", val);
                     }
                   }}
+                  autoComplete="off"
                   placeholder="Complete billing address for GST invoices..."
                   className={FORM_TEXTAREA_CLS}
                 />
@@ -820,6 +822,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   <textarea
                     rows={2}
                     {...register("shippingAddress")}
+                    autoComplete="off"
                     placeholder="Delivery warehouse or location address..."
                     className={FORM_TEXTAREA_CLS}
                   />
@@ -836,7 +839,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                 4. Credit Limit & Payment Due Period
               </span>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
               <div>
                 <FormLabel>Credit Limit (₹)</FormLabel>
                 <input

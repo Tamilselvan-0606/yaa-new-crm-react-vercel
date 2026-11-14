@@ -43,6 +43,7 @@ import { exportTableToExcel } from '../../../utils/excelExport';
 import { UniversalShareDropdown, formatPurchaseReturnShare } from '../../../utils/shareUtils';
 import { printBusinessDocument, printTableReport, downloadBusinessDocument, DocumentPrintOptions } from '../../../utils/printUtils';
 import { toast } from "../../../utils/toast";
+import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { useDispatch } from 'react-redux';
 import {
   commercePurchaseReturnApi,
@@ -53,7 +54,7 @@ import {
   UUID_REGEX,
 } from '../../../api/commerce/purchaseReturnApi';
 import { workPurchaseOrderApi, mapApiPurchaseOrderToUi, stockApi, baseApi } from '../../../api';
-import { productApi, ApiProduct } from '../../../api/commerce/productApi';
+import { productApi, ApiProduct, isProductActive } from '../../../api/commerce/productApi';
 import { SearchableSelect } from '../../../components/common/SearchableSelect';
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS, handleNonNegativeKeyDown } from '../utils/formUtils';
 import { SaleActionDropdown } from '../utils';
@@ -78,6 +79,7 @@ import {
 } from '../../../utils/formValidation';
 
 import { formatDate } from '../utils/dateUtils';
+import { DateInput } from "../../../components/common/DateInput";
 
 // -----------------------------------------------------------------------------
 // Validation (pure functions - no API calls, no state changes)
@@ -379,6 +381,7 @@ export const PurchaseReturnView: React.FC = () => {
     setIsSearchingProducts(true);
     try {
       const res = await productApi.getProducts({
+        activeOnly: true,
         search: trimmed || undefined,
         page_size: 50,
         pagination_required: false,
@@ -389,7 +392,7 @@ export const PurchaseReturnView: React.FC = () => {
           if (trimmed) {
             prev.forEach((p) => map.set(p.id, p));
           }
-          res.data.forEach((p) => map.set(p.id, p));
+          res.data.filter(isProductActive).forEach((p) => map.set(p.id, p));
           return Array.from(map.values());
         });
       }
@@ -429,6 +432,7 @@ export const PurchaseReturnView: React.FC = () => {
   const productOptions = useMemo(() => {
     const map = new Map<string, { value: string; label: string; subLabel?: string; badge?: string }>();
     availableProducts.forEach((p) => {
+      if (!isProductActive(p)) return;
       map.set(p.id, {
         value: p.id,
         label: p.productName || (p as any).name || 'Product',
@@ -1387,13 +1391,31 @@ export const PurchaseReturnView: React.FC = () => {
   };
 
   // Export Purchase Returns to Excel
-  const handleExportExcel = () => {
-    const listToExport = effectiveReturns;
-    if (listToExport.length === 0) {
-      toast.error('No purchase return records available to export.');
-      return;
-    }
+  const fetchPurchaseReturnReportPage = async (page: number, size: number) => {
+    const response = await commercePurchaseReturnApi.getPurchaseReturns({
+      page_no: page,
+      page_size: size,
+      pagination_required: true,
+      sortOrder: 'desc',
+      search: appliedSearch.trim() || undefined,
+      returnStatus: appliedStatus !== 'All' ? appliedStatus : undefined,
+      refundStatus: appliedRefundStatus !== 'All' ? appliedRefundStatus : undefined,
+    });
+    return {
+      items:
+        response && response.success && Array.isArray(response.data)
+          ? response.data.map((r) => mapApiPurchaseReturnToUi(r))
+          : [],
+      totalRecords: response?.pagination?.totalRecords,
+      totalPages: response?.pagination?.totalPages,
+      hasNextPage: response?.pagination?.hasNextPage,
+    };
+  };
 
+  const handleExportExcel = () => runReport({
+    label: 'purchase returns',
+    load: () => fetchAllReportRows(fetchPurchaseReturnReportPage),
+    onRows: (listToExport) => {
     const excelRows = listToExport.map((r, idx) => ({
       sNo: idx + 1,
       returnNo: r.returnNo,
@@ -1435,7 +1457,8 @@ export const PurchaseReturnView: React.FC = () => {
     });
 
     toast.success(`Purchase Returns Excel report downloaded (${listToExport.length} records)!`);
-  };
+    },
+  });
 
   // Print & Download Debit Note via universal printUtils
   const buildDebitNotePrintOptions = (pret: PurchaseReturn): DocumentPrintOptions => {
@@ -1507,13 +1530,10 @@ export const PurchaseReturnView: React.FC = () => {
   };
 
   // Print Table Report for Purchase Returns
-  const handlePrintTableReport = () => {
-    const listToPrint = effectiveReturns;
-    if (listToPrint.length === 0) {
-      toast.info('No purchase returns available to print.');
-      return;
-    }
-
+  const handlePrintTableReport = () => runReport({
+    label: 'purchase returns',
+    load: () => fetchAllReportRows(fetchPurchaseReturnReportPage),
+    onRows: (listToPrint) => {
     const printRows = listToPrint.map((r) => ({
       returnNo: r.returnNo,
       returnDate: r.returnDate,
@@ -1549,7 +1569,8 @@ export const PurchaseReturnView: React.FC = () => {
         returnAmount: totalReturnAmt,
       },
     });
-  };
+    },
+  });
 
   return (
     <div className="space-y-6 pb-12 font-sans">
@@ -2086,15 +2107,13 @@ export const PurchaseReturnView: React.FC = () => {
             {/* Return Date */}
             <div>
               <FormLabel required>Return Date</FormLabel>
-              <input
-                type="date"
-                {...fieldAttr('returnDate')}
+              <DateInput
                 value={returnDate}
-                onChange={(e) => {
+                onChange={(v) => ((e) => {
                   retErr.clearError('returnDate');
                   setReturnDate(e.target.value);
-                }}
-                className={FORM_INPUT_CLS}
+                })({ target: { value: v } } as any)}
+                {...fieldAttr('returnDate')}
               />
               <FormError message={retErr.errors.returnDate} />
             </div>

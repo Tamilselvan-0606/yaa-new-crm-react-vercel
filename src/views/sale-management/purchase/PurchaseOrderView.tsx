@@ -63,6 +63,7 @@ import {
   productApi,
   resolveBaseUnitId,
   ApiProduct,
+  isProductActive,
   CreateProductPayload,
   supplierApi,
   ApiSupplier,
@@ -119,6 +120,7 @@ import {
   round2,
 } from "../../../utils/financialCalculations";
 import { toast } from "../../../utils/toast";
+import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { FormError } from "../../../components/common/FormError";
 import {
   FieldErrors,
@@ -157,6 +159,7 @@ import {
   validateSplit,
   SplitPaymentRow,
 } from "../../../utils/splitPayments";
+import { DateInput } from "../../../components/common/DateInput";
 const UNIT_OPTIONS = [
   "NONE",
   "PCS",
@@ -177,14 +180,10 @@ const TAX_RATE_OPTIONS = [
   { label: "Select Tax", rate: 0 },
   { label: "Exempted (0%)", rate: 0 },
   { label: "GST @ 0%", rate: 0 },
-  { label: "GST @ 0.1%", rate: 0.1 },
   { label: "GST @ 0.25%", rate: 0.25 },
-  { label: "GST @ 1.5%", rate: 1.5 },
   { label: "GST @ 3%", rate: 3 },
   { label: "GST @ 5%", rate: 5 },
-  { label: "GST @ 12%", rate: 12 },
   { label: "GST @ 18%", rate: 18 },
-  { label: "GST @ 28%", rate: 28 },
   { label: "GST @ 40%", rate: 40 },
 ];
 
@@ -866,6 +865,7 @@ export const PurchaseOrderView: React.FC = () => {
             pagination_required: false,
           }),
           productApi.getProducts({
+            activeOnly: true,
             page_size: 100,
             pagination_required: false,
           }),
@@ -898,7 +898,7 @@ export const PurchaseOrderView: React.FC = () => {
         prodRes.value?.data &&
         Array.isArray(prodRes.value.data)
       ) {
-        setAvailableProducts(prodRes.value.data);
+        setAvailableProducts(prodRes.value.data.filter(isProductActive));
       }
     } catch (err) {
       console.warn("Error loading form master data in Purchase Bills:", err);
@@ -920,6 +920,7 @@ export const PurchaseOrderView: React.FC = () => {
     setIsSearchingProducts(true);
     try {
       const res = await productApi.getProducts({
+        activeOnly: true,
         search: trimmed || undefined,
         page_size: 50,
         pagination_required: false,
@@ -930,7 +931,7 @@ export const PurchaseOrderView: React.FC = () => {
           if (trimmed) {
             prev.forEach((p) => map.set(p.id, p));
           }
-          res.data.forEach((p) => map.set(p.id, p));
+          res.data.filter(isProductActive).forEach((p) => map.set(p.id, p));
           return Array.from(map.values());
         });
       }
@@ -974,6 +975,7 @@ export const PurchaseOrderView: React.FC = () => {
     >();
 
     availableProducts.forEach((p) => {
+      if (!isProductActive(p)) return;
       const prodName = p.productName || (p as any).name || "Product";
       const prodCost = Number(p.purchasePrice ?? (p as any).costPrice ?? 0);
       const prodSale = Number(p.salePrice ?? (p as any).sellingPrice ?? 0);
@@ -1847,13 +1849,58 @@ export const PurchaseOrderView: React.FC = () => {
   };
 
   // Print Table Report for Purchase Orders
-  const handlePrintTableReport = () => {
-    if (paginatedPurchases.length === 0) {
-      toast.info("No purchase orders to print.");
-      return;
-    }
+  const fetchPurchaseOrderReportPage = async (page: number, size: number) => {
+    const response = await workPurchaseOrderApi.getPurchaseOrders({
+      page,
+      limit: size,
+      search: appliedSearch.trim() || undefined,
+      status: appliedPurchaseStatus !== "All" ? appliedPurchaseStatus : undefined,
+      pagination_required: true,
+    });
+    return {
+      items:
+        response && response.success && Array.isArray(response.data)
+          ? response.data.map(mapApiPurchaseOrderToUi)
+          : [],
+      totalRecords: response?.pagination?.totalRecords,
+      totalPages: response?.pagination?.totalPages,
+      hasNextPage: response?.pagination?.hasNextPage,
+    };
+  };
 
-    const printRows = paginatedPurchases.map((p) => ({
+  // Same client-side filtering the table applies (search, order status, payment status, supplier)
+  const loadPurchaseOrderReportRows = async (): Promise<PurchaseOrder[]> => {
+    const all = await fetchAllReportRows(fetchPurchaseOrderReportPage);
+    const q = appliedSearch.toLowerCase().trim();
+    return all.filter((p) => {
+      if (q) {
+        const matchesSearch =
+          p.purchaseNo.toLowerCase().includes(q) ||
+          (p.purchaseInvoiceNo || "").toLowerCase().includes(q) ||
+          p.supplierName.toLowerCase().includes(q) ||
+          p.items.some((it) => it.productName.toLowerCase().includes(q));
+        if (!matchesSearch) return false;
+      }
+      if (
+        appliedPurchaseStatus !== "All" &&
+        p.purchaseStatus.toLowerCase() !== appliedPurchaseStatus.toLowerCase()
+      ) {
+        return false;
+      }
+      const matchesPaymentStatus =
+        appliedPaymentStatus === "All" ||
+        p.paymentStatus.toLowerCase() === appliedPaymentStatus.toLowerCase();
+      const matchesSupplier =
+        appliedSupplier === "All" || p.supplierId === appliedSupplier;
+      return matchesPaymentStatus && matchesSupplier;
+    });
+  };
+
+  const handlePrintTableReport = () => runReport({
+    label: "purchase orders",
+    load: loadPurchaseOrderReportRows,
+    onRows: (rows) => {
+    const printRows = rows.map((p) => ({
       purchaseNo: p.purchaseNo,
       purchaseDate: p.purchaseDate,
       supplierName: p.supplierName,
@@ -1907,17 +1954,18 @@ export const PurchaseOrderView: React.FC = () => {
       ],
       summaryRow: {
         purchaseNo: "Total",
-        grandTotal: paginatedPurchases.reduce(
+        grandTotal: rows.reduce(
           (acc, p) => acc + (p.grandTotal || 0),
           0,
         ),
-        balance: paginatedPurchases.reduce(
+        balance: rows.reduce(
           (acc, p) => acc + (p.balance || 0),
           0,
         ),
       },
     });
-  };
+    },
+  });
 
   const handleSupplierChange = (supId: string) => {
     formErr.clearError("supplierId");
@@ -3578,13 +3626,11 @@ export const PurchaseOrderView: React.FC = () => {
   ]);
 
   // Export Purchases to Excel
-  const handleExportExcel = () => {
-    if (displayedPurchases.length === 0) {
-      toast.error("No purchase records available to export.");
-      return;
-    }
-
-    const excelRows = displayedPurchases.map((p, idx) => ({
+  const handleExportExcel = () => runReport({
+    label: "purchase orders",
+    load: loadPurchaseOrderReportRows,
+    onRows: (rows) => {
+    const excelRows = rows.map((p, idx) => ({
       sNo: idx + 1,
       purchaseNo: p.purchaseNo,
       purchaseInvoiceNo: p.purchaseInvoiceNo || "-",
@@ -3608,7 +3654,7 @@ export const PurchaseOrderView: React.FC = () => {
       filename: `Purchase_Bills_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Purchase Bills",
       title: "YAA CREATIONS CRM - PURCHASE ORDERS & BILLS DIRECTORY",
-      subtitle: `Total Purchase Orders: ${displayedPurchases.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
+      subtitle: `Total Purchase Orders: ${rows.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: "#", key: "sNo", align: "center", width: 8 },
         { header: "PO #", key: "purchaseNo", align: "center", width: 16 },
@@ -3671,7 +3717,7 @@ export const PurchaseOrderView: React.FC = () => {
       data: excelRows,
       summaryRow: {
         sNo: "TOTAL",
-        purchaseNo: `${displayedPurchases.length} Bills`,
+        purchaseNo: `${rows.length} Bills`,
         grandTotal: totalGrand,
         paidAmount: totalPaid,
         balance: totalBal,
@@ -3679,9 +3725,10 @@ export const PurchaseOrderView: React.FC = () => {
     });
 
     toast.success(
-      `Purchase Bills Excel report downloaded (${displayedPurchases.length} records)!`,
+      `Purchase Bills Excel report downloaded (${rows.length} records)!`,
     );
-  };
+    },
+  });
 
   return (
     <>
@@ -3925,37 +3972,33 @@ export const PurchaseOrderView: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                 <div>
                   <FormLabel required>Purchase Date</FormLabel>
-                  <input
-                    type="date"
-                    {...fieldAttr("purchaseDate")}
+                  <DateInput
                     value={formData.purchaseDate}
-                    onChange={(e) => {
+                    onChange={(v) => ((e) => {
                       formErr.clearError("purchaseDate");
                       formErr.clearError("dueDate");
                       setFormData((prev) => ({
                         ...prev,
                         purchaseDate: e.target.value,
                       }));
-                    }}
-                    className={FORM_INPUT_CLS}
+                    })({ target: { value: v } } as any)}
+                    {...fieldAttr("purchaseDate")}
                   />
                   <FormError message={formErr.errors.purchaseDate} />
                 </div>
 
                 <div>
                   <FormLabel>Due Date</FormLabel>
-                  <input
-                    type="date"
-                    {...fieldAttr("dueDate")}
+                  <DateInput
                     value={formData.dueDate}
-                    onChange={(e) => {
+                    onChange={(v) => ((e) => {
                       formErr.clearError("dueDate");
                       setFormData((prev) => ({
                         ...prev,
                         dueDate: e.target.value,
                       }));
-                    }}
-                    className={FORM_INPUT_CLS}
+                    })({ target: { value: v } } as any)}
+                    {...fieldAttr("dueDate")}
                   />
                   <FormError message={formErr.errors.dueDate} />
                 </div>
@@ -4100,7 +4143,7 @@ export const PurchaseOrderView: React.FC = () => {
               {/* Product Items Table Matching Requested Column Spec */}
               <div className="border border-slate-200 rounded-[4px] overflow-hidden bg-white shadow-2xs">
                 <div className="overflow-x-auto max-w-full">
-                  <table className="w-full text-xs border-collapse">
+                  <table className="w-full min-w-[1250px] text-xs border-collapse">
                     <thead>
                       <tr className="bg-[#33077C] text-white font-bold uppercase text-[11px] border-b border-[#33077C] tracking-wider select-none">
                         <th className="py-2.5 px-2.5 text-center border-r border-white/20 w-10 text-white/80 font-extrabold">
@@ -4429,22 +4472,20 @@ export const PurchaseOrderView: React.FC = () => {
 
                               {/* 8. Expiry Date */}
                               <td className="py-3 px-2 border-r border-slate-200 align-top">
-                                <input
-                                  type="date"
+                                <DateInput
                                   value={it.expDate || ""}
-                                  onChange={(e) =>
+                                  onChange={(v) => ((e) =>
                                     handleItemFieldChange(
                                       idx,
                                       "expDate" as any,
                                       e.target.value,
-                                    )
-                                  }
-                                  className="w-full h-10 px-2 text-center bg-white hover:border-slate-400 focus:bg-white border border-slate-300 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/10 rounded-[4px] text-xs font-medium text-slate-700 outline-none shadow-2xs transition-all"
+                                    ))({ target: { value: v } } as any)}
+                                  heightClass="h-10"
                                 />
                               </td>
 
                               {/* 9. Purchase Price (with and without tax separation) */}
-                              <td className="py-3 px-2 border-r border-slate-200 align-top">
+                              <td className="py-3 px-2 border-r border-slate-200 min-w-[150px] align-top">
                                 <div className="relative">
                                   <input
                                     type="number"
@@ -4495,7 +4536,7 @@ export const PurchaseOrderView: React.FC = () => {
                               </td>
 
                               {/* 10. Sale Price */}
-                              <td className="py-3 px-2 border-r border-slate-200 align-top">
+                              <td className="py-3 px-2 border-r border-slate-200 min-w-[120px] align-top">
                                 <input
                                   type="number"
                                   step="0.01"
@@ -4522,7 +4563,7 @@ export const PurchaseOrderView: React.FC = () => {
                               </td>
 
                               {/* 11. Discount (%) - Separation of % and Amount */}
-                              <td className="py-3 px-2 border-r border-slate-200 w-20 align-top">
+                              <td className="py-3 px-2 border-r border-slate-200 min-w-[100px] align-top">
                                 <input
                                   type="number"
                                   min="0"
@@ -4548,7 +4589,7 @@ export const PurchaseOrderView: React.FC = () => {
                                   }
                                 />
                               </td>
-                              <td className="py-3 px-2 border-r border-slate-200 w-20 align-top">
+                              <td className="py-3 px-2 border-r border-slate-200 min-w-[120px] align-top">
                                 <input
                                   type="number"
                                   step="0.01"
@@ -4579,7 +4620,7 @@ export const PurchaseOrderView: React.FC = () => {
                               {/* 12. GST (%) - Separation of % and Amount */}
                               {formData.withGst && (
                                 <>
-                                  <td className="py-3 px-2 border-r border-slate-200 w-24 align-top">
+                                  <td className="py-3 px-2 border-r border-slate-200 min-w-[110px] align-top">
                                     <CustomSelect
                                       disabled={!formData.withGst}
                                       value={String(it.taxPercent)}
@@ -4590,10 +4631,16 @@ export const PurchaseOrderView: React.FC = () => {
                                           Number(val),
                                         )
                                       }
-                                      options={TAX_RATE_OPTIONS.map((t) => ({
-                                        value: String(t.rate),
-                                        label: `${t.rate}%`,
-                                      }))}
+                                      options={[
+                                        ...TAX_RATE_OPTIONS.map((t) => ({
+                                          value: String(t.rate),
+                                          label: `${t.rate}%`,
+                                        })),
+                                        // A rate from an older slab (12%, 28% ...) stays selectable on existing documents.
+                                        ...(TAX_RATE_OPTIONS.some((t) => t.rate === Number(it.taxPercent || 0))
+                                          ? []
+                                          : [{ value: String(it.taxPercent), label: `${it.taxPercent}% (old slab)` }]),
+                                      ]}
                                       placeholder="0%"
                                       triggerClassName="!h-10 !rounded-[4px] !border !border-slate-300 hover:!border-slate-400 focus:!border-[#33077C] !bg-white shadow-2xs text-xs font-semibold justify-center"
                                       size="sm"
@@ -4604,7 +4651,7 @@ export const PurchaseOrderView: React.FC = () => {
                                       }
                                     />
                                   </td>
-                                  <td className="py-3 px-2 border-r border-slate-200 w-20 align-top">
+                                  <td className="py-3 px-2 border-r border-slate-200 min-w-[110px] align-top">
                                     <div className="h-10 flex items-center justify-end px-2.5 bg-slate-50/70 border border-slate-200 rounded-[4px] text-xs font-semibold text-slate-700">
                                       {itemTaxAmt > 0
                                         ? itemTaxAmt.toFixed(2)
@@ -4615,7 +4662,7 @@ export const PurchaseOrderView: React.FC = () => {
                               )}
 
                               {/* 13. Amount (Row Total) */}
-                              <td className="py-3 px-2 border-r border-slate-200 text-right align-top">
+                              <td className="py-3 px-2 border-r border-slate-200 min-w-[140px] text-right align-top">
                                 <div className="h-10 flex items-center justify-end px-3 rounded-[4px] bg-emerald-50 text-emerald-800 border border-emerald-200/80 font-bold text-xs font-sans">
                                   ₹
                                   {(it.total || 0).toLocaleString("en-IN", {
@@ -5487,18 +5534,16 @@ export const PurchaseOrderView: React.FC = () => {
                       <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                         Date <span className="text-rose-500">*</span>
                       </label>
-                      <input
-                        type="date"
-                        {...fieldAttr("date")}
+                      <DateInput
                         value={formPaymentDetails.date}
-                        onChange={(e) => {
+                        onChange={(v) => ((e) => {
                           formPayErr.clearError("date");
                           setFormPaymentDetails((prev) => ({
                             ...prev,
                             date: e.target.value,
                           }));
-                        }}
-                        className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                        })({ target: { value: v } } as any)}
+                        {...fieldAttr("date")}
                       />
                       <FormError message={formPayErr.errors.date} />
                     </div>
@@ -5832,10 +5877,11 @@ export const PurchaseOrderView: React.FC = () => {
                         >
                           <option value="None">None (0%)</option>
                           <option value="GST @ 0%">GST @ 0%</option>
+                          <option value="GST @ 0.25%">GST @ 0.25%</option>
+                          <option value="GST @ 3%">GST @ 3%</option>
                           <option value="GST @ 5%">GST @ 5%</option>
-                          <option value="GST @ 12%">GST @ 12%</option>
                           <option value="GST @ 18%">GST @ 18%</option>
-                          <option value="GST @ 28%">GST @ 28%</option>
+                          <option value="GST @ 40%">GST @ 40%</option>
                         </select>
                         <span className="text-[10px] text-slate-500 mt-0.5 block">
                           Applicable tax rate

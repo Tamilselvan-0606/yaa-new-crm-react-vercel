@@ -40,6 +40,7 @@ import { exportTableToExcel } from '../../../utils/excelExport';
 import { printTableReport, downloadTableReport } from '../../../utils/printUtils';
 
 import { formatDate } from '../utils/dateUtils';
+import { DateInput } from "../../../components/common/DateInput";
 const CHART_COLORS = ['#4309A2', '#7C3AED', '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#EC4899'];
 
 export const SalesReportView: React.FC = () => {
@@ -420,18 +421,16 @@ export const SalesReportView: React.FC = () => {
 
         {timeRange === 'custom' && (
           <div className="flex items-center gap-2 text-xs">
-            <input
-              type="date"
+            <DateInput
               value={customStartDate}
-              onChange={(e) => setCustomStartDate(e.target.value)}
-              className="h-8 px-2 bg-white border border-slate-200 rounded text-xs"
+              onChange={(v) => ((e) => setCustomStartDate(e.target.value))({ target: { value: v } } as any)}
+              heightClass="h-8"
             />
             <span className="text-slate-400 font-bold">to</span>
-            <input
-              type="date"
+            <DateInput
               value={customEndDate}
-              onChange={(e) => setCustomEndDate(e.target.value)}
-              className="h-8 px-2 bg-white border border-slate-200 rounded text-xs"
+              onChange={(v) => ((e) => setCustomEndDate(e.target.value))({ target: { value: v } } as any)}
+              heightClass="h-8"
             />
           </div>
         )}

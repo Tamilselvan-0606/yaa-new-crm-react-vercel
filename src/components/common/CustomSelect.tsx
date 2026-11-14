@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, Check } from 'lucide-react';
+import { ChevronDown, Check, Plus, Eye, Trash2 } from 'lucide-react';
 
 export interface SelectOption {
   value: string;
   label: string;
+  onView?: () => void;
+  onDelete?: () => void;
 }
 
 interface CustomSelectProps {
@@ -24,6 +26,13 @@ interface CustomSelectProps {
   searchable?: boolean;
   /** 'strong': larger, semi-bold options (the look of the invoice client / organization dropdown). */
   optionVariant?: 'default' | 'strong';
+  /** When set, a "+ label" row is pinned at the top of the menu and calls onAdd. */
+  addLabel?: string;
+  onAdd?: () => void;
+  /** Optional callbacks applied to all options if not provided per option */
+  onViewOption?: (value: string) => void;
+  onDeleteOption?: (value: string) => void;
+  zIndex?: number;
 }
 
 export const CustomSelect: React.FC<CustomSelectProps> = ({
@@ -41,6 +50,11 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
   error = false,
   searchable = false,
   optionVariant = 'default',
+  addLabel,
+  onAdd,
+  onViewOption,
+  onDeleteOption,
+  zIndex = 999999,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -301,7 +315,7 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
               left: dropdownPos.left,
               width: dropdownPos.width,
               maxHeight: dropdownPos.maxHeight,
-              zIndex: 999999,
+              zIndex,
             }}
             className={`bg-white rounded-xl border border-slate-200/90 shadow-2xl shadow-slate-900/15 overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-xs p-1 space-y-0.5 max-h-56 overflow-y-auto ${menuClassName}`}
           >
@@ -324,6 +338,22 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
                   placeholder="Search..."
                   className="w-full h-8 px-2.5 text-[11.5px] border border-slate-200 rounded-md outline-none focus:border-[#4309A2]"
                 />
+              </div>
+            )}
+
+            {addLabel && onAdd && (
+              <div
+                role="button"
+                onClick={() => {
+                  setIsOpen(false);
+                  setQuery('');
+                  onAdd();
+                }}
+                className="px-3.5 py-2.5 mb-0.5 text-xs sm:text-[13px] font-bold text-[#33077C] hover:bg-purple-50/70 cursor-pointer flex items-center gap-2 border-b border-slate-100"
+                style={{ borderRadius: '4px' }}
+              >
+                <Plus className="w-4 h-4 stroke-[2.5]" />
+                <span>{addLabel}</span>
               </div>
             )}
 
@@ -353,6 +383,9 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
             {visibleOptions.map((opt, index) => {
               const isSelected = String(opt.value) === String(value);
               const isActive = index === activeIndex;
+              const hasViewAction = Boolean(opt.onView || onViewOption);
+              const hasDeleteAction = Boolean(opt.onDelete || onDeleteOption);
+              const hasAnyAction = hasViewAction || hasDeleteAction;
 
               return (
                 <div
@@ -364,7 +397,7 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
                   aria-selected={isSelected}
                   onMouseEnter={() => setActiveIndex(index)}
                   onClick={() => handleSelect(opt.value)}
-                  className={`${optionVariant === 'strong' ? 'px-3.5 py-2.5 text-xs gap-3' : 'px-2.5 py-1.5 text-[11.5px]'} transition-all cursor-pointer flex items-center justify-between ${
+                  className={`group ${optionVariant === 'strong' ? 'px-3.5 py-2.5 text-xs gap-3' : 'px-2.5 py-1.5 text-[11.5px]'} transition-all cursor-pointer flex items-center justify-between ${
                     isSelected
                       ? activeColor === 'brand'
                         ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
@@ -377,18 +410,53 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
                   }`}
                   style={{ borderRadius: '4px' }}
                 >
-                  <span className="truncate">{opt.label}</span>
-                  {isSelected && (
-                    <Check
-                      className={`w-3.5 h-3.5 stroke-[2.5] ml-2 shrink-0 ${
-                        activeColor === 'brand'
-                          ? 'text-[#33077C]'
-                          : activeColor === 'orange'
-                          ? 'text-[#4309A2]'
-                          : 'text-emerald-600'
-                      }`}
-                    />
-                  )}
+                  <span className="truncate flex-1">{opt.label}</span>
+                  <div className="flex items-center gap-1 shrink-0 ml-2">
+                    {hasAnyAction && (
+                      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                        {hasViewAction && (
+                          <button
+                            type="button"
+                            title="View Details"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setIsOpen(false);
+                              if (opt.onView) opt.onView();
+                              else if (onViewOption) onViewOption(opt.value);
+                            }}
+                            className="p-1 rounded text-slate-400 hover:text-[#33077C] hover:bg-purple-100/60 transition-colors"
+                          >
+                            <Eye className="w-3.5 h-3.5 stroke-[2]" />
+                          </button>
+                        )}
+                        {hasDeleteAction && (
+                          <button
+                            type="button"
+                            title="Delete"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (opt.onDelete) opt.onDelete();
+                              else if (onDeleteOption) onDeleteOption(opt.value);
+                            }}
+                            className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 stroke-[2]" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {isSelected && (
+                      <Check
+                        className={`w-3.5 h-3.5 stroke-[2.5] shrink-0 ${
+                          activeColor === 'brand'
+                            ? 'text-[#33077C]'
+                            : activeColor === 'orange'
+                            ? 'text-[#4309A2]'
+                            : 'text-emerald-600'
+                        }`}
+                      />
+                    )}
+                  </div>
                 </div>
               );
             })}

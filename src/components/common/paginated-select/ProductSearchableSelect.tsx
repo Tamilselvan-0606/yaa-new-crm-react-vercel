@@ -1,7 +1,7 @@
 import React, { useMemo, useCallback } from 'react';
 import { SearchableSelect, SearchableOption } from '../SearchableSelect';
 import { usePaginatedDropdown } from '../../../hooks/usePaginatedDropdown';
-import { productApi, ApiProduct } from '../../../api/commerce/productApi';
+import { productApi, ApiProduct, isProductActive } from '../../../api/commerce/productApi';
 
 export interface ProductSearchableSelectProps {
   value: string;
@@ -41,13 +41,14 @@ export const ProductSearchableSelect: React.FC<ProductSearchableSelectProps> = (
     async ({ page, limit, search }: { page: number; limit: number; search: string }) => {
       try {
         const res = await productApi.getProducts({
+          activeOnly: true,
           page_no: page,
           page_size: limit,
           pagination_required: true,
           search: search || undefined,
         });
 
-        const data = res?.data || [];
+        const data = (res?.data || []).filter(isProductActive);
         const pagination = res?.pagination;
 
         return {
@@ -83,7 +84,7 @@ export const ProductSearchableSelect: React.FC<ProductSearchableSelectProps> = (
   });
 
   const options: SearchableOption[] = useMemo(() => {
-    return items.map((p) => {
+    return items.filter(isProductActive).map((p) => {
       const price = priceType === 'purchase' ? p.purchasePrice : p.salePrice;
       const stock = p.currentStock ?? p.openingStock ?? 0;
       return {

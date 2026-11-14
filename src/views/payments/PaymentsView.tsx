@@ -1,26 +1,40 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { PaymentItem } from '../../types';
 import {
   CreditCard,
-  Plus,
   FileText,
   Trash2,
   MoreVertical,
   Download,
+  CheckCircle2,
+  Clock,
+  History,
 } from 'lucide-react';
 import { getStatusBadge } from '../../components/common/Badge';
 import { SearchBar } from '../../components/common/SearchBar';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
-import { Button } from '../../components/common/Button';
 import { Pagination } from '../../components/common/Pagination';
 import { Modal } from '../../components/common/Modal';
 import { ConfirmationModal } from '../../utils/confirmationModal';
+import { downloadPaymentReceipt } from '../../utils/printUtils';
 import { PaymentFormModal } from '../../components/forms/PaymentFormModal';
 import {
   useGetPlatformPaymentsQuery,
   useDeletePlatformPaymentMutation,
 } from '../../api';
+
+/** hh:mm AM/PM from the first usable timestamp, or '-' when none carries a time. */
+const formatTimeHelper = (...candidates: Array<string | null | undefined>): string => {
+  for (const c of candidates) {
+    if (!c || !/d{2}:d{2}/.test(c)) continue;
+    const d = new Date(c);
+    if (isNaN(d.getTime())) continue;
+    return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  }
+  return '-';
+};
 
 const formatDateHelper = (dateStr?: string | null): string => {
   if (!dateStr) return '—';
@@ -100,6 +114,7 @@ export const PaymentsView: React.FC = () => {
   // Modals
   const [isRecordModalOpen, setIsRecordModalOpen] = useState(false);
   const [selectedInvoice, setSelectedInvoice] = useState<PaymentItem | null>(null);
+  const navigate = useNavigate();
 
   const payments: PaymentItem[] = useMemo(() => {
     const rawData = platformPaymentsRes?.data;
@@ -125,6 +140,7 @@ export const PaymentsView: React.FC = () => {
 
       return {
         id: item.id,
+        invoiceId: item.invoiceId || item.invoice?.id || undefined,
         invoiceNumber: item.invoiceNumber || item.receiptNumber || `INV-${item.id.slice(0, 8)}`,
         customerId: item.customerId,
         customerName: item.customerName || item.clientName || item.name || 'Unknown Client',
@@ -157,6 +173,7 @@ export const PaymentsView: React.FC = () => {
 
   const [deleteTarget, setDeleteTarget] = useState<PaymentItem | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isDownloadingReceipt, setIsDownloadingReceipt] = useState(false);
 
   const handleDeletePayment = (item: PaymentItem) => {
     if (!isAdmin) {
@@ -263,20 +280,6 @@ export const PaymentsView: React.FC = () => {
           </p>
         </div>
 
-        {/* Top Right Action Button: Record Payment */}
-        {isAdmin && (
-          <div className="flex items-center gap-3 shrink-0 w-full sm:w-auto">
-            <Button
-              variant="primary"
-              size="md"
-              onClick={() => setIsRecordModalOpen(true)}
-              icon={<Plus className="w-4 h-4 text-white" />}
-              className="w-full sm:w-auto justify-center"
-            >
-              Record Payment
-            </Button>
-          </div>
-        )}
       </div>
 
       {/* Metrics Row */}
@@ -300,10 +303,12 @@ export const PaymentsView: React.FC = () => {
         </div>
 
         <div className="p-4 bg-white border border-[#E2E8F0] rounded-xl shadow-xs">
-          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
-            Total Invoices Issued
+          <span className="text-[11px] font-bold text-[#33077C] uppercase tracking-wider block">
+            Total Payment Entries
           </span>
-          <p className="text-xl font-black text-slate-900 mt-1">{totalInvoicesCount}</p>
+          <p className="text-xl font-black text-[#33077C] mt-1">
+            {totalInvoicesCount} {totalInvoicesCount === 1 ? 'Receipt' : 'Receipts'}
+          </p>
         </div>
 
         <div className="p-4 bg-white border border-[#E2E8F0] rounded-xl shadow-xs">
@@ -357,24 +362,25 @@ export const PaymentsView: React.FC = () => {
       {/* 3. Payments Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse border border-slate-200 min-w-[1200px]">
+          <table className="w-full text-left border-collapse border border-slate-200 min-w-[1300px]">
             <thead>
               <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">NAME</th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">INVOICE NUMBER</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">CUSTOMER NAME</th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">TOTAL AMOUNT</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">PAID AMOUNT</th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">OUTSTANDING</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">PAID</th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">PAYMENT MODE</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">TRANSACTION ID</th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">PAYMENT DATE</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTIONS</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTION</th>
               </tr>
             </thead>
             <tbody className="text-sm">
               {loading ? (
                 <tr>
-                  <td colSpan={9} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={10} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <div className="w-7 h-7 border-2 border-purple-200 border-t-[#33077C] rounded-full animate-spin" />
                       <span className="text-xs text-slate-500">Loading payments...</span>
@@ -383,7 +389,7 @@ export const PaymentsView: React.FC = () => {
                 </tr>
               ) : pagedPayments.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={10} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     No records found matching your criteria.
                   </td>
                 </tr>
@@ -404,13 +410,6 @@ export const PaymentsView: React.FC = () => {
                       onClick={() => setSelectedInvoice(item)}
                       className="hover:bg-slate-50/80 transition-colors border-b border-slate-200 font-sans cursor-pointer"
                     >
-                      {/* 1. NAME */}
-                      <td className="py-4 px-4 border border-slate-200 whitespace-nowrap">
-                        <span className="font-bold text-slate-900 text-xs sm:text-[14px]">
-                          {item.customerName}
-                        </span>
-                      </td>
-
                       {/* 2. INVOICE NUMBER */}
                       <td className="py-4 px-4 border border-slate-200 whitespace-nowrap">
                         <span className="text-xs font-bold text-[#33077C] tracking-wide">
@@ -418,10 +417,24 @@ export const PaymentsView: React.FC = () => {
                         </span>
                       </td>
 
+                      {/* 1. NAME */}
+                      <td className="py-4 px-4 border border-slate-200 whitespace-nowrap">
+                        <span className="font-bold text-slate-900 text-xs sm:text-[14px]">
+                          {item.customerName}
+                        </span>
+                      </td>
+
                       {/* 3. TOTAL AMOUNT */}
                       <td className="py-4 px-4 border border-slate-200 whitespace-nowrap">
                         <span className="font-bold text-slate-900 text-xs sm:text-[13px]">
                           ₹{totalVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      </td>
+
+                      {/* 5. PAID */}
+                      <td className="py-4 px-4 border border-slate-200 whitespace-nowrap">
+                        <span className="font-bold text-emerald-700 text-xs sm:text-[13px]">
+                          ₹{paidVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       </td>
 
@@ -438,17 +451,24 @@ export const PaymentsView: React.FC = () => {
                         )}
                       </td>
 
-                      {/* 5. PAID */}
-                      <td className="py-4 px-4 border border-slate-200 whitespace-nowrap">
-                        <span className="font-bold text-emerald-700 text-xs sm:text-[13px]">
-                          ₹{paidVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </span>
-                      </td>
-
                       {/* 6. PAYMENT MODE */}
                       <td className="py-4 px-4 border border-slate-200 whitespace-nowrap">
                         <span className="text-xs font-semibold text-slate-800">
                           {item.paymentMethod || 'Bank Transfer'}
+                        </span>
+                      </td>
+
+                      {/* TRANSACTION ID */}
+                      <td className="py-4 px-4 border border-slate-200 whitespace-nowrap">
+                        <span className="text-xs font-medium text-slate-700">
+                          {item.transactionId || item.referenceNumber || '-'}
+                        </span>
+                      </td>
+
+                      {/* 8. PAYMENT DATE */}
+                      <td className="py-4 px-4 border border-slate-200 whitespace-nowrap">
+                        <span className="text-xs font-medium text-slate-700">
+                          {formatDateHelper(item.paymentDate || item.dueDate)}
                         </span>
                       </td>
 
@@ -480,13 +500,6 @@ export const PaymentsView: React.FC = () => {
                             <span>{item.status}</span>
                           </span>
                         )}
-                      </td>
-
-                      {/* 8. PAYMENT DATE */}
-                      <td className="py-4 px-4 border border-slate-200 whitespace-nowrap">
-                        <span className="text-xs font-medium text-slate-700">
-                          {formatDateHelper(item.paymentDate || item.dueDate)}
-                        </span>
                       </td>
 
                       {/* 9. ACTIONS */}
@@ -548,6 +561,26 @@ export const PaymentsView: React.FC = () => {
                                   <FileText style={{ width: '13px', height: '13px' }} className="text-white stroke-[2.2]" />
                                 </span>
                                 <span>View Invoice</span>
+                              </button>
+
+                              {/* View History */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveDropdownId(null);
+                                  navigate('/sales/invoices', {
+                                    state: { openHistoryInvoiceId: item.invoiceId, openHistoryInvoiceNumber: item.invoiceNumber },
+                                  });
+                                }}
+                                className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
+                              >
+                                <span
+                                  style={{ width: '26px', height: '26px' }}
+                                  className="rounded-full bg-[#33077C] flex items-center justify-center shrink-0 shadow-2xs"
+                                >
+                                  <History style={{ width: '13px', height: '13px' }} className="text-white stroke-[2.2]" />
+                                </span>
+                                <span>View History</span>
                               </button>
 
                               {/* Delete (Admin only) */}
@@ -630,83 +663,74 @@ export const PaymentsView: React.FC = () => {
             title={`Invoice #${selectedInvoice.invoiceNumber || selectedInvoice.id}`}
             subtitle={`Customer: ${selectedInvoice.customerName}`}
             headerGradient={true}
-            maxWidth="md"
+            maxWidth="4xl"
+            showBackIcon={true}
+            hideCloseButton={true}
           >
             <div className="space-y-4 font-sans text-slate-700">
-              {/* Highlight Card */}
-              <div className="p-4 bg-gradient-to-br from-purple-50/70 via-slate-50 to-white border border-purple-100 rounded-2xl space-y-3">
-                <div className="flex items-center justify-between pb-3 border-b border-purple-100/70">
-                  <div>
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
-                      Customer
-                    </span>
-                    <span className="text-sm font-bold text-[#33077C] mt-0.5 block">
-                      {selectedInvoice.customerName}
-                    </span>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
-                      Amount Paid
-                    </span>
-                    <span className="text-lg font-black text-emerald-700 mt-0.5 block">
-                      ₹{paidVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                  </div>
+              {/* Summary cards */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+                <div className="rounded-xl border border-purple-100 bg-purple-50/50 px-4 py-3.5">
+                  <p className="text-xs font-bold uppercase tracking-wide text-purple-700">Total Amount</p>
+                  <p className="text-xl font-extrabold text-[#33077C] mt-1">
+                    ₹{totalVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
                 </div>
+                <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3.5">
+                  <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Paid</p>
+                  <p className="text-xl font-extrabold text-emerald-600 mt-1">
+                    ₹{paidVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-amber-100 bg-amber-50/60 px-4 py-3.5">
+                  <p className="text-xs font-bold uppercase tracking-wide text-amber-700">Outstanding</p>
+                  <p className="text-xl font-extrabold text-orange-600 mt-1">
+                    ₹{outstandingVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-3.5">
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Status</p>
+                  <span
+                    className={`inline-flex items-center gap-1.5 mt-1.5 px-3 py-1 rounded-full border text-xs font-bold ${
+                      isPaid
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                        : isPartiallyPaid || isPending
+                          ? 'bg-amber-100 text-amber-800 border-amber-300'
+                          : 'bg-slate-100 text-slate-700 border-slate-300'
+                    }`}
+                  >
+                    {isPaid ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Clock className="w-3.5 h-3.5" />}
+                    {isPaid ? 'Paid' : isPartiallyPaid ? 'Partial' : isPending ? 'Pending' : selectedInvoice.status}
+                  </span>
+                </div>
+              </div>
 
-                {/* Summary Grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs pt-1">
-                  <div>
-                    <span className="text-slate-400 font-semibold block text-[11px]">Total Amount</span>
-                    <span className="font-bold text-slate-800 text-[13px] mt-0.5 block">
-                      ₹{totalVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 font-semibold block text-[11px]">Outstanding Due</span>
-                    <span className={`text-[13px] font-bold mt-0.5 block ${outstandingVal > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
-                      ₹{outstandingVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 font-semibold block text-[11px]">Payment Mode</span>
-                    <span className="font-semibold text-slate-800 text-[13px] mt-0.5 block">
-                      {selectedInvoice.paymentMethod || 'Bank Transfer'}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 font-semibold block text-[11px]">Status</span>
-                    <div className="mt-1">
-                      {isPaid ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-300 text-xs font-bold">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                          <span>Paid</span>
-                        </span>
-                      ) : isPartiallyPaid ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-300 text-xs font-bold">
-                          <span className="w-1.5 h-1.5 rounded-full bg-purple-500" />
-                          <span>Partially Paid</span>
-                        </span>
-                      ) : isPending ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-300 text-xs font-bold">
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                          <span>Pending</span>
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-300 text-xs font-bold">
-                          <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-                          <span>{selectedInvoice.status}</span>
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="col-span-2 pt-1 border-t border-purple-50 flex items-center justify-between">
-                    <span className="text-slate-400 font-semibold text-[11px]">Payment Date</span>
-                    <span className="font-semibold text-slate-800 text-xs">
-                      {formatDateHelper(selectedInvoice.paymentDate || selectedInvoice.dueDate)}
-                    </span>
-                  </div>
+              {/* Payment details */}
+              <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                <div className="flex items-center gap-2 pb-2.5 border-b border-slate-100">
+                  <span className="w-7 h-7 rounded-full bg-purple-50 text-[#33077C] flex items-center justify-center">
+                    <CreditCard className="w-3.5 h-3.5" />
+                  </span>
+                  <span className="text-sm font-bold text-slate-900">Payment Details</span>
                 </div>
+                {[
+                  { label: 'Payment Mode', value: selectedInvoice.paymentMethod || 'Bank Transfer' },
+                  { label: 'Transaction ID', value: selectedInvoice.transactionId || selectedInvoice.referenceNumber || '-' },
+                  { label: 'Payment Date', value: formatDateHelper(selectedInvoice.paymentDate || selectedInvoice.dueDate) },
+                  { label: 'Payment Time', value: formatTimeHelper(selectedInvoice.paymentDate, selectedInvoice.createdAt) },
+                  {
+                    label: 'Status',
+                    value: isPaid ? 'Paid' : isPartiallyPaid ? 'Partial' : isPending ? 'Pending' : selectedInvoice.status || '-',
+                  },
+                ].map((row, i, arr) => (
+                  <div
+                    key={row.label}
+                    className={`flex items-center justify-between gap-4 py-2.5 ${i < arr.length - 1 ? 'border-b border-slate-100' : ''}`}
+                  >
+                    <span className="text-sm font-medium text-slate-400">{row.label}</span>
+                    <span className="text-sm font-bold text-slate-900 text-right">{row.value}</span>
+                  </div>
+                ))}
               </div>
 
               {selectedInvoice.notes && (
@@ -722,19 +746,48 @@ export const PaymentsView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setSelectedInvoice(null)}
-                  className="h-10 px-4 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs font-bold transition-all cursor-pointer"
+                  className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2"
                 >
                   Close
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    showToast('success', 'Invoice Downloaded', `Invoice #${selectedInvoice.invoiceNumber || selectedInvoice.id} exported as PDF.`);
-                    setSelectedInvoice(null);
+                  disabled={isDownloadingReceipt}
+                  onClick={async () => {
+                    const inv = selectedInvoice;
+                    const docNo = inv.invoiceNumber || inv.id;
+                    const statusLc = inv.status?.toLowerCase() || '';
+                    setIsDownloadingReceipt(true);
+                    try {
+                      await downloadPaymentReceipt(
+                        {
+                          receiptNo: String(docNo),
+                          paymentDate: (inv.paymentDate || inv.dueDate || new Date().toISOString()).slice(0, 10),
+                          dueDate: inv.dueDate ? inv.dueDate.slice(0, 10) : undefined,
+                          status: inv.status,
+                          statusColor:
+                            statusLc === 'paid' ? 'emerald' : statusLc === 'partially paid' ? 'purple' : statusLc === 'pending' ? 'amber' : 'slate',
+                          customerName: inv.customerName,
+                          paymentMethod: inv.paymentMethod || 'Bank Transfer',
+                          description: inv.productName || inv.productOrService || undefined,
+                          totalAmount: totalVal,
+                          paidAmount: paidVal,
+                          notes: inv.notes,
+                        },
+                        `Receipt_${String(docNo).replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`
+                      );
+                      showToast('success', 'Receipt Downloaded', `Receipt for #${docNo} downloaded as PDF.`);
+                      setSelectedInvoice(null);
+                    } catch (err) {
+                      console.error('Receipt PDF download failed:', err);
+                      showToast('error', 'Download Failed', 'Could not generate the PDF receipt. Please try again.');
+                    } finally {
+                      setIsDownloadingReceipt(false);
+                    }
                   }}
-                  className="flex items-center justify-center gap-2 h-10 px-5 bg-[#33077C] text-white rounded-xl text-xs font-bold hover:bg-[#432eb5] transition-all hover:scale-[1.02] active:scale-[0.98] shadow-xs cursor-pointer"
+                  className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] disabled:opacity-60 disabled:cursor-not-allowed text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2"
                 >
-                  <Download className="w-3.5 h-3.5" />
+                  <Download className="w-4 h-4" />
                   <span>Download PDF Receipt</span>
                 </button>
               </div>

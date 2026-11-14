@@ -33,13 +33,14 @@ import {
   Banknote,
 } from 'lucide-react';
 import { pdf } from '@react-pdf/renderer';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useInvoiceStore, SavedInvoice, SavedInvoiceItem, InvoicePaymentDetails } from '../../store/useInvoiceStore';
 import { useProformaInvoiceStore } from '../../store/useProformaInvoiceStore';
 import { CustomSelect } from '../../components/common/CustomSelect';
 import { Modal } from '../../components/common/Modal';
 import { RecordPaymentModal } from '../../components/forms/RecordPaymentModal';
+import { organizationBankApi } from '../../api/platform/organizationBankApi';
 import { InvoicePDFDocument } from '../../components/invoices/InvoicePDFDocument';
 import { sendWhatsAppDocument } from '../../services/whatsappGateway';
 import { SearchBar } from '../../components/common/SearchBar';
@@ -47,6 +48,7 @@ import { FilterDropdown } from '../../components/common/FilterDropdown';
 import { Pagination } from '../../components/common/Pagination';
 import { Button } from '../../components/common/Button';
 import { ConfirmationModal } from '../../utils/confirmationModal';
+import { numberToWordsIndian } from '../../utils/printUtils';
 import {
   proformaInvoiceApi,
   ProformaInvoiceApiItem,
@@ -136,6 +138,7 @@ const getFallbackSellerDetails = (apiItem?: any) => {
       address: cachedSubOrg.address || cachedSubOrg.location || cachedOrg?.address || '',
       email: cachedSubOrg.email || cachedOrg?.email || '',
       phone: cachedSubOrg.phone || cachedSubOrg.whatsapp || cachedOrg?.phone || '',
+      logo: cachedSubOrg.logo || cachedSubOrg.logoUrl || cachedOrg?.logo || cachedOrg?.logoUrl || '',
     };
   }
 
@@ -147,19 +150,35 @@ const getFallbackSellerDetails = (apiItem?: any) => {
     address: cachedOrg?.address || cachedOrg?.location || '',
     email: cachedOrg?.email || '',
     phone: cachedOrg?.phone || cachedOrg?.whatsapp || '',
+    logo: cachedOrg?.logo || cachedOrg?.logoUrl || '',
   };
 };
 
 // Maps API line items to the screen's item shape. Applied AFTER the raw record is spread into the result,
 // otherwise the raw `items` (title/quantity) replace these (name/qty) and the rows render blank.
-const mapLineItems = (items: any[] | undefined, idPrefix: string, defaultHsn: string) =>
-  (items || []).map((it: any, idx: number) => {
+// The API stores the discount only as an invoice-level total (discountTotal); line items carry no discount.
+// When no line has its own discount, the total is shared across the lines in proportion to their subtotals
+// so the Discount column in the view / print / PDF matches the summary.
+const mapLineItems = (items: any[] | undefined, idPrefix: string, defaultHsn: string, discountTotal = 0) => {
+  const list = items || [];
+  const subs = list.map((it: any) => (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0));
+  const grossSum = subs.reduce((a, b) => a + b, 0);
+  const hasLineDiscount = list.some((it: any) => Number(it.discount) > 0);
+  const toShare = !hasLineDiscount && discountTotal > 0 && grossSum > 0 ? Math.min(discountTotal, grossSum) : 0;
+  let allocated = 0;
+  return list.map((it: any, idx: number) => {
     const qty = Number(it.quantity) || 1;
     const price = Number(it.unitPrice) || 0;
     const taxRate = Number(it.gstPercent) || 0;
     const sub = qty * price;
     const taxAmount = Number(it.taxAmount) || (sub * taxRate) / 100;
-    const total = Number(it.lineTotal) || sub + taxAmount;
+    let disc = Number(it.discount) || 0;
+    if (toShare > 0) {
+      // last line takes the remainder so the rows add up exactly to the total
+      disc = idx === list.length - 1 ? toShare - allocated : Math.round(((toShare * sub) / grossSum) * 100) / 100;
+      allocated += disc;
+    }
+    const total = (Number(it.lineTotal) || sub + taxAmount) - (toShare > 0 ? disc : 0);
     return {
       id: it.id || it.itemId || `${idPrefix}_${idx + 1}`,
       name: it.title || it.itemDescription || it.itemId || `Line Item ${idx + 1}`,
@@ -168,11 +187,28 @@ const mapLineItems = (items: any[] | undefined, idPrefix: string, defaultHsn: st
       qty,
       unitPrice: price,
       taxPercent: taxRate,
-      discount: 0,
+      discount: disc,
       subtotal: sub,
       total,
     };
   });
+};
+
+// The API returns the saved bank either as the organization-banks object or as just its id.
+const mapBankField = (raw: any, fallback?: any): SavedInvoice['bank'] => {
+  const src = raw && typeof raw === 'object' ? raw : fallback && typeof fallback === 'object' ? fallback : null;
+  const id = typeof raw === 'string' ? raw : raw?.id;
+  if (!src && !id) return undefined;
+  return {
+    id: id || undefined,
+    bankName: src?.bankName || src?.bank || '',
+    accountName: src?.accountHolderName || src?.accountName || src?.accountHolder || src?.name || '',
+    accountNumber: src?.accountNumber || src?.accountNo || '',
+    ifscCode: src?.ifscCode || src?.ifsc || '',
+    branchName: src?.branchName || src?.branch || '',
+    upiId: src?.upiId || src?.vpa || '',
+  };
+};
 
 const mapApiProformaToSavedInvoice =(api: ProformaInvoiceApiItem): SavedInvoice => {
   const rawInvoiceDate = api.invoiceDate || (api as any).date || '';
@@ -193,7 +229,7 @@ const mapApiProformaToSavedInvoice =(api: ProformaInvoiceApiItem): SavedInvoice 
     status: (api.status as any) || 'Draft',
     client: {
       id: api.customerId || api.organizationId,
-      company: api.customerName || 'Client Organization',
+      company: api.customerCompany || api.customerName || 'Client Organization',
       name: api.customerName || 'Customer',
       email: api.customerEmail || '',
       phone: api.customerPhone || '',
@@ -209,15 +245,8 @@ const mapApiProformaToSavedInvoice =(api: ProformaInvoiceApiItem): SavedInvoice 
       address: seller.address || seller.location || fallbackSeller.address,
       email: seller.email || fallbackSeller.email,
       phone: seller.phone || seller.whatsapp || fallbackSeller.phone,
+      logo: seller.logo || seller.logoUrl || fallbackSeller.logo,
     },
-    bank: bankData ? {
-      bankName: bankData.bankName || bankData.bank || '',
-      accountName: bankData.accountName || bankData.name || seller.name || '',
-      accountNumber: bankData.accountNumber || bankData.accountNo || '',
-      ifscCode: bankData.ifscCode || bankData.ifsc || '',
-      branchName: bankData.branchName || bankData.branch || '',
-      upiId: bankData.upiId || bankData.vpa || '',
-    } : undefined,
     subtotal: Number(api.subTotal) || 0,
     totalDiscount: Number(api.discountTotal) || 0,
     taxableAmount: Math.max(0, (Number(api.subTotal) || 0) - (Number(api.discountTotal) || 0)),
@@ -227,7 +256,8 @@ const mapApiProformaToSavedInvoice =(api: ProformaInvoiceApiItem): SavedInvoice 
     grandTotal: Number(api.grandTotal) || 0,
     createdAt: api.createdAt,
     ...(api as any),
-    items: mapLineItems(api.items as any[], 'pitem', ''),
+    items: mapLineItems(api.items as any[], 'pitem', '', Number(api.discountTotal) || 0),
+    bank: mapBankField((api as any).bank ?? (api as any).bankAccount ?? (api as any).bankAccountId, (api as any).bankDetails || seller.bank),
   };
 };
 
@@ -286,7 +316,7 @@ const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
     status: (api.status as any) || (api.amountPaid >= api.grandTotal - 0.001 ? 'Paid' : api.amountPaid > 0 ? 'Partially Paid' : 'Pending'),
     client: {
       id: api.customerId || api.organizationId,
-      company: api.customerName || 'Client Organization',
+      company: api.customerCompany || api.customerName || 'Client Organization',
       name: api.customerName || 'Customer',
       email: api.customerEmail || '',
       phone: api.customerPhone || '',
@@ -302,15 +332,8 @@ const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
       address: seller.address || seller.location || fallbackSeller.address,
       email: seller.email || fallbackSeller.email,
       phone: seller.phone || seller.whatsapp || fallbackSeller.phone,
+      logo: seller.logo || seller.logoUrl || fallbackSeller.logo,
     },
-    bank: bankData ? {
-      bankName: bankData.bankName || bankData.bank || '',
-      accountName: bankData.accountName || bankData.name || seller.name || '',
-      accountNumber: bankData.accountNumber || bankData.accountNo || '',
-      ifscCode: bankData.ifscCode || bankData.ifsc || '',
-      branchName: bankData.branchName || bankData.branch || '',
-      upiId: bankData.upiId || bankData.vpa || '',
-    } : undefined,
     subtotal: Number(api.subTotal) || 0,
     totalDiscount: Number(api.discountTotal) || 0,
     taxableAmount: Math.max(0, (Number(api.subTotal) || 0) - (Number(api.discountTotal) || 0)),
@@ -321,12 +344,23 @@ const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
     paymentDetails,
     createdAt: api.createdAt,
     ...(api as any),
-    items: mapLineItems(api.items as any[], 'item', '998314'),
+    items: mapLineItems(api.items as any[], 'item', '998314', Number(api.discountTotal) || 0),
+    bank: mapBankField((api as any).bank ?? (api as any).bankAccount ?? (api as any).bankAccountId, (api as any).bankDetails || seller.bank),
   };
 };
 
 export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }) => {
   const navigate = useNavigate();
+  const location = useLocation();
+  // Set when another page (Payments > View History) asks to open an invoice's payment history on arrival.
+  const historyNav = (location.state as { openHistoryInvoiceId?: string; openHistoryInvoiceNumber?: string } | null) ?? null;
+  const pendingHistoryInvoiceId = useRef<string | null>(historyNav?.openHistoryInvoiceId ?? null);
+  // Receipt numbers (REC-...) are not invoice numbers, so they are never used as a list search.
+  const pendingHistoryInvoiceNo = useRef<string | null>(
+    !historyNav?.openHistoryInvoiceId && historyNav?.openHistoryInvoiceNumber && !/^REC-/i.test(historyNav.openHistoryInvoiceNumber)
+      ? historyNav.openHistoryInvoiceNumber
+      : null,
+  );
   const { showToast, isSuperAdmin, isOrgSuperAdmin, currentUser } = useAuth();
   const { addInvoice: addStandardInvoice, deleteInvoice: deleteStandardInvoice } = useInvoiceStore();
   const { addProformaInvoice, deleteProformaInvoice } = useProformaInvoiceStore();
@@ -346,8 +380,8 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   const isLoading = isProforma ? isLoadingProformas : isLoadingInvoices;
   const totalInvoiceCount = isProforma ? proformaTotalRecords : invoicesTotalRecords;
 
-  const [pendingSearch, setPendingSearch] = useState('');
-  const [appliedSearch, setAppliedSearch] = useState('');
+  const [pendingSearch, setPendingSearch] = useState(pendingHistoryInvoiceNo.current ?? '');
+  const [appliedSearch, setAppliedSearch] = useState(pendingHistoryInvoiceNo.current ?? '');
   const [pendingStatus, setPendingStatus] = useState<string>('All');
   const [appliedStatus, setAppliedStatus] = useState<string>('All');
   const [pendingBilledOrgId, setPendingBilledOrgId] = useState<string>('');
@@ -431,6 +465,60 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [viewingInvoice, setViewingInvoice] = useState<SavedInvoice | null>(null);
+
+  // The bank saved on the invoice comes back from the API as an object (shown as is) or just an id (looked up
+  // here). Documents saved without a bank fall back to the organization's default bank. Nothing is shown if
+  // none is available.
+  const [defaultBank, setDefaultBank] = useState<SavedInvoice['bank'] | null>(null);
+  const viewingInvoiceId = viewingInvoice?.id;
+  const viewingInvoiceHasBank = !!(viewingInvoice?.bank?.accountNumber || viewingInvoice?.bank?.bankName);
+  const viewingBankId = viewingInvoice?.bank?.id;
+  const viewingSubOrgId = (viewingInvoice as any)?.subOrganizationId as string | undefined;
+  useEffect(() => {
+    setDefaultBank(null);
+    if (!viewingInvoiceId || viewingInvoiceHasBank) return;
+    let cancelled = false;
+    const toBank = (b: any): SavedInvoice['bank'] => ({
+      id: b.id,
+      bankName: b.bankName,
+      accountName: b.accountHolderName || b.accountName || b.accountHolder || '',
+      accountNumber: b.accountNumber,
+      ifscCode: b.ifscCode || b.ifsc || '',
+      branchName: b.branchName || '',
+      upiId: b.upiId || '',
+    });
+    const loadDefault = () => {
+      const orgId = currentUser?.organizationId || getStoredOrganizationId() || undefined;
+      return organizationBankApi
+        .list({
+          page: 1,
+          limit: 100,
+          status: 'Active',
+          sortBy: 'isDefault',
+          sortOrder: 'desc',
+          organizationId: orgId,
+          subOrganizationId: viewingSubOrgId || undefined,
+        })
+        .then((res) => res?.data?.find((x) => x.isDefault) || res?.data?.[0] || null);
+    };
+    const request = viewingBankId
+      ? organizationBankApi
+          .getById(viewingBankId)
+          .then((res) => res?.data || null)
+          .catch(() => loadDefault())
+      : loadDefault();
+    request
+      .then((b) => {
+        if (cancelled || !b) return;
+        setDefaultBank(toBank(b));
+      })
+      .catch(() => {
+        /* no bank details shown */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewingInvoiceId, viewingInvoiceHasBank, viewingBankId, viewingSubOrgId, currentUser?.organizationId]);
   const viewingDocId = viewingInvoice?.id;
 
   // Opening a proforma / invoice shows the list row at once, then loads the full record (GET by id) so the
@@ -452,9 +540,10 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
         setViewingInvoice((cur: SavedInvoice | null) => {
           if (!cur || cur.id !== detail.id) return cur;
           // seller (company/bank) comes from the logged-in organization, not from this record: keep the row's
-          const { company: _company, bank: _bank, ...rest } = detail as any;
+          const { company: _company, bank: detailBank, ...rest } = detail as any;
           const kept = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== '' && v != null));
-          return { ...cur, ...kept, items: detail.items.length ? detail.items : cur.items } as SavedInvoice;
+          const savedBank = detailBank?.id || detailBank?.accountNumber ? { bank: detailBank } : {};
+          return { ...cur, ...kept, ...savedBank, items: detail.items.length ? detail.items : cur.items } as SavedInvoice;
         });
       })
       .catch(() => {
@@ -772,6 +861,37 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
     }
   };
 
+  // Open by invoice id (exact) when the Payments page knows it.
+  useEffect(() => {
+    const id = pendingHistoryInvoiceId.current;
+    if (!id || isProforma) return;
+    pendingHistoryInvoiceId.current = null;
+    navigate(location.pathname, { replace: true, state: null });
+    (async () => {
+      try {
+        const res = await invoiceApi.getInvoiceById(id);
+        if (res?.data) handleOpenPaymentHistory(mapApiInvoiceToSavedInvoice(res.data as any));
+        else showToast('error', 'Invoice not found', 'Could not find the invoice for this payment.');
+      } catch (err) {
+        console.warn('Could not open payment history:', err);
+        showToast('error', 'Invoice not found', 'Could not find the invoice for this payment.');
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Otherwise open by invoice number once the filtered list has loaded.
+  useEffect(() => {
+    const target = pendingHistoryInvoiceNo.current;
+    if (!target || isProforma || isLoadingInvoices) return;
+    const match = liveInvoices.find((i) => i.invoiceNumber === target);
+    if (!match) return;
+    pendingHistoryInvoiceNo.current = null;
+    navigate(location.pathname, { replace: true, state: null });
+    handleOpenPaymentHistory(match);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveInvoices, isLoadingInvoices, isProforma]);
+
   const handleConfirmPayment = async (paymentDetails: InvoicePaymentDetails) => {
     if (!paymentModalInvoice) return;
     try {
@@ -935,6 +1055,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
     if (isProforma) {
       try {
         const updatePayload: UpdateProformaRequest = {
+          bankAccountId: updatedInvoice.bank?.id || undefined,
           status: updatedInvoice.status,
           invoiceDate: updatedInvoice.invoiceDate,
           dueDate: updatedInvoice.dueDate,
@@ -961,6 +1082,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
     } else {
       try {
         const updatePayload: UpdateInvoiceRequest = {
+          bankAccountId: updatedInvoice.bank?.id || undefined,
           dueDate: updatedInvoice.dueDate,
           notes: updatedInvoice.description,
           discountTotal: updatedInvoice.totalDiscount,
@@ -997,10 +1119,12 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   // 1. FULL PAGE INVOICE DETAIL VIEW (Matching Reference Document Layout)
   // =========================================================================
   if (viewingInvoice) {
+    const effectiveLogo = (isPlatformAdmin && sellerLogoUrl) || viewingInvoice.company?.logo || null;
     const activeInvoice: SavedInvoice =
       isPlatformAdmin && sellerDetail
         ? {
             ...viewingInvoice,
+            bank: viewingInvoiceHasBank ? viewingInvoice.bank : defaultBank || undefined,
             company: {
               ...viewingInvoice.company,
               name: sellerDetail.companyName || '',
@@ -1009,9 +1133,10 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
               address: sellerDetail.address || '',
               email: sellerDetail.email || '',
               phone: sellerDetail.phoneNumber || '',
+              logo: sellerDetail.logoUrl || viewingInvoice.company?.logo,
             },
           }
-        : viewingInvoice;
+        : { ...viewingInvoice, bank: viewingInvoiceHasBank ? viewingInvoice.bank : defaultBank || undefined };
 
     const handlePrintInvoicePdf = async () => {
       try {
@@ -1021,6 +1146,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
           <InvoicePDFDocument
             invoice={activeInvoice}
             documentTitle={isProforma ? 'Proforma Invoice' : 'Invoice'}
+            logoUrl={effectiveLogo}
           />
         ).toBlob();
         const url = URL.createObjectURL(blob);
@@ -1252,11 +1378,13 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
 
             {/* Right: Company Logo */}
             <div className="flex items-center sm:justify-end print:justify-end gap-4 min-w-0 flex-1">
-              <img
-                src={(isPlatformAdmin && sellerLogoUrl) || "/yaa-creations-logo.png"}
-                alt={activeInvoice.company.name}
-                className="h-16 sm:h-20 object-contain max-w-[280px]"
-              />
+              {effectiveLogo ? (
+                <img
+                  src={effectiveLogo}
+                  alt={activeInvoice.company.name}
+                  className="h-20 sm:h-24 print:h-24 object-contain max-w-[340px]"
+                />
+              ) : null}
             </div>
 
           </div>
@@ -1265,7 +1393,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
           <div className="border-b border-dashed border-slate-300 pt-1" />
 
           {/* 4. Two-Column Billing From & Bill To */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-10 pt-1 break-inside-avoid">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-10 pt-1 -mt-4 print:-mt-3 break-inside-avoid">
             {/* Left: Billing From (Seller) */}
             <div className="space-y-2.5 text-xs sm:text-sm">
               <h3 className="text-base font-bold text-[#33077C] pb-1.5 border-b border-slate-100">
@@ -1418,22 +1546,22 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                           {it.qty}
                         </td>
                         <td className="border border-slate-200 px-2.5 sm:px-3 py-3 text-center font-medium text-slate-800 font-sans">
-                          ₹{it.unitPrice.toFixed(2)}
+                          ₹{it.unitPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         <td className="border border-slate-200 px-3 sm:px-4 py-3 text-right font-medium text-slate-800 font-sans">
-                          ₹{itemSub.toFixed(2)}
+                          ₹{itemSub.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         <td className="border border-slate-200 px-2.5 sm:px-3 py-3 text-right font-medium text-slate-800 font-sans">
-                          ₹{itemDisc.toFixed(2)}
+                          ₹{itemDisc.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         <td className="border border-slate-200 px-2.5 sm:px-3 py-3 text-right text-slate-600 font-sans">
-                          ₹{halfTax.toFixed(2)}
+                          ₹{halfTax.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         <td className="border border-slate-200 px-2.5 sm:px-3 py-3 text-right text-slate-600 font-sans">
-                          ₹{halfTax.toFixed(2)}
+                          ₹{halfTax.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         <td className="border border-slate-200 px-3 sm:px-4 py-3 text-right font-bold text-slate-900 font-sans">
-                          ₹{itemTotal.toFixed(2)}
+                          ₹{itemTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                       </tr>
                     );
@@ -1452,21 +1580,27 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                             <tr>
                               <td className="py-1.5 text-left font-medium text-xs sm:text-sm text-slate-600">Subtotal</td>
                               <td className="py-1.5 text-right font-semibold text-xs sm:text-sm text-slate-800 font-sans whitespace-nowrap">
-                                ₹{(activeInvoice.subtotal || activeInvoice.taxableAmount).toFixed(2)}
+                                ₹{(activeInvoice.subtotal || activeInvoice.taxableAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
                             </tr>
                             <tr>
                               <td className="py-1.5 text-left font-medium text-xs sm:text-sm text-slate-600">Discount</td>
                               <td className="py-1.5 text-right font-semibold text-xs sm:text-sm text-slate-800 font-sans whitespace-nowrap">
                                 {activeInvoice.totalDiscount > 0
-                                  ? `-₹${activeInvoice.totalDiscount.toFixed(2)}`
+                                  ? `-₹${activeInvoice.totalDiscount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
                                   : '₹0.00'}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="py-1.5 text-left font-medium text-xs sm:text-sm text-slate-600">Amount (After Discount)</td>
+                              <td className="py-1.5 text-right font-semibold text-xs sm:text-sm text-slate-800 font-sans whitespace-nowrap">
+                                ₹{(activeInvoice.taxableAmount ?? Math.max(0, (activeInvoice.subtotal || 0) - (activeInvoice.totalDiscount || 0))).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
                             </tr>
                             <tr>
                               <td className="py-1.5 text-left font-medium text-xs sm:text-sm text-slate-600">GST Total</td>
                               <td className="py-1.5 text-right font-semibold text-xs sm:text-sm text-slate-800 font-sans whitespace-nowrap">
-                                ₹{activeInvoice.taxTotal.toFixed(2)}
+                                ₹{activeInvoice.taxTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
                             </tr>
                             {/* Rounding Adjustment (Rounded Up or Rounded Down next to GST Total) */}
@@ -1484,8 +1618,8 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                               const isDown = mode === 'down' || roundDiff < 0;
                               const label = isDown ? 'Rounded Down' : 'Rounded Up';
                               const formattedDiff = isDown
-                                ? `-₹${Math.abs(roundDiff).toFixed(2)}`
-                                : `+₹${Math.abs(roundDiff).toFixed(2)}`;
+                                ? `-₹${Math.abs(roundDiff).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                : `+₹${Math.abs(roundDiff).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
                               return (
                                 <tr>
@@ -1501,13 +1635,13 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                             <tr className="border-t border-slate-200">
                               <td className="pt-2.5 pb-1.5 text-left font-bold text-sm sm:text-base text-slate-800">Grand Total</td>
                               <td className="pt-2.5 pb-1.5 text-right font-bold text-base sm:text-lg text-slate-800 font-sans whitespace-nowrap">
-                                ₹{activeInvoice.grandTotal.toFixed(2)}
+                                ₹{activeInvoice.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
                             </tr>
                             <tr>
                               <td className="py-1.5 text-left font-medium text-xs sm:text-sm text-slate-600">Total Paid</td>
                               <td className="py-1.5 text-right font-semibold text-xs sm:text-sm text-slate-800 font-sans whitespace-nowrap">
-                                ₹{(activeInvoice.status === 'Pending' ? 0 : (activeInvoice.paymentDetails?.amountPaid ?? (activeInvoice.status === 'Paid' ? activeInvoice.grandTotal : 0))).toFixed(2)}
+                                ₹{(activeInvoice.status === 'Pending' ? 0 : (activeInvoice.paymentDetails?.amountPaid ?? (activeInvoice.status === 'Paid' ? activeInvoice.grandTotal : 0))).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
                             </tr>
                             {Number(activeInvoice.paymentDetails?.tdsDeduction || 0) > 0 && (
@@ -1516,7 +1650,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                                   TDS Deducted {activeInvoice.paymentDetails?.tdsSection ? `(${activeInvoice.paymentDetails.taxDeductedType === 'gst' ? 'GST' : 'IT'})` : ''}
                                 </td>
                                 <td className="py-1.5 text-right font-semibold text-xs sm:text-sm text-slate-800 font-sans whitespace-nowrap">
-                                  -₹{Number(activeInvoice.paymentDetails?.tdsDeduction).toFixed(2)}
+                                  -₹{Number(activeInvoice.paymentDetails?.tdsDeduction).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                 </td>
                               </tr>
                             )}
@@ -1531,7 +1665,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                                 <tr>
                                   <td className="py-1.5 text-left font-bold text-sm sm:text-base text-slate-800">Balance Due</td>
                                   <td className="py-1.5 text-right font-bold text-base sm:text-lg text-slate-800 font-sans whitespace-nowrap">
-                                    ₹{balanceDue.toFixed(2)}
+                                    ₹{balanceDue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                   </td>
                                 </tr>
                               );
@@ -1544,105 +1678,76 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 </tfoot>
               </table>
             </div>
+
+            {/* Total (in words) */}
+            <div className="pt-3 text-xs sm:text-sm font-medium text-slate-800">
+              <span className="font-bold">Total (in words)</span>
+              <span> : {numberToWordsIndian(activeInvoice.grandTotal).toUpperCase()}</span>
+            </div>
           </div>
 
-          {/* 7. Bottom Section: Payment Information & Terms and Conditions */}
+          {/* 7. Bottom Section: Payment / Billing Information */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-10 pt-6 break-inside-avoid">
             {/* Left Column: Settlement Billing Information */}
-            {activeInvoice.bank?.accountNumber || activeInvoice.bank?.bankName ? (
-              <div className="space-y-2.5 text-xs sm:text-sm">
-                <h3 className="text-base font-bold text-[#33077C] pb-1 border-b border-slate-100">
-                  Billing Information:
-                </h3>
-                <div className="space-y-1.5">
-                  {activeInvoice.bank.accountName && (
+            {(() => {
+              const displayBank = activeInvoice.bank;
+              if (!displayBank || !(displayBank.accountNumber || displayBank.bankName)) return null;
+
+              return (
+                <div className="space-y-2.5 text-xs sm:text-sm">
+                  <h3 className="text-base font-bold text-[#33077C] pb-1 border-b border-slate-100">
+                    Billing Information:
+                  </h3>
+                  <div className="space-y-1.5">
+                    {displayBank.accountName && (
+                      <div className="flex items-start text-xs sm:text-sm leading-relaxed">
+                        <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
+                          <span>Account Name</span>
+                          <span>:</span>
+                        </span>
+                        <span className="text-slate-700 flex-1">{displayBank.accountName}</span>
+                      </div>
+                    )}
                     <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                       <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
-                        <span>Account Name</span>
+                        <span>Bank Account</span>
                         <span>:</span>
                       </span>
-                      <span className="text-slate-700 flex-1">{activeInvoice.bank.accountName}</span>
-                    </div>
-                  )}
-                  <div className="flex items-start text-xs sm:text-sm leading-relaxed">
-                    <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
-                      <span>Bank Account</span>
-                      <span>:</span>
-                    </span>
-                    <span className="text-slate-700 flex-1">
-                      {activeInvoice.bank.accountNumber || '-'} {activeInvoice.bank.bankName ? `(${activeInvoice.bank.bankName})` : ''}
-                    </span>
-                  </div>
-                  {activeInvoice.bank.ifscCode && (
-                    <div className="flex items-start text-xs sm:text-sm leading-relaxed">
-                      <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
-                        <span>IFSC Code</span>
-                        <span>:</span>
-                      </span>
-                      <span className="text-slate-700 flex-1">{activeInvoice.bank.ifscCode}</span>
-                    </div>
-                  )}
-                  {activeInvoice.bank.upiId && (
-                    <div className="flex items-start text-xs sm:text-sm leading-relaxed">
-                      <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
-                        <span>Instant UPI VPA</span>
-                        <span>:</span>
-                      </span>
-                      <span className="text-slate-700 flex-1">{activeInvoice.bank.upiId}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div />
-            )}
-
-            {/* Right Column: Signature Block */}
-            <div className="space-y-2.5 text-xs sm:text-sm flex flex-col justify-end items-end pb-2">
-              <div className="invoice-signature-section w-full max-w-sm flex flex-col items-end pt-2">
-                {/* Authentic Authorized Signature & Seal Stamp */}
-                <div className="text-right space-y-2 shrink-0 w-full">
-
-                  {/* Hand-drawn Cursive Signature SVG graphic */}
-                  <div className="flex justify-end py-1">
-                    <div className="relative inline-block px-4 py-1">
-                      <svg
-                        className="w-44 h-12 text-[#33077C]"
-                        viewBox="0 0 200 60"
-                        fill="none"
-                        xmlns="http://www.w3.org/2000/svg"
-                      >
-                        <path
-                          d="M10 40 C 30 10, 45 55, 60 25 C 75 -5, 85 45, 105 30 C 120 15, 130 50, 150 20 C 160 5, 175 35, 195 25"
-                          stroke="currentColor"
-                          strokeWidth="2.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                        <path
-                          d="M30 48 C 65 42, 110 50, 180 45"
-                          stroke="#4309A2"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                        />
-                      </svg>
-                    </div>
-                  </div>
-
-                  {/* Stamp & Authorized Label */}
-                  <div className="border-t border-slate-200 pt-2 flex flex-col items-end">
-                    <span className="font-extrabold text-slate-900 text-sm tracking-tight block">
-                      {activeInvoice.company.name}
-                    </span>
-                    <div className="flex items-center justify-center gap-1.5">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                      <span className="text-[11px] text-slate-600 font-extrabold uppercase tracking-wider">
-                        Authorized Signatory
+                      <span className="text-slate-700 flex-1">
+                        {displayBank.accountNumber || '-'} {displayBank.bankName ? `(${displayBank.bankName})` : ''}
                       </span>
                     </div>
+                    {displayBank.ifscCode && (
+                      <div className="flex items-start text-xs sm:text-sm leading-relaxed">
+                        <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
+                          <span>IFSC Code</span>
+                          <span>:</span>
+                        </span>
+                        <span className="text-slate-700 flex-1">{displayBank.ifscCode}</span>
+                      </div>
+                    )}
+                    {displayBank.upiId && (
+                      <div className="flex items-start text-xs sm:text-sm leading-relaxed">
+                        <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
+                          <span>Instant UPI VPA</span>
+                          <span>:</span>
+                        </span>
+                        <span className="text-slate-700 flex-1">{displayBank.upiId}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
-              </div>
+              );
+            })()}
+          </div>
+
+          {/* 8. Bottom Footer Section */}
+          <div className="pt-8 mt-auto border-t border-slate-200/80 space-y-3">
+            {/* Electronic Document Disclaimer (Both Invoice and Proforma Invoice) */}
+            <div className="text-center pt-2">
+              <p className="text-[11px] sm:text-xs text-slate-400 italic">
+                This is an electronically generated document, no signature is required.
+              </p>
             </div>
           </div>
         </div>
@@ -1891,37 +1996,41 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                     <td className="py-4 px-4 border border-slate-200 align-middle text-center">
                       {(() => {
                         const s = (inv.status || '').toLowerCase();
-                        let dotColor = 'bg-[#94a3b8]';
-                        let label = inv.status;
+                        let pill = 'bg-slate-100 text-slate-700 border-slate-300';
+                        let dot = 'bg-slate-400';
+                        let label = 'Draft';
 
                         if (s === 'paid' || s === 'approved') {
-                          dotColor = 'bg-[#10b981]';
+                          pill = 'bg-emerald-50/90 text-emerald-700 border-emerald-300/80';
+                          dot = 'bg-emerald-500';
                           label = isProforma ? 'Approved' : 'Paid';
                         } else if (s === 'partially paid') {
-                          dotColor = 'bg-[#3b82f6]';
+                          pill = 'bg-amber-50 text-amber-700 border-amber-300';
+                          dot = 'bg-amber-500';
                           label = 'Partially Paid';
                         } else if (s === 'sent') {
-                          dotColor = 'bg-[#33077C]';
+                          pill = 'bg-sky-50 text-sky-700 border-sky-300';
+                          dot = 'bg-sky-500';
                           label = 'Sent';
                         } else if (s === 'expired' || s === 'pending') {
-                          dotColor = 'bg-[#f59e0b]';
-                          label = isProforma ? 'Pending' : 'Pending';
+                          pill = 'bg-amber-50 text-amber-700 border-amber-300';
+                          dot = 'bg-amber-500';
+                          label = 'Pending';
                         } else if (s === 'overdue' || s === 'cancelled' || s === 'declined') {
-                          dotColor = 'bg-[#f43f5e]';
+                          pill = 'bg-rose-50 text-rose-700 border-rose-300';
+                          dot = 'bg-rose-500';
                           label = isProforma ? 'Cancelled' : 'Overdue';
                         } else if (s === 'converted') {
-                          dotColor = 'bg-[#8b5cf6]';
+                          pill = 'bg-purple-50 text-[#33077C] border-purple-300';
+                          dot = 'bg-[#33077C]';
                           label = 'Converted';
-                        } else {
-                          dotColor = 'bg-[#94a3b8]';
-                          label = 'Draft';
                         }
 
                         return (
-                          <div className="inline-flex items-center justify-center gap-2 text-xs font-semibold text-slate-800 select-none">
-                            <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
-                            <span className="text-xs font-semibold text-slate-800 tracking-tight">{label}</span>
-                          </div>
+                          <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-bold shadow-2xs whitespace-nowrap select-none ${pill}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />
+                            <span>{label}</span>
+                          </span>
                         );
                       })()}
                     </td>
@@ -2447,7 +2556,9 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
         title="Payment History"
         subtitle={paymentHistoryInvoice ? `Settlement details & audit trail for Invoice #${paymentHistoryInvoice.invoiceNumber}` : undefined}
         headerGradient={true}
-        maxWidth="2xl"
+        maxWidth="4xl"
+        showBackIcon={true}
+        hideCloseButton={true}
       >
         {paymentHistoryInvoice && (() => {
           const formatCustomDate = (dateStr: string | null | undefined) => {
@@ -2482,72 +2593,62 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
 
           return (
             <div className="space-y-5 text-slate-800 -mt-1">
-              {/* Top Highlights Summary Banner - Single line labels */}
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 px-4 py-3.5 bg-slate-50/80 border border-slate-200/80 rounded-lg">
-                {/* Left: Customer Info */}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider whitespace-nowrap">
-                      Customer
-                    </span>
-                    <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border whitespace-nowrap ${
-                        isFullyPaid
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : 'bg-amber-50 text-amber-700 border-amber-200'
-                      }`}
-                    >
-                      {isFullyPaid ? 'Fully Paid' : 'Partially Paid'}
-                    </span>
-                  </div>
-                  <p className="text-base font-bold text-slate-900 truncate mt-0.5">
-                    {paymentHistoryInvoice.client.company || paymentHistoryInvoice.client.name}
-                  </p>
-                  <p className="text-xs text-slate-500 font-medium mt-0.5 whitespace-nowrap">
-                    Invoice Date: <span className="text-slate-700 font-semibold">{displayInvDate}</span>
+              {/* Customer & invoice date */}
+              <div className="px-0.5 flex items-center justify-between gap-3">
+                <p className="text-base font-bold text-slate-900 truncate min-w-0">
+                  {paymentHistoryInvoice.client.company || paymentHistoryInvoice.client.name}
+                </p>
+                <p className="text-sm sm:text-base text-slate-500 font-medium whitespace-nowrap shrink-0">
+                  Invoice Date: <span className="text-slate-700 font-semibold">{displayInvDate}</span>
+                </p>
+              </div>
+
+              {/* Summary cards */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+                <div className="rounded-xl border border-purple-100 bg-purple-50/50 px-4 py-3.5">
+                  <p className="text-xs font-bold uppercase tracking-wide text-purple-700">Grand Total</p>
+                  <p className="text-xl font-extrabold text-[#33077C] mt-1">
+                    ₹{grandTotalVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </p>
                 </div>
+                <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3.5">
+                  <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Total Paid</p>
+                  <p className="text-xl font-extrabold text-emerald-600 mt-1">
+                    ₹{settledVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-amber-100 bg-amber-50/60 px-4 py-3.5">
+                  <p className="text-xs font-bold uppercase tracking-wide text-amber-700">Balance Due</p>
+                  <p className="text-xl font-extrabold text-orange-600 mt-1">
+                    ₹{balanceDueVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-3.5">
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Payment Status</p>
+                  <span
+                    className={`inline-flex items-center gap-1.5 mt-1.5 px-3 py-1 rounded-full border text-xs font-bold ${
+                      isFullyPaid
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                        : 'bg-amber-100 text-amber-800 border-amber-300'
+                    }`}
+                  >
+                    {isFullyPaid ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Clock className="w-3.5 h-3.5" />}
+                    {isFullyPaid ? 'Paid' : 'Partial'}
+                  </span>
+                </div>
+              </div>
 
-                {/* Right: Metrics row on single line with dots */}
-                <div className="flex flex-wrap items-center gap-4 sm:gap-6 border-t md:border-t-0 md:border-l pt-3 md:pt-0 md:pl-6 border-slate-200/70 shrink-0">
-                  {/* Grand Total */}
-                  <div className="whitespace-nowrap">
-                    <div className="flex items-center gap-1.5 mb-0.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
-                      <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-                        Grand Total
-                      </span>
-                    </div>
-                    <span className="text-sm font-bold text-slate-800">
-                      ₹{grandTotalVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                  </div>
-
-                  {/* Paid Amount */}
-                  <div className="whitespace-nowrap">
-                    <div className="flex items-center gap-1.5 mb-0.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                      <span className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wider">
-                        Paid
-                      </span>
-                    </div>
-                    <span className="text-sm font-bold text-emerald-600">
-                      ₹{settledVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                  </div>
-
-                  {/* Outstanding Balance */}
-                  <div className="whitespace-nowrap">
-                    <div className="flex items-center gap-1.5 mb-0.5">
-                      <span className={`w-1.5 h-1.5 rounded-full ${isFullyPaid ? 'bg-slate-400' : 'bg-rose-500'}`}></span>
-                      <span className={`text-[11px] font-bold uppercase tracking-wider ${isFullyPaid ? 'text-slate-500' : 'text-rose-600'}`}>
-                        Outstanding
-                      </span>
-                    </div>
-                    <span className={`text-base font-extrabold ${isFullyPaid ? 'text-slate-700' : 'text-rose-600'}`}>
-                      ₹{balanceDueVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                  </div>
+              {/* Payment collection progress */}
+              <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5">
+                <div className="flex items-center justify-between mb-2.5">
+                  <span className="text-xs font-semibold text-slate-600">Payment Collection Progress</span>
+                  <span className="text-xs font-bold text-[#4F2BEA]">{paidPercent}% Paid</span>
+                </div>
+                <div className="h-2.5 w-full rounded-full bg-slate-100 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-[#33077C] to-emerald-500 transition-all duration-500"
+                    style={{ width: `${paidPercent}%` }}
+                  />
                 </div>
               </div>
 
@@ -2569,67 +2670,70 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 <div className="overflow-hidden rounded-lg border border-slate-200/90 bg-white">
                   {paymentsList.length > 0 ? (
                     <div className="overflow-x-auto max-h-[280px]">
-                      <table className="w-full text-left border-collapse text-xs">
+                      <table className="w-full text-left border-collapse text-sm">
                         <thead className="bg-[#33077C] text-white sticky top-0 z-10" style={{ background: '#33077C' }}>
                           <tr className="bg-[#33077C] divide-x divide-white/20">
-                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-[10px] text-white/90">
-                              Date
+                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-xs text-white/90">
+                              S.No
                             </th>
-                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-[10px] text-white/90">
+                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-xs text-white/90">
                               Payment Mode
                             </th>
-                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-[10px] text-white/90">
+                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-xs text-white/90">
+                              Transaction ID
+                            </th>
+                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-xs text-white/90">
+                              Payment Date
+                            </th>
+                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-xs text-white/90">
                               Status
                             </th>
-                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-[10px] text-white/90">
-                              Reference / Note
+                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-xs text-white/90">
+                              Note
                             </th>
-                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-[10px] text-white/90 text-right">
-                              Amount Credited
+                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-xs text-white/90 text-right">
+                              Amount
                             </th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {paymentsList.map((payment, idx) => {
-                            const rawPayDate = formatCustomDate(payment.paymentDate);
                             const mode = payment.paymentMode || 'Cash';
+                            const isPaidStatus = String(payment.status || 'Paid').toLowerCase() === 'paid';
 
                             return (
                               <tr key={payment.id || idx} className="hover:bg-slate-50/70 transition-colors divide-x divide-slate-200/80">
-                                {/* Date */}
-                                <td className="px-3.5 py-3 whitespace-nowrap text-slate-700 font-medium">
-                                  {rawPayDate}
-                                </td>
+                                {/* S.No */}
+                                <td className="px-3.5 py-3 whitespace-nowrap text-slate-700 font-medium">{idx + 1}</td>
 
                                 {/* Payment Mode */}
-                                <td className="px-3.5 py-3 whitespace-nowrap font-semibold text-slate-800">
-                                  {mode}
-                                  {payment.receiptNumber && (
-                                    <span className="block text-[10px] font-medium text-slate-400">{payment.receiptNumber}</span>
-                                  )}
+                                <td className="px-3.5 py-3 whitespace-nowrap font-semibold text-slate-800">{mode}</td>
+
+                                {/* Transaction ID */}
+                                <td className="px-3.5 py-3 whitespace-nowrap text-slate-700 font-medium">
+                                  {payment.transactionId || payment.referenceNumber || '-'}
+                                </td>
+
+                                {/* Payment Date */}
+                                <td className="px-3.5 py-3 whitespace-nowrap text-slate-700 font-medium">
+                                  {formatCustomDate(payment.paymentDate) || '-'}
                                 </td>
 
                                 {/* Status */}
-                                <td className={`px-3.5 py-3 whitespace-nowrap font-medium ${String(payment.status || 'Paid').toLowerCase() === 'paid' ? 'text-emerald-600' : 'text-amber-600'}`}>
-                                  {String(payment.status || 'Paid').toLowerCase() === 'paid' ? 'Successful' : payment.status}
+                                <td className={`px-3.5 py-3 whitespace-nowrap font-medium ${isPaidStatus ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                  {isPaidStatus ? 'Successful' : payment.status}
                                 </td>
 
-                                {/* Reference / Note */}
+                                {/* Note */}
                                 <td className="px-3.5 py-3 text-slate-600 max-w-xs truncate">
-                                  {payment.referenceNumber ? (
-                                    <span className="text-[11px] font-medium bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded">
-                                      Ref: {payment.referenceNumber}
-                                    </span>
-                                  ) : payment.notes ? (
-                                    <span className="text-[11px] text-slate-500 italic">"{payment.notes}"</span>
-                                  ) : null}
+                                  {payment.notes ? <span className="text-xs text-slate-500 italic">"{payment.notes}"</span> : '-'}
                                 </td>
 
-                                {/* Amount Credited */}
-                                <td className="px-3.5 py-3 whitespace-nowrap text-right font-bold text-emerald-600 text-sm">
+                                {/* Amount */}
+                                <td className="px-3.5 py-3 whitespace-nowrap text-right font-bold text-emerald-600 text-base">
                                   ₹{Number(payment.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                   {(Number(payment.totalTdsDeduction) > 0 || Number(payment.bankDeductions) > 0) && (
-                                    <span className="block text-[10px] font-medium text-slate-500">
+                                    <span className="block text-xs font-medium text-slate-500">
                                       Net ₹{Number(payment.netReceived || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </span>
                                   )}
@@ -2651,35 +2755,33 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
 
 
               {/* Modal Actions */}
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                <div>
-                  {!isFullyPaid && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const targetInv = paymentHistoryInvoice;
-                        setIsPaymentHistoryOpen(false);
-                        setPaymentHistoryInvoice(null);
-                        handleOpenMarkAsPaid(targetInv);
-                      }}
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-xl font-bold text-xs shadow-xs hover:shadow-md transition-all cursor-pointer flex items-center gap-1.5"
-                    >
-                      <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                      <span>Record Payment</span>
-                    </button>
-                  )}
-                </div>
-
+              <div className="flex justify-end items-center gap-3 pt-1">
                 <button
                   type="button"
                   onClick={() => {
                     setIsPaymentHistoryOpen(false);
                     setPaymentHistoryInvoice(null);
                   }}
-                  className="px-6 py-2.5 bg-[#33077C] hover:bg-[#25055b] active:scale-95 text-white rounded-xl font-bold text-xs tracking-wide shadow-sm hover:shadow-md transition-all cursor-pointer flex items-center gap-1.5"
+                  className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2"
                 >
                   Close
                 </button>
+
+                {!isFullyPaid && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetInv = paymentHistoryInvoice;
+                      setIsPaymentHistoryOpen(false);
+                      setPaymentHistoryInvoice(null);
+                      handleOpenMarkAsPaid(targetInv);
+                    }}
+                    className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2"
+                  >
+                    <Plus className="w-4 h-4 stroke-[2.5]" />
+                    <span>Record Payment</span>
+                  </button>
+                )}
               </div>
             </div>
           );
