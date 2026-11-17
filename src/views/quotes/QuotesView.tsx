@@ -37,6 +37,7 @@ import { pdf } from '@react-pdf/renderer';
 import { useAuth } from '../../context/AuthContext';
 import { useAppDispatch } from '../../hooks/redux';
 import { EstimatePDFDocument, SellerInfo } from '../../components/quotes/EstimatePDFDocument';
+import { renderPdfBlob } from '../../components/common/pdf/pdfLogo';
 import { Button } from '../../components/common/Button';
 import { SearchBar } from '../../components/common/SearchBar';
 import { CustomerFormModal } from '../../components/forms/CustomerFormModal';
@@ -443,37 +444,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     };
   }, [selectedQuoteId]);
 
-  // The quote record may not carry the customer's address / tax ids; fill the gaps from the client record
-  // so the view and print show the full Billing To details.
-  const selectedQuoteCustomerId = selectedQuote?.customerId;
-  const selectedQuoteOrgId = selectedQuote?.organizationId;
-  useEffect(() => {
-    if (!selectedQuoteId || !selectedQuoteCustomerId) return;
-    // Platform super admin quotes are billed to an organization, not a client, so there is no client to load.
-    if (isSuperAdmin && !isOrgSuperAdmin) return;
-    let cancelled = false;
-    platformClientApi
-      .getClientById(selectedQuoteCustomerId, selectedQuoteOrgId || undefined)
-      .then((res) => {
-        const c: any = res?.data;
-        if (cancelled || !c) return;
-        setSelectedQuote((cur) => {
-          if (!cur || cur.id !== selectedQuoteId) return cur;
-          return {
-            ...cur,
-            customerLocation: cur.customerLocation || c.address || c.location || '',
-            customerGstin: cur.customerGstin || c.gstNumber || '',
-            customerPan: cur.customerPan || c.panNumber || '',
-          };
-        });
-      })
-      .catch(() => {
-        /* keep the quote data */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedQuoteId, selectedQuoteCustomerId, selectedQuoteOrgId, isSuperAdmin, isOrgSuperAdmin]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(
     initialCreateOpen || location.pathname === '/quotes/new' || !!routeQuoteId
   );
@@ -850,14 +820,18 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       setIsGeneratingPdf(true);
       showToast('info', 'Generating PDF', `Preparing PDF for ${singularTerm} #${quoteToPrint.estimateNumber}...`);
 
+      const seller = getSellerDetails(quoteToPrint);
+      const effectiveLogo = (isPlatformAdmin && viewSeller?.logo) || quotationFromLogo || activeOrgDetails?.logo || seller?.logo || null;
+
       const docTitle = singularTerm;
-      const blob = await pdf(
+      const blob = await renderPdfBlob(effectiveLogo, (logo) => (
         <EstimatePDFDocument
           quotation={quoteToPrint}
           documentTitle={docTitle}
-          sellerDetails={getSellerDetails(quoteToPrint)}
+          sellerDetails={seller}
+          logoUrl={logo}
         />
-      ).toBlob();
+      ));
       const url = URL.createObjectURL(blob);
 
       const printWindow = window.open(url, '_blank');
@@ -962,14 +936,14 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const viewSeller: (SellerInfo & { logo?: string }) | null =
     isPlatformAdmin && selectedQuote && viewSellerDetail
       ? {
-          name: viewSellerDetail.companyName || '',
-          taxId: viewSellerDetail.gstNumber || undefined,
-          pan: viewSellerDetail.panNumber || undefined,
-          phone: viewSellerDetail.phoneNumber || undefined,
-          email: viewSellerDetail.email || undefined,
-          address: viewSellerDetail.address || undefined,
-          logo: viewSellerDetail.logoUrl || undefined,
-        }
+        name: viewSellerDetail.companyName || '',
+        taxId: viewSellerDetail.gstNumber || undefined,
+        pan: viewSellerDetail.panNumber || undefined,
+        phone: viewSellerDetail.phoneNumber || undefined,
+        email: viewSellerDetail.email || undefined,
+        address: viewSellerDetail.address || undefined,
+        logo: viewSellerDetail.logoUrl || undefined,
+      }
       : null;
 
   const saveSuperAdminSeller = async (): Promise<boolean> => {
@@ -1553,7 +1527,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       } else {
         // Create new quote (or duplicate)
         const payload: CreateQuoteRequest = {
-          estimateNumber: newEstimateNumber.trim() || (isNumberingReady ? nextPredictedEstimateNumber : '') || undefined,
+          estimateNumber: newEstimateNumber.trim() || nextPredictedEstimateNumber || undefined,
           quotationManualNumber: quotationManualNumber.trim() || undefined,
           createdDate: createdDate ? ddmmyyyyToIso(createdDate) : undefined,
           date: estimateDate ? ddmmyyyyToIso(estimateDate) : new Date().toISOString().split('T')[0],
@@ -1674,13 +1648,16 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     const handlePrintQuotePdf = async () => {
       try {
         setIsGeneratingPdf(true);
-        const blob = await pdf(
+        const effectiveLogo = (isPlatformAdmin && viewSeller?.logo) || quotationFromLogo || activeOrgDetails?.logo || previewSellerDetails.logo || null;
+
+        const blob = await renderPdfBlob(effectiveLogo, (logo) => (
           <EstimatePDFDocument
             quotation={activeQuote}
             documentTitle={singularTerm}
             sellerDetails={previewSellerDetails}
+            logoUrl={logo}
           />
-        ).toBlob();
+        ));
         const url = URL.createObjectURL(blob);
 
         const printWindow = window.open(url, '_blank');
@@ -2067,18 +2044,18 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                 ADMIN PANEL: TWO-CARD LAYOUT: Sale Configuration (LEFT) + Client & Billing (RIGHT)
                 =================================================================== */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-                {/* ===================================================================== */}
-                {/* CARD 1 (LEFT): Sale Configuration & Seller Details */}
-                {/* ===================================================================== */}
-                <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition-all duration-300 overflow-hidden flex flex-col">
-                  {/* Card Header */}
-                  <div className="px-7 py-4.5 bg-[#33077C] text-white flex flex-wrap sm:flex-nowrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-6">
-                      <h2 className="text-base font-bold text-white tracking-tight whitespace-nowrap">
-                        Company Details
-                      </h2>
-                    </div>
-                    {isPlatformAdmin && (
+              {/* ===================================================================== */}
+              {/* CARD 1 (LEFT): Sale Configuration & Seller Details */}
+              {/* ===================================================================== */}
+              <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition-all duration-300 overflow-hidden flex flex-col">
+                {/* Card Header */}
+                <div className="px-7 py-4.5 bg-[#33077C] text-white flex flex-wrap sm:flex-nowrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-6">
+                    <h2 className="text-base font-bold text-white tracking-tight whitespace-nowrap">
+                      Company Details
+                    </h2>
+                  </div>
+                  {isPlatformAdmin && (
                     <button
                       type="button"
                       disabled={isSavingSeller}
@@ -2093,495 +2070,495 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                     >
                       {isSavingSeller ? 'Saving...' : isEditingFrom ? 'Done' : 'Edit'}
                     </button>
-                    )}
-                  </div>
+                  )}
+                </div>
 
-                  {/* Card Body */}
-                  <div className="p-8 space-y-8 flex-1">
-                    {/* 1. Current Company & its details */}
-                    <div className="space-y-4">
-                      {!isEditingFrom ? (
-                        <div className="flex items-start justify-between mb-2">
-                          <div className="space-y-3.5 text-[13px] flex-1">
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">Company Logo</span>
-                              <div className="flex items-center gap-2">
-                                <span className="text-slate-700 mr-1">:</span>
-                                <img
-                                  src={quotationFromLogo}
-                                  alt="Company Logo"
-                                  className="h-14 sm:h-16 max-w-[200px] object-contain rounded"
-                                />
-                              </div>
-                            </div>
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">Company Name</span>
-                              <span className="text-slate-700">: {quotationFromCompany}</span>
-                            </div>
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">GSTIN / Tax ID</span>
-                              <span className="text-slate-700">: {quotationFromGst}</span>
-                            </div>
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">PAN Number</span>
-                              <span className="text-slate-700">: {quotationFromPan || '—'}</span>
-                            </div>
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">Phone Number</span>
-                              <span className="text-slate-700">: {quotationFromPhone}</span>
-                            </div>
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">Email</span>
-                              <span className="text-slate-700">: {quotationFromEmail}</span>
-                            </div>
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-start">
-                              <span className="font-bold text-slate-800">Company Address</span>
-                              <span className="text-slate-700 leading-relaxed">: {quotationFromAddress}</span>
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="space-y-3.5 pt-1 text-sm">
-                          <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Company Logo</label>
-                            <div className="mt-1.5 flex items-center gap-3">
+                {/* Card Body */}
+                <div className="p-8 space-y-8 flex-1">
+                  {/* 1. Current Company & its details */}
+                  <div className="space-y-4">
+                    {!isEditingFrom ? (
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="space-y-3.5 text-[13px] flex-1">
+                          <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                            <span className="font-bold text-slate-800">Company Logo</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-slate-700 mr-1">:</span>
                               <img
                                 src={quotationFromLogo}
                                 alt="Company Logo"
-                                className="h-10 w-24 object-contain border border-slate-200 rounded-lg p-1 bg-white"
+                                className="h-14 sm:h-16 max-w-[200px] object-contain rounded"
                               />
-                              <input
-                                type="file"
-                                ref={companyLogoInputRef}
-                                onChange={handleLogoUpload}
-                                accept="image/*"
-                                className="hidden"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => companyLogoInputRef.current?.click()}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-semibold rounded-lg shadow-xs hover:shadow transition-all cursor-pointer select-none active:scale-[0.98]"
-                              >
-                                <Upload className="w-3.5 h-3.5" />
-                                <span>Change Logo</span>
-                              </button>
-                              {quotationFromLogo && (
-                                <button
-                                  type="button"
-                                  onClick={() => setQuotationFromLogo('')}
-                                  className="px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                                >
-                                  Remove
-                                </button>
-                              )}
                             </div>
                           </div>
-                          <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Company Name</label>
-                            <input
-                              type="text"
-                              value={quotationFromCompany}
-                              onChange={(e) => setQuotationFromCompany(e.target.value)}
-                              className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Tax ID / GSTIN</label>
-                            <input
-                              type="text"
-                              value={quotationFromGst}
-                              onChange={(e) => setQuotationFromGst(e.target.value)}
-                              className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">PAN Number</label>
-                            <input
-                              type="text"
-                              value={quotationFromPan}
-                              onChange={(e) => setQuotationFromPan(e.target.value)}
-                              className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Registered Address</label>
-                            <input
-                              type="text"
-                              value={quotationFromAddress}
-                              onChange={(e) => setQuotationFromAddress(e.target.value)}
-                              className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Phone Number</label>
-                            <input
-                              type="text"
-                              value={quotationFromPhone}
-                              onChange={(e) => setQuotationFromPhone(e.target.value)}
-                              className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Email Address</label>
-                            <input
-                              type="email"
-                              value={quotationFromEmail}
-                              onChange={(e) => setQuotationFromEmail(e.target.value)}
-                              className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
-                            />
-                          </div>
-
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 2. Quotation Metadata Dynamic Fields */}
-                    <div className="space-y-4 pt-1">
-                      <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                          Quotation Metadata &amp; Fields
-                        </span>
-
-                      </div>
-
-                      <div className="space-y-2">
-                        <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
-                          <label className="text-[12px] font-bold text-slate-800">Quotation Serial Number</label>
-                          <input
-                            type="text"
-                            value={newEstimateNumber || nextPredictedEstimateNumber}
-                            readOnly
-                            disabled
-                            placeholder="Auto-generated"
-                            className="w-full max-w-[240px] h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 outline-none shadow-2xs font-mono cursor-not-allowed select-none"
-                          />
-                        </div>
-
-                        <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
-                          <label className="text-[12px] font-bold text-slate-800">Quotation Number</label>
-                          <input
-                            type="text"
-                            value={quotationManualNumber}
-                            onChange={(e) => setQuotationManualNumber(e.target.value)}
-                            placeholder="Enter quotation number"
-                            className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
-                          />
-                        </div>
-
-                        <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
-                          <label className="text-[12px] font-bold text-slate-800">
-                            Quotation Date <span className="text-rose-500 font-bold">*</span>
-                          </label>
-                          <input
-                            type="date"
-                            value={ddmmyyyyToIso(estimateDate)}
-                            onChange={(e) => setEstimateDate(isoToDdmmyyyy(e.target.value))}
-                            className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
-                          />
-                        </div>
-
-                        <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
-                          <label className="text-[12px] font-bold text-slate-800">
-                            Created Date <span className="text-rose-500 font-bold">*</span>
-                          </label>
-                          <input
-                            type="date"
-                            value={ddmmyyyyToIso(createdDate)}
-                            onChange={(e) => setCreatedDate(isoToDdmmyyyy(e.target.value))}
-                            className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
-                          />
-                        </div>
-
-                        <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
-                          <label className="text-[12px] font-bold text-slate-800">
-                            Due Date <span className="text-rose-500 font-bold">*</span>
-                          </label>
-                          <input
-                            type="date"
-                            value={ddmmyyyyToIso(expiryDate)}
-                            onChange={(e) => setExpiryDate(isoToDdmmyyyy(e.target.value))}
-                            className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
-                          />
-                        </div>
-
-                      </div>
-                      <div className="space-y-3.5 text-[13px]">
-                        {newNotes && (
                           <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                            <span className="font-bold text-slate-800">Note</span>
-                            <span className="text-slate-700">: {newNotes}</span>
+                            <span className="font-bold text-slate-800">Company Name</span>
+                            <span className="text-slate-700">: {quotationFromCompany}</span>
                           </div>
-                        )}
-
-                        {/* Additional Custom Fields */}
-                        {customQuoteFields.map((field) => (
-                          <div key={field.id} className="grid grid-cols-[140px_1fr] gap-2 items-center group">
-                            <span className="font-bold text-slate-800">{field.label}</span>
-                            <div className="text-slate-700 flex items-center justify-between">
-                              <span>: {field.value}</span>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setCustomQuoteFields(customQuoteFields.filter((f) => f.id !== field.id));
-                                }}
-                                className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-rose-600 rounded-md hover:bg-rose-50 transition-all cursor-pointer shrink-0"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
+                          <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                            <span className="font-bold text-slate-800">GSTIN / Tax ID</span>
+                            <span className="text-slate-700">: {quotationFromGst}</span>
                           </div>
-                        ))}
-                      </div>
-
-                      {isAddFieldModalOpen && (
-                        <div className="flex items-start gap-3 mt-2">
-                          <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <input
-                              type="text"
-                              value={newFieldLabel}
-                              onChange={(e) => setNewFieldLabel(e.target.value)}
-                              placeholder="Field Label"
-                              autoFocus
-                              className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 outline-none transition-all shadow-2xs"
-                            />
-                            <input
-                              type="text"
-                              value={newFieldValue}
-                              onChange={(e) => setNewFieldValue(e.target.value)}
-                              placeholder="Value"
-                              className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 outline-none transition-all shadow-2xs"
-                            />
+                          <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                            <span className="font-bold text-slate-800">PAN Number</span>
+                            <span className="text-slate-700">: {quotationFromPan || '—'}</span>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setNewFieldLabel('');
-                              setNewFieldValue('');
-                              setIsAddFieldModalOpen(false);
-                            }}
-                            className="p-2.5 mt-1 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
+                          <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                            <span className="font-bold text-slate-800">Phone Number</span>
+                            <span className="text-slate-700">: {quotationFromPhone}</span>
+                          </div>
+                          <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                            <span className="font-bold text-slate-800">Email</span>
+                            <span className="text-slate-700">: {quotationFromEmail}</span>
+                          </div>
+                          <div className="grid grid-cols-[140px_1fr] gap-2 items-start">
+                            <span className="font-bold text-slate-800">Company Address</span>
+                            <span className="text-slate-700 leading-relaxed">: {quotationFromAddress}</span>
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* ===================================================================== */}
-                {/* CARD 2 (RIGHT): Client / Customer Assignment & Billing Info */}
-                {/* ===================================================================== */}
-                <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition-all duration-300 flex flex-col">
-                  {/* Card Header */}
-                  <div className="px-4 sm:px-7 py-4 sm:py-4.5 bg-[#33077C] text-white flex items-center justify-between gap-2 rounded-t-2xl">
-                    <div className="flex items-center gap-3.5">
-                      <h2 className="text-base font-bold text-white tracking-tight">
-                        {isSuperAdmin && !isOrgSuperAdmin ? 'Bill To / Organization Details' : 'Bill To / Customer Details'}
-                      </h2>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {!(isSuperAdmin && !isOrgSuperAdmin) && (
-                        <button
-                          type="button"
-                          onClick={() => setIsAddClientModalOpen(true)}
-                          className="h-8 px-3.5 bg-white hover:bg-slate-50 text-[#33077C] border border-transparent rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all duration-200 cursor-pointer select-none active:scale-[0.98] inline-flex items-center gap-1.5"
-                        >
-                          <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                          Add Client
-                        </button>
-                      )}
-                      {selectedClientId && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedClientId('');
-                            setClientSearchQuery('');
-                            setCustomerName('');
-                            setCustomerCompany('');
-                            setCustomerEmail('');
-                            setCustomerPhone('');
-                            setCustomerLocation('');
-                            setCustomerGstId('');
-                            setCustomerPan('');
-                          }}
-                          className="h-8 px-3.5 bg-white hover:bg-rose-50 text-slate-700 hover:text-rose-600 border border-transparent rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all duration-200 cursor-pointer select-none active:scale-[0.98]"
-                        >
-                          Clear
-                        </button>
-                      )}
-                      <CustomerFormModal
-                        isOpen={isAddClientModalOpen}
-                        onClose={() => {
-                          setIsAddClientModalOpen(false);
-                          void loadFormClients(); // show the client that was just added
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Card Body */}
-                  <div className="p-4 sm:p-8 space-y-6 sm:space-y-8 flex-1 flex flex-col">
-                    {/* Client Searchable Dropdown */}
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                          {isSuperAdmin && !isOrgSuperAdmin ? 'Organization' : 'Client / Customer'} <span className="text-rose-500">*</span>
-                        </label>
                       </div>
-
-                      <div className="relative" ref={clientDropdownRef}>
-                        {/* Single Combined Search & Dropdown Input Box */}
-                        <div className="relative flex items-center">
-                          <Search className="w-4 h-4 text-slate-400 absolute left-4 pointer-events-none" />
-                          <input
-                            type="text"
-                            value={
-                              isCompanyProductDropdownOpen
-                                ? clientSearchQuery
-                                : (selectedClientLabel || customerCompany || clientSearchQuery)
-                            }
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setClientSearchQuery(val);
-                              if (!isCompanyProductDropdownOpen) setIsCompanyProductDropdownOpen(true);
-                              if (customerCompany && val !== (selectedClientLabel || customerCompany)) {
-                                setSelectedClientId('');
-                                setCustomerCompany('');
-                              }
-                            }}
-                            onFocus={() => {
-                              setIsCompanyProductDropdownOpen(true);
-                              if (customerCompany && !clientSearchQuery) {
-                                setClientSearchQuery(selectedClientLabel || customerCompany);
-                              }
-                            }}
-                            placeholder={isSuperAdmin && !isOrgSuperAdmin ? "Search or select organization..." : "Search or select client / customer..."}
-                            className={`w-full h-11 pl-11 pr-16 bg-white border rounded-xl text-sm font-semibold transition-all shadow-2xs outline-none ${isCompanyProductDropdownOpen
-                                ? 'border-[#4309A2] ring-4 ring-[#4309A2]/10 text-slate-900'
-                                : 'border-slate-200 hover:border-slate-300 text-slate-800'
-                              }`}
-                          />
-                          <div className="absolute right-3 flex items-center gap-1.5">
+                    ) : (
+                      <div className="space-y-3.5 pt-1 text-sm">
+                        <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Company Logo</label>
+                          <div className="mt-1.5 flex items-center gap-3">
+                            <img
+                              src={quotationFromLogo}
+                              alt="Company Logo"
+                              className="h-10 w-24 object-contain border border-slate-200 rounded-lg p-1 bg-white"
+                            />
+                            <input
+                              type="file"
+                              ref={companyLogoInputRef}
+                              onChange={handleLogoUpload}
+                              accept="image/*"
+                              className="hidden"
+                            />
                             <button
                               type="button"
-                              onClick={() => setIsCompanyProductDropdownOpen(!isCompanyProductDropdownOpen)}
-                              className="p-1 text-slate-400 hover:text-[#4309A2] transition-colors cursor-pointer"
+                              onClick={() => companyLogoInputRef.current?.click()}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-semibold rounded-lg shadow-xs hover:shadow transition-all cursor-pointer select-none active:scale-[0.98]"
                             >
-                              <ChevronDown
-                                className={`w-4 h-4 transition-transform duration-200 ${isCompanyProductDropdownOpen ? 'rotate-180 text-[#4309A2]' : ''
-                                  }`}
-                              />
+                              <Upload className="w-3.5 h-3.5" />
+                              <span>Change Logo</span>
+                            </button>
+                            {quotationFromLogo && (
+                              <button
+                                type="button"
+                                onClick={() => setQuotationFromLogo('')}
+                                className="px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Company Name</label>
+                          <input
+                            type="text"
+                            value={quotationFromCompany}
+                            onChange={(e) => setQuotationFromCompany(e.target.value)}
+                            className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Tax ID / GSTIN</label>
+                          <input
+                            type="text"
+                            value={quotationFromGst}
+                            onChange={(e) => setQuotationFromGst(e.target.value)}
+                            className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">PAN Number</label>
+                          <input
+                            type="text"
+                            value={quotationFromPan}
+                            onChange={(e) => setQuotationFromPan(e.target.value)}
+                            className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Registered Address</label>
+                          <input
+                            type="text"
+                            value={quotationFromAddress}
+                            onChange={(e) => setQuotationFromAddress(e.target.value)}
+                            className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Phone Number</label>
+                          <input
+                            type="text"
+                            value={quotationFromPhone}
+                            onChange={(e) => setQuotationFromPhone(e.target.value)}
+                            className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Email Address</label>
+                          <input
+                            type="email"
+                            value={quotationFromEmail}
+                            onChange={(e) => setQuotationFromEmail(e.target.value)}
+                            className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
+                          />
+                        </div>
+
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 2. Quotation Metadata Dynamic Fields */}
+                  <div className="space-y-4 pt-1">
+                    <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                        Quotation Metadata &amp; Fields
+                      </span>
+
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                        <label className="text-[12px] font-bold text-slate-800">Quotation Serial Number</label>
+                        <input
+                          type="text"
+                          value={newEstimateNumber || nextPredictedEstimateNumber}
+                          readOnly
+                          disabled
+                          placeholder="Auto-generated"
+                          className="w-full max-w-[240px] h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 outline-none shadow-2xs font-mono cursor-not-allowed select-none"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                        <label className="text-[12px] font-bold text-slate-800">Quotation Number</label>
+                        <input
+                          type="text"
+                          value={quotationManualNumber}
+                          onChange={(e) => setQuotationManualNumber(e.target.value)}
+                          placeholder="Enter quotation number"
+                          className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                        <label className="text-[12px] font-bold text-slate-800">
+                          Quotation Date <span className="text-rose-500 font-bold">*</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={ddmmyyyyToIso(estimateDate)}
+                          onChange={(e) => setEstimateDate(isoToDdmmyyyy(e.target.value))}
+                          className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                        <label className="text-[12px] font-bold text-slate-800">
+                          Created Date <span className="text-rose-500 font-bold">*</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={ddmmyyyyToIso(createdDate)}
+                          onChange={(e) => setCreatedDate(isoToDdmmyyyy(e.target.value))}
+                          className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                        <label className="text-[12px] font-bold text-slate-800">
+                          Due Date <span className="text-rose-500 font-bold">*</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={ddmmyyyyToIso(expiryDate)}
+                          onChange={(e) => setExpiryDate(isoToDdmmyyyy(e.target.value))}
+                          className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                        />
+                      </div>
+
+                    </div>
+                    <div className="space-y-3.5 text-[13px]">
+                      {newNotes && (
+                        <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                          <span className="font-bold text-slate-800">Note</span>
+                          <span className="text-slate-700">: {newNotes}</span>
+                        </div>
+                      )}
+
+                      {/* Additional Custom Fields */}
+                      {customQuoteFields.map((field) => (
+                        <div key={field.id} className="grid grid-cols-[140px_1fr] gap-2 items-center group">
+                          <span className="font-bold text-slate-800">{field.label}</span>
+                          <div className="text-slate-700 flex items-center justify-between">
+                            <span>: {field.value}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCustomQuoteFields(customQuoteFields.filter((f) => f.id !== field.id));
+                              }}
+                              className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-rose-600 rounded-md hover:bg-rose-50 transition-all cursor-pointer shrink-0"
+                            >
+                              <Trash2 className="w-4 h-4" />
                             </button>
                           </div>
                         </div>
-
-                        {/* Dropdown Menu Popup: Direct List of Clients with filtered search */}
-                        {isCompanyProductDropdownOpen && (
-                          <div className="dropdown-menu absolute left-0 top-full mt-2 z-50 bg-white rounded-2xl border border-slate-200 shadow-xl p-2 w-full min-w-0 sm:min-w-[320px] max-w-[calc(100vw-2rem)] space-y-1.5 animate-in fade-in zoom-in-95 duration-100">
-                            <div className="max-h-60 overflow-y-auto space-y-1 pt-0.5">
-                              {(() => {
-                                const showingSelected = !!(selectedClientLabel || customerCompany) && clientSearchQuery === (selectedClientLabel || customerCompany);
-                                const q = showingSelected ? '' : clientSearchQuery.trim().toLowerCase();
-                                const list = availableClients.filter(
-                                  (c) =>
-                                    !q ||
-                                    c.name.toLowerCase().includes(q) ||
-                                    c.company.toLowerCase().includes(q) ||
-                                    (c.code || '').toLowerCase().includes(q) ||
-                                    c.email.toLowerCase().includes(q)
-                                );
-                                if (list.length === 0) {
-                                  return (
-                                    <div className="py-4 text-center text-xs text-slate-400">
-                                      {isSuperAdmin && !isOrgSuperAdmin ? `No matching organizations found for "${clientSearchQuery}".` : `No matching clients found for "${clientSearchQuery}".`}
-                                    </div>
-                                  );
-                                }
-                                return list.map((client) => {
-                                  const isSelected = selectedClientId === client.id;
-                                  const displayName = isSuperAdmin && !isOrgSuperAdmin ? client.company || client.name : client.name || client.company;
-                                  return (
-                                    <button
-                                      key={client.id}
-                                      type="button"
-                                      onClick={() => {
-                                        handleClientSelect(client.id);
-                                        setClientSearchQuery(displayName);
-                                        setIsCompanyProductDropdownOpen(false);
-                                      }}
-                                      className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs transition-all cursor-pointer flex items-center justify-between gap-3 ${isSelected
-                                          ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
-                                          : 'hover:bg-slate-50 text-slate-800 font-medium'
-                                        }`}
-                                    >
-                                      <div className="truncate">
-                                        <div className="font-semibold text-slate-800 truncate">
-                                          {displayName}
-                                          {client.code ? ` (${client.code})` : ''}
-                                        </div>
-                                      </div>
-                                      {isSelected && <Check className="w-4 h-4 text-[#33077C] stroke-[2.5] shrink-0" />}
-                                    </button>
-                                  );
-                                });
-                              })()}
-                            </div>
-                          </div>
-                        )}
-                      </div>
+                      ))}
                     </div>
 
-                    {/* Selected Client Card Details or Empty State (Matching Invoices Layout) */}
-                    {selectedClientId ? (
-                      <div className="pt-2 flex-1 flex flex-col justify-between">
-                        <div>
-                          <div className="space-y-3.5 text-[13px]">
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">{isSuperAdmin && !isOrgSuperAdmin ? 'Organization' : 'Company Name'}</span>
-                              <span className="text-slate-700">: {customerCompany || '-'}</span>
-                            </div>
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">GSTIN / Tax ID</span>
-                              <span className="text-slate-700">: {customerGstId || '-'}</span>
-                            </div>
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">PAN Number</span>
-                              <span className="text-slate-700">: {customerPan || '-'}</span>
-                            </div>
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">Phone Number</span>
-                              <span className="text-slate-700">: {customerPhone || '-'}</span>
-                            </div>
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">Email</span>
-                              <span className="text-slate-700">: {customerEmail || '-'}</span>
-                            </div>
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">Address</span>
-                              <span className="text-slate-700">: {customerLocation || '-'}</span>
-                            </div>
-                          </div>
+                    {isAddFieldModalOpen && (
+                      <div className="flex items-start gap-3 mt-2">
+                        <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <input
+                            type="text"
+                            value={newFieldLabel}
+                            onChange={(e) => setNewFieldLabel(e.target.value)}
+                            placeholder="Field Label"
+                            autoFocus
+                            className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 outline-none transition-all shadow-2xs"
+                          />
+                          <input
+                            type="text"
+                            value={newFieldValue}
+                            onChange={(e) => setNewFieldValue(e.target.value)}
+                            placeholder="Value"
+                            className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 outline-none transition-all shadow-2xs"
+                          />
                         </div>
-                      </div>
-                    ) : isSuperAdmin && !isOrgSuperAdmin ? (
-                      <div className="py-6 text-center text-sm text-slate-400 font-medium">
-                        No organization selected
-                      </div>
-                    ) : (
-                      <div className="p-8 border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50/40 text-center space-y-3 flex-1 flex flex-col items-center justify-center">
-                        <div className="w-12 h-12 rounded-2xl bg-purple-50 text-[#33077C] flex items-center justify-center mx-auto border border-purple-100 shadow-2xs">
-                          <UsersRound className="w-6 h-6 text-[#4309A2]" />
-                        </div>
-                        <div>
-                          <h4 className="text-sm font-bold text-slate-800">No Client Selected Yet</h4>
-                          <p className="text-xs text-slate-400 mt-0.5">Select a client above to preview billing info</p>
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNewFieldLabel('');
+                            setNewFieldValue('');
+                            setIsAddFieldModalOpen(false);
+                          }}
+                          className="p-2.5 mt-1 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
                       </div>
                     )}
                   </div>
                 </div>
               </div>
+
+              {/* ===================================================================== */}
+              {/* CARD 2 (RIGHT): Client / Customer Assignment & Billing Info */}
+              {/* ===================================================================== */}
+              <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition-all duration-300 flex flex-col">
+                {/* Card Header */}
+                <div className="px-4 sm:px-7 py-4 sm:py-4.5 bg-[#33077C] text-white flex items-center justify-between gap-2 rounded-t-2xl">
+                  <div className="flex items-center gap-3.5">
+                    <h2 className="text-base font-bold text-white tracking-tight">
+                      {isSuperAdmin && !isOrgSuperAdmin ? 'Bill To / Organization Details' : 'Bill To / Customer Details'}
+                    </h2>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {!(isSuperAdmin && !isOrgSuperAdmin) && (
+                      <button
+                        type="button"
+                        onClick={() => setIsAddClientModalOpen(true)}
+                        className="h-8 px-3.5 bg-white hover:bg-slate-50 text-[#33077C] border border-transparent rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all duration-200 cursor-pointer select-none active:scale-[0.98] inline-flex items-center gap-1.5"
+                      >
+                        <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                        Add Client
+                      </button>
+                    )}
+                    {selectedClientId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedClientId('');
+                          setClientSearchQuery('');
+                          setCustomerName('');
+                          setCustomerCompany('');
+                          setCustomerEmail('');
+                          setCustomerPhone('');
+                          setCustomerLocation('');
+                          setCustomerGstId('');
+                          setCustomerPan('');
+                        }}
+                        className="h-8 px-3.5 bg-white hover:bg-rose-50 text-slate-700 hover:text-rose-600 border border-transparent rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all duration-200 cursor-pointer select-none active:scale-[0.98]"
+                      >
+                        Clear
+                      </button>
+                    )}
+                    <CustomerFormModal
+                      isOpen={isAddClientModalOpen}
+                      onClose={() => {
+                        setIsAddClientModalOpen(false);
+                        void loadFormClients(); // show the client that was just added
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Card Body */}
+                <div className="p-4 sm:p-8 space-y-6 sm:space-y-8 flex-1 flex flex-col">
+                  {/* Client Searchable Dropdown */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        {isSuperAdmin && !isOrgSuperAdmin ? 'Organization' : 'Client / Customer'} <span className="text-rose-500">*</span>
+                      </label>
+                    </div>
+
+                    <div className="relative" ref={clientDropdownRef}>
+                      {/* Single Combined Search & Dropdown Input Box */}
+                      <div className="relative flex items-center">
+                        <Search className="w-4 h-4 text-slate-400 absolute left-4 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={
+                            isCompanyProductDropdownOpen
+                              ? clientSearchQuery
+                              : (selectedClientLabel || customerCompany || clientSearchQuery)
+                          }
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setClientSearchQuery(val);
+                            if (!isCompanyProductDropdownOpen) setIsCompanyProductDropdownOpen(true);
+                            if (customerCompany && val !== (selectedClientLabel || customerCompany)) {
+                              setSelectedClientId('');
+                              setCustomerCompany('');
+                            }
+                          }}
+                          onFocus={() => {
+                            setIsCompanyProductDropdownOpen(true);
+                            if (customerCompany && !clientSearchQuery) {
+                              setClientSearchQuery(selectedClientLabel || customerCompany);
+                            }
+                          }}
+                          placeholder={isSuperAdmin && !isOrgSuperAdmin ? "Search or select organization..." : "Search or select client / customer..."}
+                          className={`w-full h-11 pl-11 pr-16 bg-white border rounded-xl text-sm font-semibold transition-all shadow-2xs outline-none ${isCompanyProductDropdownOpen
+                            ? 'border-[#4309A2] ring-4 ring-[#4309A2]/10 text-slate-900'
+                            : 'border-slate-200 hover:border-slate-300 text-slate-800'
+                            }`}
+                        />
+                        <div className="absolute right-3 flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setIsCompanyProductDropdownOpen(!isCompanyProductDropdownOpen)}
+                            className="p-1 text-slate-400 hover:text-[#4309A2] transition-colors cursor-pointer"
+                          >
+                            <ChevronDown
+                              className={`w-4 h-4 transition-transform duration-200 ${isCompanyProductDropdownOpen ? 'rotate-180 text-[#4309A2]' : ''
+                                }`}
+                            />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Dropdown Menu Popup: Direct List of Clients with filtered search */}
+                      {isCompanyProductDropdownOpen && (
+                        <div className="dropdown-menu absolute left-0 top-full mt-2 z-50 bg-white rounded-2xl border border-slate-200 shadow-xl p-2 w-full min-w-0 sm:min-w-[320px] max-w-[calc(100vw-2rem)] space-y-1.5 animate-in fade-in zoom-in-95 duration-100">
+                          <div className="max-h-60 overflow-y-auto space-y-1 pt-0.5">
+                            {(() => {
+                              const showingSelected = !!(selectedClientLabel || customerCompany) && clientSearchQuery === (selectedClientLabel || customerCompany);
+                              const q = showingSelected ? '' : clientSearchQuery.trim().toLowerCase();
+                              const list = availableClients.filter(
+                                (c) =>
+                                  !q ||
+                                  c.name.toLowerCase().includes(q) ||
+                                  c.company.toLowerCase().includes(q) ||
+                                  (c.code || '').toLowerCase().includes(q) ||
+                                  c.email.toLowerCase().includes(q)
+                              );
+                              if (list.length === 0) {
+                                return (
+                                  <div className="py-4 text-center text-xs text-slate-400">
+                                    {isSuperAdmin && !isOrgSuperAdmin ? `No matching organizations found for "${clientSearchQuery}".` : `No matching clients found for "${clientSearchQuery}".`}
+                                  </div>
+                                );
+                              }
+                              return list.map((client) => {
+                                const isSelected = selectedClientId === client.id;
+                                const displayName = isSuperAdmin && !isOrgSuperAdmin ? client.company || client.name : client.name || client.company;
+                                return (
+                                  <button
+                                    key={client.id}
+                                    type="button"
+                                    onClick={() => {
+                                      handleClientSelect(client.id);
+                                      setClientSearchQuery(displayName);
+                                      setIsCompanyProductDropdownOpen(false);
+                                    }}
+                                    className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs transition-all cursor-pointer flex items-center justify-between gap-3 ${isSelected
+                                      ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
+                                      : 'hover:bg-slate-50 text-slate-800 font-medium'
+                                      }`}
+                                  >
+                                    <div className="truncate">
+                                      <div className="font-semibold text-slate-800 truncate">
+                                        {displayName}
+                                        {client.code ? ` (${client.code})` : ''}
+                                      </div>
+                                    </div>
+                                    {isSelected && <Check className="w-4 h-4 text-[#33077C] stroke-[2.5] shrink-0" />}
+                                  </button>
+                                );
+                              });
+                            })()}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Selected Client Card Details or Empty State (Matching Invoices Layout) */}
+                  {selectedClientId ? (
+                    <div className="pt-2 flex-1 flex flex-col justify-between">
+                      <div>
+                        <div className="space-y-3.5 text-[13px]">
+                          <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                            <span className="font-bold text-slate-800">{isSuperAdmin && !isOrgSuperAdmin ? 'Organization' : 'Company Name'}</span>
+                            <span className="text-slate-700">: {customerCompany || '-'}</span>
+                          </div>
+                          <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                            <span className="font-bold text-slate-800">GSTIN / Tax ID</span>
+                            <span className="text-slate-700">: {customerGstId || '-'}</span>
+                          </div>
+                          <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                            <span className="font-bold text-slate-800">PAN Number</span>
+                            <span className="text-slate-700">: {customerPan || '-'}</span>
+                          </div>
+                          <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                            <span className="font-bold text-slate-800">Phone Number</span>
+                            <span className="text-slate-700">: {customerPhone || '-'}</span>
+                          </div>
+                          <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                            <span className="font-bold text-slate-800">Email</span>
+                            <span className="text-slate-700">: {customerEmail || '-'}</span>
+                          </div>
+                          <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                            <span className="font-bold text-slate-800">Address</span>
+                            <span className="text-slate-700">: {customerLocation || '-'}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : isSuperAdmin && !isOrgSuperAdmin ? (
+                    <div className="py-6 text-center text-sm text-slate-400 font-medium">
+                      No organization selected
+                    </div>
+                  ) : (
+                    <div className="p-8 border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50/40 text-center space-y-3 flex-1 flex flex-col items-center justify-center">
+                      <div className="w-12 h-12 rounded-2xl bg-purple-50 text-[#33077C] flex items-center justify-center mx-auto border border-purple-100 shadow-2xs">
+                        <UsersRound className="w-6 h-6 text-[#4309A2]" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-800">No Client Selected Yet</h4>
+                        <p className="text-xs text-slate-400 mt-0.5">Select a client above to preview billing info</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
 
             {/* Row 7: Dynamic Itemized Table */}
             <div className="pt-2 space-y-3">
@@ -3361,7 +3338,14 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                     id: '',
                     invoiceNumber: '',
                     invoiceDate: new Date().toISOString().split('T')[0],
-                    dueDate: targetQuote.expiryDate ? targetQuote.expiryDate.split('T')[0] : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                    // The quote's expiry is a display string such as "30 Nov 2026"; the form and API need YYYY-MM-DD.
+                    dueDate: (() => {
+                      const raw = targetQuote.expiryDate || '';
+                      if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+                      const parsed = new Date(raw);
+                      const d = !raw || isNaN(parsed.getTime()) ? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000) : parsed;
+                      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                    })(),
                     status: 'Draft',
                     referenceNumbers: [targetQuote.estimateNumber],
                     description: targetQuote.notes || '',
@@ -3399,8 +3383,8 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                   });
                 }}
                 className={`w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-xs font-semibold transition-colors group whitespace-nowrap ${isAlreadyConverted
-                    ? 'text-slate-400 cursor-not-allowed opacity-50 bg-slate-50/50'
-                    : 'text-slate-700 hover:bg-slate-50 cursor-pointer'
+                  ? 'text-slate-400 cursor-not-allowed opacity-50 bg-slate-50/50'
+                  : 'text-slate-700 hover:bg-slate-50 cursor-pointer'
                   }`}
               >
                 <span className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 shadow-sm ${isAlreadyConverted ? 'bg-slate-300 text-white' : 'bg-[#6366F1] text-white'
@@ -3459,8 +3443,8 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                               handleStatusChange(targetQuote.id, opt.value);
                             }}
                             className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer text-left ${isActive
-                                ? 'bg-white text-slate-900 shadow-xs border border-slate-200/60'
-                                : 'text-slate-700 hover:bg-white/70 hover:text-slate-900'
+                              ? 'bg-white text-slate-900 shadow-xs border border-slate-200/60'
+                              : 'text-slate-700 hover:bg-white/70 hover:text-slate-900'
                               }`}
                           >
                             <span

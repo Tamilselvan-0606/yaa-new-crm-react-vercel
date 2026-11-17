@@ -2092,6 +2092,7 @@ export const PaymentOutView: React.FC = () => {
 
       {/* Delete Confirmation Modal */}
       <DeleteConfirmationModal
+        variant="centered"
         isOpen={isDeleteModalOpen}
         onClose={() => {
           if (!isDeletingPayment) {

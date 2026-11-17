@@ -334,7 +334,9 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       localStorage.getItem('active_sub_organization_id') ||
       (currentUser as any)?.subOrganizationId ||
       undefined;
-    return { orgId, subOrgId };
+    const branchId =
+      localStorage.getItem('active_branch_id_sales') || localStorage.getItem('active_branch_id') || undefined;
+    return { orgId, subOrgId, branchId };
   };
 
   const bankAccountsRef = useRef<BankAccount[]>([]);
@@ -342,9 +344,9 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const [banksReload, setBanksReload] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    const { orgId, subOrgId } = getBankScope();
+    const { orgId, subOrgId, branchId } = getBankScope();
     organizationBankApi
-      .list({ page: 1, limit: 100, status: 'Active', organizationId: orgId, subOrganizationId: subOrgId, sortBy: 'isDefault', sortOrder: 'desc' })
+      .list({ page: 1, limit: 100, status: 'Active', organizationId: orgId, subOrganizationId: subOrgId, branchId, sortBy: 'isDefault', sortOrder: 'desc' })
       .then((res) => {
         if (cancelled || !Array.isArray(res?.data)) return;
         const list = res.data.map(mapApiBank);
@@ -397,7 +399,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       showToast('error', 'Incomplete Details', 'Please enter Bank Name and Account Number.');
       return;
     }
-    const { orgId, subOrgId } = getBankScope();
+    const { orgId, subOrgId, branchId } = getBankScope();
     try {
       setIsSavingBank(true);
       const res = await organizationBankApi.create({
@@ -412,6 +414,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
         status: 'Active',
         organizationId: orgId,
         subOrganizationId: subOrgId || null,
+        branchId: branchId || null,
       });
       const created = mapApiBank(res.data);
       setBankAccounts((prev) => [...prev, created]);
@@ -854,7 +857,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       } else if (src?.invoiceDate) {
         setCreatedDate(src.invoiceDate.split('T')[0]);
       }
-      if (src?.dueDate) {
+      if (src?.dueDate && /^\d{4}-\d{2}-\d{2}/.test(src.dueDate)) {
         setDueDate(src.dueDate.split('T')[0]);
       }
       if (src.description) setInvoiceDescription(src.description);
@@ -2049,9 +2052,9 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
                             dueDate: dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
                             discountTotal: totalDiscount,
-                            billingAddress: selectedCustomer.address || selectedCustomer.location || '',
-                            gstin: (selectedCustomer as any).gstin || '',
-                            pan: (selectedCustomer as any).pan || '',
+                            billingAddress: selectedCustomer.address || selectedCustomer.location || undefined,
+                            gstin: (selectedCustomer as any).gstin || undefined,
+                            pan: (selectedCustomer as any).pan || undefined,
                             notes: invoiceDescription || undefined,
                             items: items.map((it, idx) => ({
                               itemId: it.id || `SKU-${idx + 1}`,
@@ -2084,9 +2087,9 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             subOrganizationId: activeSubOrgId || undefined,
                             branchId: activeBranchId || undefined,
                             discountTotal: totalDiscount,
-                            billingAddress: selectedCustomer.address || selectedCustomer.location || '',
-                            gstin: (selectedCustomer as any).gstin || '',
-                            pan: (selectedCustomer as any).pan || '',
+                            billingAddress: selectedCustomer.address || selectedCustomer.location || undefined,
+                            gstin: (selectedCustomer as any).gstin || undefined,
+                            pan: (selectedCustomer as any).pan || undefined,
                             notes: invoiceDescription || undefined,
                             items: items.map((it, idx) => ({
                               itemId: it.id || `SKU-${idx + 1}`,
@@ -2122,7 +2125,8 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                         }
                       } catch (err: any) {
                         console.error('Failed to save proforma invoice:', err);
-                        const errMsg = err?.response?.data?.error?.message || err?.message || 'Failed to save proforma invoice';
+                        // Shows the field-level reasons (e.g. "items.0.title: Required") instead of a bare "Invalid request".
+                        const errMsg = getApiErrorMessage(err, 'Failed to save proforma invoice');
                         showToast('error', 'Operation Failed', errMsg);
                       } finally {
                         setIsSubmitting(false);
@@ -2157,7 +2161,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                           dueDate: dueDate || (invoiceDate ? new Date(new Date(invoiceDate).getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] : undefined),
                           notes: invoiceDescription || undefined,
                           discountTotal: totalDiscount,
-                          billingAddress: selectedCustomer.address || selectedCustomer.location || '',
+                          billingAddress: selectedCustomer.address || selectedCustomer.location || undefined,
                           items: items.map((it, idx) => ({
                             itemId: it.id || `SKU-${idx + 1}`,
                             title: it.name.trim(),
@@ -2186,9 +2190,9 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                           branchId: activeBranchId || undefined,
                           status: 'Sent',
                           discountTotal: totalDiscount,
-                          billingAddress: selectedCustomer.address || selectedCustomer.location || '',
-                          gstin: (selectedCustomer as any).gstin || '',
-                          pan: (selectedCustomer as any).pan || '',
+                          billingAddress: selectedCustomer.address || selectedCustomer.location || undefined,
+                          gstin: (selectedCustomer as any).gstin || undefined,
+                          pan: (selectedCustomer as any).pan || undefined,
                           notes: invoiceDescription || undefined,
                           items: items.map((it, idx) => ({
                             itemId: it.id || `SKU-${idx + 1}`,
@@ -2224,7 +2228,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                       }
                     } catch (err: any) {
                       console.error('Failed to save invoice:', err);
-                      const errMsg = err?.response?.data?.error?.message || err?.message || 'Failed to save invoice';
+                      const errMsg = getApiErrorMessage(err, 'Failed to save invoice');
                       showToast('error', 'Operation Failed', errMsg);
                     } finally {
                       setIsSubmitting(false);

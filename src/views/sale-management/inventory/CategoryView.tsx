@@ -27,6 +27,7 @@ import { Modal } from '../../../components/common/Modal';
 import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { SaleActionDropdown } from '../utils/SaleActionDropdown';
+import { useStatusConfirm } from '../utils/useStatusConfirm';
 import { DeleteConfirmationModal } from '../../../components/common/DeleteConfirmationModal';
 import {
   categoryApi,
@@ -106,6 +107,7 @@ export const CategoryView: React.FC = () => {
   }, [isModalOpen, reset]);
   const saveGuard = useSubmitGuard();
   const toggleGuard = useSubmitGuard();
+  const { requestStatusChange, statusConfirmModal } = useStatusConfirm();
   const deleteGuard = useSubmitGuard();
 
   // Keystroke sanitizer: disallow typing numeric characters in text-only fields
@@ -375,7 +377,15 @@ export const CategoryView: React.FC = () => {
   });
 
   // Toggle Category Status (PATCH /commerce/categories/:id)
-  const handleToggleStatus = (item: CategoryItem) => toggleGuard.runOnce(async () => {
+  const handleToggleStatus = (item: CategoryItem) =>
+    requestStatusChange({
+      itemTypeLabel: "Category",
+      itemName: item.categoryName,
+      nextStatus: item.status === "Active" ? "Inactive" : "Active",
+      run: () => performToggleStatus(item),
+    });
+
+  const performToggleStatus = (item: CategoryItem) => toggleGuard.runOnce(async () => {
     const nextStatus = item.status === 'Active' ? 'Inactive' : 'Active';
     setActiveDropdownId(null);
     setDropdownPos(null);
@@ -1000,6 +1010,7 @@ export const CategoryView: React.FC = () => {
 
       {/* Delete Confirmation Modal */}
       <DeleteConfirmationModal
+        variant="centered"
         isOpen={Boolean(deleteConfirmItem)}
         onClose={() => {
           if (!isDeleting) {
@@ -1014,6 +1025,7 @@ export const CategoryView: React.FC = () => {
         isLoading={isDeleting}
         error={deleteError}
       />
+      {statusConfirmModal}
     </div>
   );
 };

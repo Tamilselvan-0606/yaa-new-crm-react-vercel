@@ -274,6 +274,8 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
     organization_id: activeOrgId || undefined,
     sub_organization_id: effectiveSubOrgId,
     branch_id: effectiveBranchId,
+    sortBy: "createdAt", // newest first
+    sortOrder: "desc",
   }, { skip: viewMode !== "clients" });
 
   const [updatePlatformClientStatus] = useUpdatePlatformClientStatusMutation();
@@ -296,6 +298,8 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
     organization_id: activeOrgId || undefined,
     sub_organization_id: effectiveSubOrgId,
     branch_id: effectiveBranchId,
+    sortBy: "createdAt", // newest first
+    sortOrder: "desc",
   }, { skip: viewMode !== "leads" });
 
   const [updatePlatformLeadStatus] = useUpdatePlatformLeadStatusMutation();

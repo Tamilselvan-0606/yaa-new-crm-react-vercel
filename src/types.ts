@@ -412,6 +412,8 @@ export interface PaymentItem {
   outstandingAmount?: number;
   dueDate: string;
   paymentDate?: string;
+  /** Full timestamp of the payment (ISO), used for the payment time. */
+  paymentDateTime?: string;
   paymentMethod?: PaymentMethod;
   transactionId?: string;
   status: PaymentStatus;

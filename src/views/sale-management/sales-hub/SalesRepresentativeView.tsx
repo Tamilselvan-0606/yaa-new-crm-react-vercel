@@ -33,6 +33,7 @@ import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
 import { printTableReport } from "../../../utils/printUtils";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
+import { useStatusConfirm } from "../utils/useStatusConfirm";
 import {
   salesRepresentativeApi,
   ApiSalesRepresentative,
@@ -575,6 +576,7 @@ export const SalesRepresentativeView: React.FC = () => {
 
   const submitGuard = useSubmitGuard();
   const statusGuard = useSubmitGuard();
+  const { requestStatusChange, statusConfirmModal } = useStatusConfirm();
   const deleteGuard = useSubmitGuard();
 
   const onSubmit = (data: SalesRepFormData) => submitGuard.runOnce(async () => {
@@ -725,6 +727,17 @@ export const SalesRepresentativeView: React.FC = () => {
   }, []);
 
   const handleToggleStatus = (
+    rep: ApiSalesRepresentative,
+    newStatus: "Active" | "Inactive",
+  ) =>
+    requestStatusChange({
+      itemTypeLabel: "Sales Representative",
+      itemName: rep.name,
+      nextStatus: newStatus,
+      run: () => performToggleStatus(rep, newStatus),
+    });
+
+  const performToggleStatus = (
     rep: ApiSalesRepresentative,
     newStatus: "Active" | "Inactive",
   ) => statusGuard.runOnce(async () => {
@@ -1546,6 +1559,7 @@ export const SalesRepresentativeView: React.FC = () => {
 
       {/* Delete Confirmation Modal */}
       <DeleteConfirmationModal
+        variant="centered"
         isOpen={isDeleteModalOpen}
         onClose={() => {
           if (!isDeletingRep) {
@@ -2302,6 +2316,7 @@ export const SalesRepresentativeView: React.FC = () => {
           </div>
         </Modal>
       )}
+      {statusConfirmModal}
     </div>
   );
 };

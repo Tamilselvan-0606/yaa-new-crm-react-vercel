@@ -280,6 +280,28 @@ describe('cache behaviour through a real RTK store (counting the network)', () =
     assert.equal(count('GET /commerce/stocks'), 4);
   });
 
+  it('identical live requests in flight together share one call; a later one is sent again (nothing is stored)', async () => {
+    calls.length = 0;
+    const [a, b, c] = await Promise.all([
+      get('/commerce/stocks', { page_no: 1, page_size: 100 }),
+      get('/commerce/stocks', { page_size: 100, page_no: 1 }), // same request, different key order
+      get('/commerce/stocks/batches', { productId: ID1 }),
+    ]);
+    assert.equal(count('GET /commerce/stocks?'), 1);
+    assert.equal(count('GET /commerce/stocks/batches'), 1);
+    assert.deepEqual(a.data, b.data);
+    assert.notEqual(a.data, b.data); // each caller gets its own copy
+    assert.ok(c.data);
+    await get('/commerce/stocks', { page_no: 1, page_size: 100 });
+    assert.equal(count('GET /commerce/stocks?'), 2); // not served from a stored copy
+  });
+
+  it('different live requests are never merged', async () => {
+    calls.length = 0;
+    await Promise.all([get('/commerce/stocks/batches', { productId: ID1 }), get('/commerce/stocks/batches', { productId: 'other' })]);
+    assert.equal(count('GET /commerce/stocks/batches'), 2);
+  });
+
   it('a mutation evicts only the affected data', async () => {
     calls.length = 0;
     await get('/commerce/categories', { page_no: 9 });

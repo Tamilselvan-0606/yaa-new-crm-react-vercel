@@ -77,6 +77,13 @@ import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { toast } from "../../../utils/toast";
+import { useBillDraft } from "../../../hooks/useBillDraft";
+import { DraftSyncIndicator, ResumeDraftBanner } from "../utils/BillDraftUi";
+import { DRAFT_MODULES } from "../../../utils/documentDraft";
+import {
+  loadDraftCustomer,
+  loadDraftProducts,
+} from "../../../utils/documentDraftRestore";
 import { useNavigate } from "react-router-dom";
 import { useCompanyDocumentProfile } from "../../../hooks/useCompanyDocumentProfile";
 import { exportTableToExcel } from "../../../utils/excelExport";
@@ -1491,6 +1498,75 @@ export const EstimateQuotationView: React.FC = () => {
     };
   };
 
+  // Document draft: the products added to a NEW estimate are saved on the server as a draft while the user types
+  // (one draft per tab), restored on refresh, and marked COMPLETE once the estimate itself is saved.
+  const billDraft = useBillDraft({
+    module: "quotation",
+    enabled: viewMode === "form" && !editingQuotation,
+    contextKey: activeTabId,
+    partyId: formData.customerId,
+    lines: formData.items,
+  });
+  const [isResumingDraft, setIsResumingDraft] = useState(false);
+
+  const handleResumeDraft = async () => {
+    setIsResumingDraft(true);
+    try {
+      const restored = await billDraft.resume();
+      if (!restored) return;
+      const [productMap, customer] = await Promise.all([
+        loadDraftProducts(restored.lines.map((l) => l.productId)),
+        loadDraftCustomer(restored.draft.customer_id),
+      ]);
+      const isInclusive = priceTaxMode === "With Tax";
+      const rows = restored.lines.map((l, i) => {
+        const prod = productMap.get(l.productId);
+        const lineRes = calculateLineItem({
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          discountPercent: l.discountPercent,
+          taxPercent: l.taxPercent,
+          isTaxInclusive: isInclusive,
+        });
+        return {
+          id: `row_${Date.now()}_${i}`,
+          productId: l.productId,
+          productName: prod?.productName || "Product",
+          sku: prod?.productCode || "",
+          itemCode: prod?.productCode || "",
+          category: prod?.category || "",
+          hsnCode: prod?.hsnCode || "",
+          batch: l.batch,
+          quantity: l.quantity,
+          unit: prod?.unit && prod.unit !== "NONE" ? prod.unit : "PCS",
+          unitPrice: l.unitPrice,
+          discountPercent: l.discountPercent,
+          discountAmount: lineRes.discountAmount,
+          taxPercent: l.taxPercent,
+          taxAmount: lineRes.taxAmount,
+          total: lineRes.lineTotal,
+        } as ExtendedEstimateItem;
+      });
+      setFormData((prev) => ({
+        ...prev,
+        ...(customer
+          ? {
+              customerId: customer.id,
+              partyName: customer.name || "",
+              customerPhone: customer.phone || "",
+              customerEmail: customer.email || "",
+              customerCompany: customer.company || "",
+              billingAddress: customer.billingAddress || customer.address || "",
+            }
+          : {}),
+        items: rows.length > 0 ? rows : prev.items,
+      }));
+      toast.success(`Draft restored with ${rows.length} item${rows.length === 1 ? "" : "s"}.`);
+    } finally {
+      setIsResumingDraft(false);
+    }
+  };
+
   // Form Initializer (Opens Estimate #...)
   const handleOpenCreateForm = () => {
     const nextPreviewNo = computedPreviewNo;
@@ -2244,6 +2320,7 @@ export const EstimateQuotationView: React.FC = () => {
           mapped.convertedAt = undefined;
           saveQuotation(mapped);
           toast.success(`Estimate ${mapped.quotationNo} created successfully!`);
+          void billDraft.finalize();
         }
         // Fresh batch stock for the next form (the estimate itself never changes stock).
         void batchStock.refresh(docProductIds);
@@ -3046,15 +3123,22 @@ export const EstimateQuotationView: React.FC = () => {
   const [downstreamByEstimate, setDownstreamByEstimate] = useState<
     Record<string, EstimateTarget>
   >({});
+  // Estimate numbers already searched for. An estimate whose destination is not found is not searched again, so the
+  // four list calls below happen once per estimate number, not on every reload of the estimate list.
+  const searchedEstimatesRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    const needs = liveQuotations.some(
-      (q) =>
-        q.status === "Converted" &&
-        q.quotationNo &&
-        !resolveConvertedTarget(q) &&
-        !downstreamByEstimate[q.quotationNo.trim().toLowerCase()],
-    );
-    if (!needs) return;
+    const pendingKeys = liveQuotations
+      .filter(
+        (q) =>
+          q.status === "Converted" &&
+          q.quotationNo &&
+          !resolveConvertedTarget(q) &&
+          !downstreamByEstimate[q.quotationNo.trim().toLowerCase()] &&
+          !searchedEstimatesRef.current.has(q.quotationNo.trim().toLowerCase()),
+      )
+      .map((q) => q.quotationNo.trim().toLowerCase());
+    if (pendingKeys.length === 0) return;
+    pendingKeys.forEach((k) => searchedEstimatesRef.current.add(k));
     let cancelled = false;
     (async () => {
       const found: Record<string, EstimateTarget> = {};
@@ -3089,6 +3173,14 @@ export const EstimateQuotationView: React.FC = () => {
         (invoices.value?.data || []).forEach((i: any) =>
           take("Invoice", i.referenceNo, i.invoiceNo),
         );
+      // Every call failed (e.g. offline): allow a later retry instead of remembering a search that never happened.
+      if (
+        [proformas, orders, challans, invoices].every(
+          (r) => r.status === "rejected",
+        )
+      ) {
+        pendingKeys.forEach((k) => searchedEstimatesRef.current.delete(k));
+      }
       if (!cancelled && Object.keys(found).length > 0) {
         setDownstreamByEstimate((prev) => ({ ...prev, ...found }));
       }
@@ -3843,6 +3935,30 @@ export const EstimateQuotationView: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* Saved draft: resume prompt + autosave status */}
+        {!editingQuotation &&
+          (billDraft.pendingDraft || billDraft.status !== "idle") && (
+            <div className="mb-4 flex flex-col gap-3">
+              {billDraft.pendingDraft && (
+                <ResumeDraftBanner
+                  draft={billDraft.pendingDraft}
+                  documentLabel={DRAFT_MODULES.quotation.label}
+                  busy={isResumingDraft}
+                  onResume={handleResumeDraft}
+                  onDiscard={billDraft.discardPending}
+                />
+              )}
+              <div className="flex justify-end">
+                <DraftSyncIndicator
+                  status={billDraft.status}
+                  lastSavedAt={billDraft.lastSavedAt}
+                  totals={billDraft.totals}
+                  error={billDraft.error}
+                />
+              </div>
+            </div>
+          )}
 
         {/* 3. MAIN FORM CONTAINER */}
         <form
@@ -6393,6 +6509,7 @@ export const EstimateQuotationView: React.FC = () => {
 
       {/* Delete Confirmation Modal */}
       <DeleteConfirmationModal
+        variant="centered"
         isOpen={isDeleteModalOpen}
         onClose={() => {
           if (!isDeletingQuotation) {

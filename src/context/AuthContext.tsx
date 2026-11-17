@@ -3,30 +3,8 @@ import { useAuthStore } from '../store/useAuthStore';
 import { User, Role, ReminderItem } from '../types';
 import { toast } from "../utils/toast";
 
-interface AuthContextType {
-  currentUser: User | null;
-  users: User[];
-  role: Role;
-  isAdmin: boolean;
-  isSuperAdmin: boolean;
-  isOrgSuperAdmin: boolean;
-  isLoading: boolean;
-  isAuthenticated: boolean;
-  unreadRemindersCount: number;
-  reminders: ReminderItem[];
-  toasts: any[];
-  login: (email: string, password?: string) => Promise<boolean>;
-  switchUser: (userId: string) => Promise<void>;
-  refreshAuth: () => Promise<void>;
-  refreshReminders: (type?: 'SALES' | 'CLIENT') => Promise<void>;
-  showToast: (type: 'success' | 'error' | 'info' | 'warning', title: string, message?: string) => void;
-  removeToast: (id: string) => void;
-  markReminderCompleted: (id: string) => Promise<void>;
-  markAllRemindersRead: () => Promise<void>;
-  logout: () => Promise<void>;
-}
+import { AuthContext, AuthContextType } from './authContextObject';
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const {

@@ -264,7 +264,7 @@ export const BranchesView: React.FC = () => {
       let apiSubs: SubOrganizationApiItem[] = [];
       try {
         const subRes = await subOrganizationApi.getSubOrganizations(
-          { page_no: 1, page_size: 100, pagination_required: 'false' },
+          { page_no: 1, page_size: 100, pagination_required: 'false', subOrganizationType: isSaleManagement ? 2 : 1 },
           activeOrgId || undefined
         );
 
@@ -393,6 +393,8 @@ export const BranchesView: React.FC = () => {
             page_size: 100,
             pagination_required: 'false',
             sub_organization_id: subIdToFilter,
+            sortBy: 'createdAt', // newest first
+            sortOrder: 'desc',
           },
           activeOrgId || undefined
         );

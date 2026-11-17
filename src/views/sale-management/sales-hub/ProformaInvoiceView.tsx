@@ -77,6 +77,13 @@ import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { toast } from "../../../utils/toast";
+import { useBillDraft } from "../../../hooks/useBillDraft";
+import { DraftSyncIndicator, ResumeDraftBanner } from "../utils/BillDraftUi";
+import { DRAFT_MODULES } from "../../../utils/documentDraft";
+import {
+  loadDraftCustomer,
+  loadDraftProducts,
+} from "../../../utils/documentDraftRestore";
 import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -960,27 +967,44 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     }
   }, []);
 
-  // Load live customers & stocks on mount so list view and form view both have customer codes and stock items
+  // Customers: the list rows already carry customerCode from the proforma API, so they are only fetched when the
+  // form opens or when a listed row has no customer code to show (fallback lookup).
   const hasLoadedMasterDataRef = useRef(false);
+  const hasLoadedCustomersRef = useRef(false);
+  const listNeedsCustomerLookup = liveProformas.some(
+    (p) => !(p as any).customerCode,
+  );
   useEffect(() => {
-    let isMounted = true;
+    if (hasLoadedCustomersRef.current) return;
+    if (viewMode !== "form" && !listNeedsCustomerLookup) return;
+    hasLoadedCustomersRef.current = true;
 
     customerApi
       .getCustomers({ pagination_required: false, page_size: 100 })
       .then((res) => {
         const rawCust = unpackProducts(res);
-        if (isMounted && rawCust.length > 0) {
+        if (rawCust.length > 0) {
           const mapped = rawCust.map(mapApiCustomerToSalesCustomer);
           setLiveCustomers(mapped);
         }
       })
-      .catch((err) => console.warn("Customer load:", err));
+      .catch((err) => {
+        hasLoadedCustomersRef.current = false;
+        console.warn("Customer load:", err);
+      });
+  }, [viewMode, listNeedsCustomerLookup]);
+
+  // Stocks & stock batches are only needed by the form (product dropdown), so load them once when the form opens
+  const hasLoadedStockDataRef = useRef(false);
+  useEffect(() => {
+    if (viewMode !== "form" || hasLoadedStockDataRef.current) return;
+    hasLoadedStockDataRef.current = true;
 
     stockApi
       .getStocks({ pagination_required: false, page_size: 100 })
       .then((res) => {
         const rawStocks = unpackProducts(res);
-        if (isMounted && rawStocks.length > 0) {
+        if (rawStocks.length > 0) {
           const mapped = rawStocks.map(mapApiStockToInventoryStockItem);
           setLiveStocks(mapped);
         }
@@ -991,16 +1015,12 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       .getStockBatches({ pagination_required: false, page_size: 100 })
       .then((res) => {
         const rawBatches = unpackProducts(res);
-        if (isMounted && rawBatches.length > 0) {
+        if (rawBatches.length > 0) {
           setLiveBatches(rawBatches);
         }
       })
       .catch((err) => console.warn("Stock batches load:", err));
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+  }, [viewMode]);
 
   // Load products when entering form mode if not already loaded
   useEffect(() => {
@@ -1890,6 +1910,75 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     manualRoundOff,
   ]);
 
+  // Document draft: the products added to a NEW proforma invoice are saved on the server as a draft while the user types
+  // (one draft per tab), restored on refresh, and marked COMPLETE once the proforma invoice itself is saved.
+  const billDraft = useBillDraft({
+    module: "proforma",
+    enabled: viewMode === "form" && !editingProforma,
+    contextKey: activeTabId,
+    partyId: formData.customerId,
+    lines: formData.items,
+  });
+  const [isResumingDraft, setIsResumingDraft] = useState(false);
+
+  const handleResumeDraft = async () => {
+    setIsResumingDraft(true);
+    try {
+      const restored = await billDraft.resume();
+      if (!restored) return;
+      const [productMap, customer] = await Promise.all([
+        loadDraftProducts(restored.lines.map((l) => l.productId)),
+        loadDraftCustomer(restored.draft.customer_id),
+      ]);
+      const isInclusive = priceTaxMode === "With Tax";
+      const rows = restored.lines.map((l, i) => {
+        const prod = productMap.get(l.productId);
+        const lineRes = calculateLineItem({
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          discountPercent: l.discountPercent,
+          taxPercent: l.taxPercent,
+          isTaxInclusive: isInclusive,
+        });
+        return {
+          id: `row_${Date.now()}_${i}`,
+          productId: l.productId,
+          productName: prod?.productName || "Product",
+          sku: prod?.productCode || "",
+          itemCode: prod?.productCode || "",
+          category: prod?.category || "",
+          hsnCode: prod?.hsnCode || "",
+          batch: l.batch,
+          quantity: l.quantity,
+          unit: prod?.unit && prod.unit !== "NONE" ? prod.unit : "PCS",
+          unitPrice: l.unitPrice,
+          discountPercent: l.discountPercent,
+          discountAmount: lineRes.discountAmount,
+          taxPercent: l.taxPercent,
+          taxAmount: lineRes.taxAmount,
+          total: lineRes.lineTotal,
+        } as ExtendedProformaItem;
+      });
+      setFormData((prev) => ({
+        ...prev,
+        ...(customer
+          ? {
+              customerId: customer.id,
+              partyName: customer.name || "",
+              customerPhone: customer.phone || "",
+              customerEmail: customer.email || "",
+              customerCompany: customer.company || "",
+              billingAddress: customer.billingAddress || customer.address || "",
+            }
+          : {}),
+        items: rows.length > 0 ? rows : prev.items,
+      }));
+      toast.success(`Draft restored with ${rows.length} item${rows.length === 1 ? "" : "s"}.`);
+    } finally {
+      setIsResumingDraft(false);
+    }
+  };
+
   // Errors belong to the active tab's form; never carry them across tabs / modes.
   useEffect(() => {
     fe.reset();
@@ -2144,6 +2233,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           toast.success(
             `Proforma Invoice ${newProforma.proformaNo} created successfully!`,
           );
+          void billDraft.finalize();
         }
 
         dispatch(
@@ -3229,6 +3319,30 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Saved draft: resume prompt + autosave status */}
+        {!editingProforma &&
+          (billDraft.pendingDraft || billDraft.status !== "idle") && (
+            <div className="mb-4 flex flex-col gap-3">
+              {billDraft.pendingDraft && (
+                <ResumeDraftBanner
+                  draft={billDraft.pendingDraft}
+                  documentLabel={DRAFT_MODULES.proforma.label}
+                  busy={isResumingDraft}
+                  onResume={handleResumeDraft}
+                  onDiscard={billDraft.discardPending}
+                />
+              )}
+              <div className="flex justify-end">
+                <DraftSyncIndicator
+                  status={billDraft.status}
+                  lastSavedAt={billDraft.lastSavedAt}
+                  totals={billDraft.totals}
+                  error={billDraft.error}
+                />
+              </div>
+            </div>
+          )}
 
         {/* 3. MAIN FORM CONTAINER */}
         <form
@@ -5806,6 +5920,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 
       {/* Delete Confirmation Modal */}
       <DeleteConfirmationModal
+        variant="centered"
         isOpen={isDeleteModalOpen}
         onClose={() => {
           if (!isDeletingProforma) {

@@ -604,8 +604,8 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
         limit,
         search: search.trim() ? search.trim() : undefined,
         status: status !== 'ALL' && status ? status : undefined,
-        sortBy: 'monthlyPrice',
-        sortOrder: 'asc',
+        sortBy: 'createdAt', // newest first
+        sortOrder: 'desc',
       });
       if (res.success && Array.isArray(res.data)) {
         setApiPlans(res.data);

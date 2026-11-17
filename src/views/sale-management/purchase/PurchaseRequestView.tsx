@@ -62,6 +62,13 @@ import { SearchableSelect } from '../../../components/common/SearchableSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { printBusinessDocument, printTableReport, downloadBusinessDocument, DocumentPrintOptions } from '../../../utils/printUtils';
 import { toast } from "../../../utils/toast";
+import { useBillDraft } from "../../../hooks/useBillDraft";
+import { DraftSyncIndicator, ResumeDraftBanner } from "../utils/BillDraftUi";
+import { DRAFT_MODULES } from "../../../utils/documentDraft";
+import {
+  loadDraftProducts,
+  loadDraftSupplier,
+} from "../../../utils/documentDraftRestore";
 import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { useNavigate } from 'react-router-dom';
 import {
@@ -468,6 +475,58 @@ export const PurchaseRequestView: React.FC = () => {
   const selectedFormSupplierId = watch('supplierId');
   const selectedFormSupplierName = watch('supplierName');
 
+  // Document draft: the products added to a NEW purchase request are saved on the server as a draft while the user
+  // types, restored on refresh, and marked COMPLETE once the request itself is created.
+  const draftLines = useMemo(
+    () =>
+      requestItems.map((it) => ({
+        productId: it.productId,
+        quantity: it.requestedQuantity,
+        unitPrice: it.estimatedUnitPrice,
+      })),
+    [requestItems],
+  );
+  const billDraft = useBillDraft({
+    module: 'purchaseRequest',
+    enabled: isCreateModalOpen && !editingRequest,
+    partyId: selectedFormSupplierId,
+    lines: draftLines,
+  });
+  const [isResumingDraft, setIsResumingDraft] = useState(false);
+
+  const handleResumeDraft = async () => {
+    setIsResumingDraft(true);
+    try {
+      const restored = await billDraft.resume();
+      if (!restored) return;
+      const [productMap, supplier] = await Promise.all([
+        loadDraftProducts(restored.lines.map((l) => l.productId)),
+        loadDraftSupplier(restored.draft.supplier_id),
+      ]);
+      const rows: PurchaseRequestItem[] = restored.lines.map((l, i) => {
+        const prod = productMap.get(l.productId);
+        return {
+          id: `pr_item_${Date.now()}_${i}_${Math.random().toString(36).substr(2, 4)}`,
+          productId: l.productId,
+          productName: prod?.productName || 'Product',
+          currentStock: prod?.openingStock ?? 0,
+          requestedQuantity: l.quantity,
+          estimatedUnitPrice: l.unitPrice,
+          requiredDate,
+          remarks: '',
+        };
+      });
+      if (supplier) {
+        setValue('supplierId', supplier.id);
+        setValue('supplierName', supplier.name || '');
+      }
+      if (rows.length > 0) setRequestItems(rows);
+      toast.success(`Draft restored with ${rows.length} item${rows.length === 1 ? '' : 's'}.`);
+    } finally {
+      setIsResumingDraft(false);
+    }
+  };
+
   // Suppliers list from API + local store fallback + currently selected supplier
   const mergedSuppliers = useMemo(() => {
     const map = new Map<string, { id: string; name: string; supplierCode?: string }>();
@@ -803,6 +862,7 @@ export const PurchaseRequestView: React.FC = () => {
           idempotencyKeyRef.current = null;
           const mapped = mapApiPurchaseRequestToUi(res.data);
           toast.success(`Purchase request ${mapped.requestNo} created successfully!`);
+          void billDraft.finalize();
         } else {
           throw new Error('The purchase request could not be created. Please try again.');
         }
@@ -1726,6 +1786,30 @@ export const PurchaseRequestView: React.FC = () => {
           )}
           className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150"
         >
+          {/* Saved draft: resume prompt + autosave status */}
+          {!editingRequest &&
+            (billDraft.pendingDraft || billDraft.status !== 'idle') && (
+              <div className="flex flex-col gap-3">
+                {billDraft.pendingDraft && (
+                  <ResumeDraftBanner
+                    draft={billDraft.pendingDraft}
+                    documentLabel={DRAFT_MODULES.purchaseRequest.label}
+                    busy={isResumingDraft}
+                    onResume={handleResumeDraft}
+                    onDiscard={billDraft.discardPending}
+                  />
+                )}
+                <div className="flex justify-end">
+                  <DraftSyncIndicator
+                    status={billDraft.status}
+                    lastSavedAt={billDraft.lastSavedAt}
+                    totals={billDraft.totals}
+                    error={billDraft.error}
+                  />
+                </div>
+              </div>
+            )}
+
           {/* Metadata: 3-column Grid Layout matching standard reference */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
@@ -2387,6 +2471,7 @@ export const PurchaseRequestView: React.FC = () => {
 
       {/* Delete Confirmation Modal */}
       <DeleteConfirmationModal
+        variant="centered"
         isOpen={isDeleteModalOpen}
         onClose={() => {
           if (!isDeletingRequest) {

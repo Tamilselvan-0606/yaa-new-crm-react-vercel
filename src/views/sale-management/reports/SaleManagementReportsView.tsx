@@ -207,6 +207,54 @@ const REPORT_MENU: { category: ReportCategory; label: string; icon: any; items: 
   },
 ];
 
+const REPORT_PAGE_SIZE = 100;
+const REPORT_MAX_PAGES = 30;
+const loadAllPages = async <A, U>(
+  fetchPage: (page: number, size: number) => Promise<{ data?: A[]; pagination?: { hasNextPage?: boolean } } | undefined>,
+  map: (row: A) => U,
+): Promise<U[]> => {
+  const out: U[] = [];
+  try {
+    for (let page = 1; page <= REPORT_MAX_PAGES; page++) {
+      const res = await fetchPage(page, REPORT_PAGE_SIZE);
+      const rows = Array.isArray(res?.data) ? res!.data! : [];
+      out.push(...rows.map(map));
+      const hasNext = res?.pagination?.hasNextPage ?? rows.length >= REPORT_PAGE_SIZE;
+      if (!hasNext || rows.length === 0) break;
+    }
+  } catch (err) {
+    console.warn('Reports: failed to load a dataset from the API', err);
+  }
+  return out;
+};
+
+type ExtraDataset =
+  | 'salesReturns'
+  | 'purchaseReturns'
+  | 'salesRepresentatives'
+  | 'quotations'
+  | 'paymentIns'
+  | 'paymentOuts'
+  | 'purchaseRequests';
+
+// Datasets used only by specific reports; fetched the first time the report is opened. Sales, purchases,
+// customers, suppliers and stocks are always needed (KPI cards and the Party selector) so load on open.
+const REPORT_EXTRA_DATASETS: Partial<Record<ReportId, ExtraDataset[]>> = {
+  all_transactions: ['salesReturns', 'purchaseReturns'],
+  day_book: ['salesReturns', 'purchaseReturns'],
+  sales_return_report: ['salesReturns'],
+  purchase_return_report: ['purchaseReturns'],
+  collection_summary: ['salesRepresentatives'],
+  sales_rep_collections: ['salesRepresentatives'],
+  customer_aging_report: ['salesRepresentatives'],
+  estimate_quotation_report: ['quotations'],
+  proforma_invoice_report: ['quotations'],
+  payment_receipts_report: ['paymentIns'],
+  payment_out_report: ['paymentOuts'],
+  expense_summary: ['paymentOuts'],
+  purchase_request_report: ['purchaseRequests'],
+};
+
 export const SaleManagementReportsView: React.FC = () => {
   const companyProfile = useCompanyDocumentProfile();
   // Every dataset below comes from API list endpoints only (nothing from browser storage)
@@ -225,67 +273,21 @@ export const SaleManagementReportsView: React.FC = () => {
 
   useEffect(() => {
     let cancelled = false;
-    const PAGE_SIZE = 100;
-    const MAX_PAGES = 30;
-    const loadAll = async <A, U>(
-      fetchPage: (page: number, size: number) => Promise<{ data?: A[]; pagination?: { hasNextPage?: boolean } } | undefined>,
-      map: (row: A) => U,
-    ): Promise<U[]> => {
-      const out: U[] = [];
-      try {
-        for (let page = 1; page <= MAX_PAGES; page++) {
-          const res = await fetchPage(page, PAGE_SIZE);
-          const rows = Array.isArray(res?.data) ? res!.data! : [];
-          out.push(...rows.map(map));
-          const hasNext = res?.pagination?.hasNextPage ?? rows.length >= PAGE_SIZE;
-          if (!hasNext || rows.length === 0) break;
-        }
-      } catch (err) {
-        console.warn('Reports: failed to load a dataset from the API', err);
-      }
-      return out;
-    };
     const pg = (page: number, size: number) => ({ page_no: page, page_size: size, pagination_required: true });
     (async () => {
-      const [inv, sret, po, pret, cust, sup, stk, reps, quo, pin, pout, preq] = await Promise.all([
-        loadAll((p, n) => commerceInvoiceApi.getInvoices(pg(p, n)), mapApiInvoiceToSaleTransaction),
-        loadAll((p, n) => commerceSalesReturnApi.getSalesReturns(pg(p, n)), mapApiSalesReturnToSalesReturn),
-        loadAll((p, n) => workPurchaseOrderApi.getPurchaseOrders(pg(p, n)) as any, mapApiPurchaseOrderToUi),
-        loadAll((p, n) => commercePurchaseReturnApi.getPurchaseReturns(pg(p, n)) as any, mapApiPurchaseReturnToUi),
-        loadAll((p, n) => customerApi.getCustomers(pg(p, n)) as any, mapApiCustomerToSalesCustomer),
-        loadAll((p, n) => supplierApi.getSuppliers(pg(p, n)) as any, mapApiSupplierToSupplier),
-        loadAll((p, n) => stockApi.getStocks(pg(p, n)) as any, mapApiStockToInventoryStockItem),
-        loadAll(
-          (p, n) => salesRepresentativeApi.getList({ page: p, limit: n }) as any,
-          (r: any): SalesRepresentative => ({
-            id: r.id,
-            name: r.name,
-            mobile: r.mobile,
-            email: r.email,
-            designation: r.designation,
-            status: r.status,
-            createdAt: r.createdAt,
-            updatedAt: r.updatedAt,
-          }),
-        ),
-        loadAll((p, n) => quotationApi.getQuotations(pg(p, n)) as any, mapApiQuotationToSaleQuotation),
-        loadAll((p, n) => commercePaymentInApi.getPaymentIns(pg(p, n)) as any, mapApiPaymentInToSalePaymentIn),
-        loadAll((p, n) => workPaymentOutApi.getPaymentsOut(pg(p, n)) as any, mapApiPaymentOutToUi),
-        loadAll((p, n) => commercePurchaseRequestApi.getPurchaseRequests(pg(p, n)) as any, mapApiPurchaseRequestToUi),
+      const [inv, po, cust, sup, stk] = await Promise.all([
+        loadAllPages((p, n) => commerceInvoiceApi.getInvoices(pg(p, n)), mapApiInvoiceToSaleTransaction),
+        loadAllPages((p, n) => workPurchaseOrderApi.getPurchaseOrders(pg(p, n)) as any, mapApiPurchaseOrderToUi),
+        loadAllPages((p, n) => customerApi.getCustomers(pg(p, n)) as any, mapApiCustomerToSalesCustomer),
+        loadAllPages((p, n) => supplierApi.getSuppliers(pg(p, n)) as any, mapApiSupplierToSupplier),
+        loadAllPages((p, n) => stockApi.getStocks(pg(p, n)) as any, mapApiStockToInventoryStockItem),
       ]);
       if (cancelled) return;
       setSales(inv as any);
-      setSalesReturns(sret as any);
       setPurchases(po as any);
-      setPurchaseReturns(pret as any);
       setCustomers(cust as any);
       setSuppliers(sup as any);
       setStocks(stk as any);
-      setSalesRepresentatives(reps);
-      setQuotations(quo as any);
-      setPaymentIns(pin as any);
-      setPaymentOuts(pout as any);
-      setPurchaseRequests(preq as any);
     })();
     return () => {
       cancelled = true;
@@ -293,6 +295,72 @@ export const SaleManagementReportsView: React.FC = () => {
   }, []);
 
   const [activeReport, setActiveReport] = useState<ReportId>('bill_wise_profit');
+
+  // Report-specific datasets: fetched on first use of a report that needs them, then kept in state.
+  const requestedDatasetsRef = React.useRef<Set<ExtraDataset>>(new Set());
+  const mountedRef = React.useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    const pg = (page: number, size: number) => ({ page_no: page, page_size: size, pagination_required: true });
+    const todo = (REPORT_EXTRA_DATASETS[activeReport] || []).filter((k) => !requestedDatasetsRef.current.has(k));
+    todo.forEach(async (key) => {
+      requestedDatasetsRef.current.add(key);
+      switch (key) {
+        case 'salesReturns': {
+          const r = await loadAllPages((p, n) => commerceSalesReturnApi.getSalesReturns(pg(p, n)), mapApiSalesReturnToSalesReturn);
+          if (mountedRef.current) setSalesReturns(r as any);
+          break;
+        }
+        case 'purchaseReturns': {
+          const r = await loadAllPages((p, n) => commercePurchaseReturnApi.getPurchaseReturns(pg(p, n)) as any, mapApiPurchaseReturnToUi);
+          if (mountedRef.current) setPurchaseReturns(r as any);
+          break;
+        }
+        case 'salesRepresentatives': {
+          const r = await loadAllPages(
+            (p, n) => salesRepresentativeApi.getList({ page: p, limit: n }) as any,
+            (row: any): SalesRepresentative => ({
+              id: row.id,
+              name: row.name,
+              mobile: row.mobile,
+              email: row.email,
+              designation: row.designation,
+              status: row.status,
+              createdAt: row.createdAt,
+              updatedAt: row.updatedAt,
+            }),
+          );
+          if (mountedRef.current) setSalesRepresentatives(r);
+          break;
+        }
+        case 'quotations': {
+          const r = await loadAllPages((p, n) => quotationApi.getQuotations(pg(p, n)) as any, mapApiQuotationToSaleQuotation);
+          if (mountedRef.current) setQuotations(r as any);
+          break;
+        }
+        case 'paymentIns': {
+          const r = await loadAllPages((p, n) => commercePaymentInApi.getPaymentIns(pg(p, n)) as any, mapApiPaymentInToSalePaymentIn);
+          if (mountedRef.current) setPaymentIns(r as any);
+          break;
+        }
+        case 'paymentOuts': {
+          const r = await loadAllPages((p, n) => workPaymentOutApi.getPaymentsOut(pg(p, n)) as any, mapApiPaymentOutToUi);
+          if (mountedRef.current) setPaymentOuts(r as any);
+          break;
+        }
+        case 'purchaseRequests': {
+          const r = await loadAllPages((p, n) => commercePurchaseRequestApi.getPurchaseRequests(pg(p, n)) as any, mapApiPurchaseRequestToUi);
+          if (mountedRef.current) setPurchaseRequests(r as any);
+          break;
+        }
+      }
+    });
+  }, [activeReport]);
   const [timeRange, setTimeRange] = useState<'today' | 'this_week' | 'this_month' | 'this_year' | 'all' | 'custom'>('this_month');
   const [customStartDate, setCustomStartDate] = useState(toLocalISO(new Date()));
   const [customEndDate, setCustomEndDate] = useState(toLocalISO(new Date()));

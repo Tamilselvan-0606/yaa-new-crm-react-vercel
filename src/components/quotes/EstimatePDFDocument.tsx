@@ -340,8 +340,8 @@ export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
   const halfGstTotal = gstTotal / 2;
   const grandTotal = quotation.amount || (taxableAmount + gstTotal);
 
-  // Logo is intentionally not drawn on the PDF (it would download the image on every print).
-  const logoSrc: string | null = null;
+  // Logo URL from the default company details API (see renderPdfBlob, which retries without it if it can't load).
+  const logoSrc: string | null = logoUrl || sellerDetails?.logo || null;
 
   const company = {
     name: sellerDetails?.name || 'Yaa Creations',

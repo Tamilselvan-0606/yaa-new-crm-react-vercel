@@ -18,6 +18,7 @@ export interface OrganizationBankItem {
   status?: 'Active' | 'Inactive' | string;
   organizationId?: string | null;
   subOrganizationId?: string | null;
+  branchId?: string | null;
   accountName?: string | null;
   accountHolder?: string | null;
   ifsc?: string | null;
@@ -30,6 +31,7 @@ export interface OrganizationBankListParams {
   limit?: number;
   organizationId?: string;
   subOrganizationId?: string;
+  branchId?: string;
   search?: string;
   status?: 'Active' | 'Inactive' | 'All';
   isDefault?: boolean;
@@ -51,6 +53,7 @@ export interface CreateOrganizationBankRequest {
   status?: 'Active' | 'Inactive';
   organizationId?: string;
   subOrganizationId?: string | null;
+  branchId?: string | null;
 }
 
 export type UpdateOrganizationBankRequest = Partial<Omit<CreateOrganizationBankRequest, 'organizationId' | 'subOrganizationId'>>;

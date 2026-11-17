@@ -120,6 +120,13 @@ import {
   round2,
 } from "../../../utils/financialCalculations";
 import { toast } from "../../../utils/toast";
+import { useBillDraft } from "../../../hooks/useBillDraft";
+import { DraftSyncIndicator, ResumeDraftBanner } from "../utils/BillDraftUi";
+import { DRAFT_MODULES } from "../../../utils/documentDraft";
+import {
+  loadDraftProducts,
+  loadDraftSupplier,
+} from "../../../utils/documentDraftRestore";
 import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { FormError } from "../../../components/common/FormError";
 import {
@@ -2758,6 +2765,81 @@ export const PurchaseOrderView: React.FC = () => {
 
   // Save Purchase Order (Create or Update with Work API).
   // Wrapped in a submit guard so double-clicks / repeated Enter cannot send it twice.
+  // Document draft: the products added to a NEW purchase order are saved on the server as a draft while the user
+  // types, restored on refresh, and marked COMPLETE once the purchase order itself is created.
+  const draftLines = useMemo(
+    () =>
+      formData.items.map((it) => ({
+        productId: it.productId,
+        batch: it.batch,
+        quantity: it.quantity,
+        unitPrice: it.purchasePrice,
+        discountPercent: it.discountPercent,
+        taxPercent: it.taxPercent,
+      })),
+    [formData.items],
+  );
+  const billDraft = useBillDraft({
+    module: "purchaseOrder",
+    enabled: isFormModalOpen && !editingPurchase,
+    partyId: formData.supplierId,
+    lines: draftLines,
+    withGst: formData.withGst,
+  });
+  const [isResumingDraft, setIsResumingDraft] = useState(false);
+
+  const handleResumeDraft = async () => {
+    setIsResumingDraft(true);
+    try {
+      const restored = await billDraft.resume();
+      if (!restored) return;
+      const [productMap, supplier] = await Promise.all([
+        loadDraftProducts(restored.lines.map((l) => l.productId)),
+        loadDraftSupplier(restored.draft.supplier_id),
+      ]);
+      const rows = restored.lines.map((l, i) => {
+        const prod = productMap.get(l.productId);
+        const lineRes = calculateLineItem(
+          {
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            discountPercent: l.discountPercent,
+            discountAmount: 0,
+            taxPercent: l.taxPercent,
+          },
+          { withGst: formData.withGst, gstType: formData.gstType },
+        );
+        return {
+          id: `po_item_${Date.now()}_${i}_${Math.random().toString(36).substr(2, 4)}`,
+          productId: l.productId,
+          productName: prod?.productName || "Product",
+          batch: l.batch,
+          quantity: l.quantity,
+          freeQuantity: 0,
+          unit: prod?.unit && prod.unit !== "NONE" ? prod.unit : "PCS",
+          packingUnit: "",
+          expDate: prod?.expDate || "",
+          purchasePrice: l.unitPrice,
+          salePrice: Number(prod?.salePrice || 0),
+          discountPercent: lineRes.discountPercent,
+          discountAmount: lineRes.discountAmount,
+          taxPercent: l.taxPercent,
+          total: lineRes.lineTotal,
+        } as PurchaseProductItem;
+      });
+      setFormData((prev) => ({
+        ...prev,
+        ...(supplier
+          ? { supplierId: supplier.id, supplierName: supplier.name || "" }
+          : {}),
+        items: rows.length > 0 ? rows : prev.items,
+      }));
+      toast.success(`Draft restored with ${rows.length} item${rows.length === 1 ? "" : "s"}.`);
+    } finally {
+      setIsResumingDraft(false);
+    }
+  };
+
   const handleSavePurchase = (status: PurchaseStatus = "Pending") =>
     saveGuard.runOnce(() => performSavePurchase(status));
 
@@ -3181,6 +3263,7 @@ export const PurchaseOrderView: React.FC = () => {
             `Purchase order ${createdPo.purchaseNo} created successfully!`,
           );
         }
+        void billDraft.finalize();
         setIsFormModalOpen(false);
         fetchPurchaseOrders(true);
       }
@@ -3757,6 +3840,30 @@ export const PurchaseOrderView: React.FC = () => {
               <span>Back</span>
             </button>
           </div>
+
+          {/* Saved draft: resume prompt + autosave status */}
+          {!editingPurchase &&
+            (billDraft.pendingDraft || billDraft.status !== "idle") && (
+              <div className="flex flex-col gap-3">
+                {billDraft.pendingDraft && (
+                  <ResumeDraftBanner
+                    draft={billDraft.pendingDraft}
+                    documentLabel={DRAFT_MODULES.purchaseOrder.label}
+                    busy={isResumingDraft}
+                    onResume={handleResumeDraft}
+                    onDiscard={billDraft.discardPending}
+                  />
+                )}
+                <div className="flex justify-end">
+                  <DraftSyncIndicator
+                    status={billDraft.status}
+                    lastSavedAt={billDraft.lastSavedAt}
+                    totals={billDraft.totals}
+                    error={billDraft.error}
+                  />
+                </div>
+              </div>
+            )}
 
           {/* Full-Page Form Canvas */}
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden p-6 sm:p-8">
@@ -7189,6 +7296,7 @@ export const PurchaseOrderView: React.FC = () => {
 
       {/* Delete Confirmation Modal */}
       <DeleteConfirmationModal
+        variant="centered"
         isOpen={isDeleteModalOpen}
         onClose={() => {
           if (!isDeletingPo) {

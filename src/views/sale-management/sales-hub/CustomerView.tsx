@@ -101,6 +101,7 @@ import { exportTableToExcel } from "../../../utils/excelExport";
 import { printTableReport } from "../../../utils/printUtils";
 import { toast } from "../../../utils/toast";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
+import { useStatusConfirm } from "../utils/useStatusConfirm";
 import {
   customerApi,
   CustomerLedgerData,
@@ -352,6 +353,7 @@ export const CustomerView: React.FC = () => {
   const repAssignGuard = useSubmitGuard();
   const customerSaveGuard = useSubmitGuard();
   const customerStatusGuard = useSubmitGuard();
+  const { requestStatusChange, statusConfirmModal } = useStatusConfirm();
   const customerDeleteGuard = useSubmitGuard();
   const bulkUploadGuard = useSubmitGuard();
 
@@ -2838,12 +2840,16 @@ export const CustomerView: React.FC = () => {
                                     ? "deactivate"
                                     : "activate",
                                 onClick: () =>
-                                  handleUpdateCustomerStatus(
-                                    cust,
-                                    cust.status === "Active"
-                                      ? "Inactive"
-                                      : "Active",
-                                  ),
+                                  requestStatusChange({
+                                    itemTypeLabel: "Customer",
+                                    itemName: cust.name,
+                                    nextStatus: cust.status === "Active" ? "Inactive" : "Active",
+                                    run: () =>
+                                      handleUpdateCustomerStatus(
+                                        cust,
+                                        cust.status === "Active" ? "Inactive" : "Active",
+                                      ),
+                                  }),
                               },
                               {
                                 label:
@@ -3513,6 +3519,7 @@ export const CustomerView: React.FC = () => {
       {/* 2b. DELETE CUSTOMER CONFIRMATION MODAL     */}
       {/* ========================================== */}
       <DeleteConfirmationModal
+        variant="centered"
         isOpen={isDeleteModalOpen}
         onClose={() => {
           if (!isDeletingCustomer) {
@@ -5864,6 +5871,7 @@ export const CustomerView: React.FC = () => {
           )}
         </div>
       </Modal>
+      {statusConfirmModal}
     </div>
   );
 };

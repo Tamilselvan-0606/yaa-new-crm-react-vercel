@@ -58,6 +58,13 @@ import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { SearchableSelect } from "../../../components/common/SearchableSelect";
 import { toast } from "../../../utils/toast";
+import { useBillDraft } from "../../../hooks/useBillDraft";
+import { DraftSyncIndicator, ResumeDraftBanner } from "../utils/BillDraftUi";
+import { DRAFT_MODULES } from "../../../utils/documentDraft";
+import {
+  loadDraftCustomer,
+  loadDraftProducts,
+} from "../../../utils/documentDraftRestore";
 import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useCompanyDocumentProfile } from "../../../hooks/useCompanyDocumentProfile";
@@ -820,9 +827,10 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   const hasLoadedMasterDataRef = useRef(false);
   const [isSearchingProducts, setIsSearchingProducts] = useState(false);
 
-  const loadMasterData = useCallback(async () => {
-    fetchLiveProducts();
+  const hasLoadedFormMasterDataRef = useRef(false);
 
+  // Customers are needed by the list (customer code column, convert action) as well as the form
+  const loadCustomers = useCallback(async () => {
     try {
       const custRes = await customerApi.getCustomers({
         pagination_required: false,
@@ -835,6 +843,13 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     } catch (e) {
       console.warn("Customer load error in SaleOrderView:", e);
     }
+  }, [setCustomersList]);
+
+  const loadMasterData = useCallback(async () => {
+    hasLoadedFormMasterDataRef.current = true;
+    fetchLiveProducts();
+
+    await loadCustomers();
 
     try {
       const stockRes = await stockApi.getStocks({
@@ -863,11 +878,18 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     } catch (e) {
       console.warn("Batch load error in SaleOrderView:", e);
     }
-  }, [fetchLiveProducts, setCustomersList, setStocksList]);
+  }, [fetchLiveProducts, loadCustomers, setStocksList]);
+
+  // List view only needs customers; products/stocks/batches load when the form opens
+  useEffect(() => {
+    loadCustomers();
+  }, [loadCustomers]);
 
   useEffect(() => {
-    loadMasterData();
-  }, [loadMasterData]);
+    if (viewMode === "form" && !hasLoadedFormMasterDataRef.current) {
+      loadMasterData();
+    }
+  }, [viewMode, loadMasterData]);
 
   // Load products when entering form mode if not already loaded
   useEffect(() => {
@@ -1493,6 +1515,83 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     manualRoundOff,
   ]);
 
+  // Document draft: the products added to a NEW sale order are saved on the server as a draft while the user types
+  // (one draft per tab), restored on refresh, and marked COMPLETE once the document itself is saved.
+  const billDraft = useBillDraft({
+    module: "saleOrder",
+    enabled: viewMode === "form" && !activeTab.editingOrder,
+    contextKey: activeTab.id,
+    partyId: activeTab.formData.customerId,
+    lines: activeTab.formData.items,
+  });
+  const [isResumingDraft, setIsResumingDraft] = useState(false);
+
+  const handleResumeDraft = async () => {
+    setIsResumingDraft(true);
+    try {
+      const restored = await billDraft.resume();
+      if (!restored) return;
+      const [productMap, customer] = await Promise.all([
+        loadDraftProducts(restored.lines.map((l) => l.productId)),
+        loadDraftCustomer(restored.draft.customer_id),
+      ]);
+      const gstType = determineGstType(
+        customer?.state ? `${customer.state}` : activeTab.formData.stateOfSupply,
+      );
+      const rows = restored.lines.map((l, i) => {
+        const prod = productMap.get(l.productId);
+        const lineRes = calculateLineItem(
+          {
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            discountPercent: l.discountPercent,
+            taxPercent: l.taxPercent,
+          },
+          { withGst: true, gstType },
+        );
+        const lineDiscountAmount = lineRes.discountAmount;
+        const lineTaxAmount = lineRes.taxAmount;
+        const lineTotal = lineRes.lineTotal;
+        return {
+          id: `so_item_${Date.now()}_${i}`,
+          productId: l.productId,
+          productName: prod?.productName || "Product",
+          sku: prod?.productCode || "",
+          itemCode: prod?.productCode || "",
+          category: prod?.category || "",
+          hsnCode: prod?.hsnCode || "",
+          batch: l.batch,
+          quantity: l.quantity,
+          unit: prod?.unit && prod.unit !== "NONE" ? prod.unit : "PCS",
+          unitPrice: l.unitPrice,
+          discountPercent: l.discountPercent,
+          discountAmount: lineDiscountAmount,
+          taxPercent: l.taxPercent,
+          taxAmount: lineTaxAmount,
+          total: lineTotal,
+        } as ExtendedSaleOrderItem;
+      });
+      updateActiveTabFormData((prev) => ({
+        ...prev,
+        ...(customer
+          ? {
+              customerId: customer.id,
+              partyName: customer.name || "",
+              customerPhone: customer.phone || "",
+              customerEmail: customer.email || "",
+              customerCompany: customer.company || "",
+              billingAddress: customer.billingAddress || customer.address || "",
+              stateOfSupply: customer.state ? `${customer.state}` : prev.stateOfSupply,
+            }
+          : {}),
+        items: rows.length > 0 ? rows : prev.items,
+      }));
+      toast.success(`Draft restored with ${rows.length} item${rows.length === 1 ? "" : "s"}.`);
+    } finally {
+      setIsResumingDraft(false);
+    }
+  };
+
   // Save / Update Sales Order (Live Backend Integration)
   // Maps a form row to a real product id (UUID) or undefined. Never guesses a different product.
   const resolveProductIdForItem = (
@@ -1663,6 +1762,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             savedOrderId = createRes.data.id;
           }
           toast.success(`Sales Order ${finalOrderNo} created successfully!`);
+          void billDraft.finalize();
         }
 
         // Refresh batch stock so the next form shows current figures (no stock adjustment is made here).
@@ -2785,6 +2885,30 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Saved draft: resume prompt + autosave status */}
+        {!activeTab.editingOrder &&
+          (billDraft.pendingDraft || billDraft.status !== "idle") && (
+            <div className="mb-4 flex flex-col gap-3">
+              {billDraft.pendingDraft && (
+                <ResumeDraftBanner
+                  draft={billDraft.pendingDraft}
+                  documentLabel={DRAFT_MODULES.saleOrder.label}
+                  busy={isResumingDraft}
+                  onResume={handleResumeDraft}
+                  onDiscard={billDraft.discardPending}
+                />
+              )}
+              <div className="flex justify-end">
+                <DraftSyncIndicator
+                  status={billDraft.status}
+                  lastSavedAt={billDraft.lastSavedAt}
+                  totals={billDraft.totals}
+                  error={billDraft.error}
+                />
+              </div>
+            </div>
+          )}
 
         {/* 3. MAIN FORM CONTAINER */}
         <form
@@ -5342,6 +5466,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
       {/* Delete Confirmation Modal */}
       <DeleteConfirmationModal
+        variant="centered"
         isOpen={isDeleteModalOpen}
         onClose={() => {
           if (!isDeletingOrder) {

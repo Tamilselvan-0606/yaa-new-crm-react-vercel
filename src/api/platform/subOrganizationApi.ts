@@ -132,6 +132,7 @@ export const subOrganizationApi = {
     };
     if (params?.search) queryParams.search = params.search;
     if (params?.status && params.status !== 'All') queryParams.status = params.status;
+    if (params?.subOrganizationType) queryParams.subOrganizationType = params.subOrganizationType;
 
     const headers: Record<string, string> = {};
     if (orgId) {

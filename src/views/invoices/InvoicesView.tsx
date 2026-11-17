@@ -41,6 +41,7 @@ import { CustomSelect } from '../../components/common/CustomSelect';
 import { Modal } from '../../components/common/Modal';
 import { RecordPaymentModal } from '../../components/forms/RecordPaymentModal';
 import { organizationBankApi } from '../../api/platform/organizationBankApi';
+import { renderPdfBlob } from '../../components/common/pdf/pdfLogo';
 import { InvoicePDFDocument } from '../../components/invoices/InvoicePDFDocument';
 import { sendWhatsAppDocument } from '../../services/whatsappGateway';
 import { SearchBar } from '../../components/common/SearchBar';
@@ -474,6 +475,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   const viewingInvoiceHasBank = !!(viewingInvoice?.bank?.accountNumber || viewingInvoice?.bank?.bankName);
   const viewingBankId = viewingInvoice?.bank?.id;
   const viewingSubOrgId = (viewingInvoice as any)?.subOrganizationId as string | undefined;
+  const viewingBranchId = (viewingInvoice as any)?.branchId as string | undefined;
   useEffect(() => {
     setDefaultBank(null);
     if (!viewingInvoiceId || viewingInvoiceHasBank) return;
@@ -498,6 +500,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
           sortOrder: 'desc',
           organizationId: orgId,
           subOrganizationId: viewingSubOrgId || undefined,
+          branchId: viewingBranchId || undefined,
         })
         .then((res) => res?.data?.find((x) => x.isDefault) || res?.data?.[0] || null);
     };
@@ -518,7 +521,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
     return () => {
       cancelled = true;
     };
-  }, [viewingInvoiceId, viewingInvoiceHasBank, viewingBankId, viewingSubOrgId, currentUser?.organizationId]);
+  }, [viewingInvoiceId, viewingInvoiceHasBank, viewingBankId, viewingSubOrgId, viewingBranchId, currentUser?.organizationId]);
   const viewingDocId = viewingInvoice?.id;
 
   // Opening a proforma / invoice shows the list row at once, then loads the full record (GET by id) so the
@@ -1141,14 +1144,14 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
     const handlePrintInvoicePdf = async () => {
       try {
         setIsGeneratingPdf(true);
-        // Generate real PDF blob using @react-pdf/renderer
-        const blob = await pdf(
+        // Generate real PDF blob using @react-pdf/renderer (logo URL comes from the default company details API)
+        const blob = await renderPdfBlob(effectiveLogo, (logo) => (
           <InvoicePDFDocument
             invoice={activeInvoice}
             documentTitle={isProforma ? 'Proforma Invoice' : 'Invoice'}
-            logoUrl={effectiveLogo}
+            logoUrl={logo}
           />
-        ).toBlob();
+        ));
         const url = URL.createObjectURL(blob);
         
         // Open PDF in new tab for direct real PDF printing / viewing

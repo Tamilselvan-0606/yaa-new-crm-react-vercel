@@ -103,11 +103,14 @@ export const organizationApi = {
   getOrganizations: async (
     page = 1,
     limit = 10,
-    options: { search?: string; status?: string; sortBy?: string } = {}
+    options: { search?: string; status?: string; sortBy?: string; sortOrder?: 'asc' | 'desc' } = {}
   ): Promise<OrganizationListResponse> => {
     const search = options.search?.trim();
     const res = await baseClient.get<OrganizationListResponse>('/platform/organizations', {
-      params: buildListParams({ page, limit, search, status: options.status, sortBy: options.sortBy }, { sortBy: 'name' }),
+      params: buildListParams(
+        { page, limit, search, status: options.status, sortBy: options.sortBy, sortOrder: options.sortOrder },
+        { sortBy: 'name' }
+      ),
     });
     return res.data;
   },

@@ -211,6 +211,7 @@ export const StocksView: React.FC = () => {
   // Catalog products & categories from API for modal dropdowns and filters
   const [catalogProducts, setCatalogProducts] = useState<CatalogProductItem[]>([]);
   const catalogProductsRef = useRef<CatalogProductItem[]>([]);
+  const catalogRequestedRef = useRef(false); // catalog fetched at most once per mount (retried only if it came back empty)
 
   // Load Catalog products from API for authoritative batch matching & product metadata
   const loadCatalogProducts = useCallback(async () => {
@@ -412,8 +413,10 @@ export const StocksView: React.FC = () => {
       setIsLoading(true);
 
       try {
-        if (catalogProductsRef.current.length === 0) {
-          await loadCatalogProducts();
+        if (!catalogRequestedRef.current) {
+          catalogRequestedRef.current = true;
+          const loadedCatalog = await loadCatalogProducts();
+          if (loadedCatalog.length === 0) catalogRequestedRef.current = false;
         }
         const isLowStock = targetStatus === "Low Stock";
         const res = await stockApi.getStocks({
@@ -577,9 +580,8 @@ export const StocksView: React.FC = () => {
   );
 
   useEffect(() => {
-    loadCatalogProducts();
-    loadStocks();
-  }, [loadCatalogProducts, loadStocks]);
+    loadStocks(); // loadStocks loads the catalog once itself
+  }, [loadStocks]);
 
   // Extract unique categories directly from loaded stocks (no redundant category API call on mount)
   const categories = useMemo(() => {

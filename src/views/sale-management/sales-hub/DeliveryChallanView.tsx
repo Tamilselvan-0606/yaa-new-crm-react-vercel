@@ -76,6 +76,13 @@ import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { SearchableSelect } from "../../../components/common/SearchableSelect";
 import { toast } from "../../../utils/toast";
+import { useBillDraft } from "../../../hooks/useBillDraft";
+import { DraftSyncIndicator, ResumeDraftBanner } from "../utils/BillDraftUi";
+import { DRAFT_MODULES } from "../../../utils/documentDraft";
+import {
+  loadDraftCustomer,
+  loadDraftProducts,
+} from "../../../utils/documentDraftRestore";
 import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -835,9 +842,10 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   const hasLoadedMasterDataRef = useRef(false);
 
   // Load Customers, Stocks, and Batches master data on mount so list view and form view both have customer codes and stock items
-  const loadMasterData = useCallback(async () => {
-    fetchLiveProducts();
+  const hasLoadedFormMasterDataRef = useRef(false);
 
+  // Customers are needed by the list (customer code column, actions) as well as the form
+  const loadCustomers = useCallback(async () => {
     try {
       const custRes = await customerApi.getCustomers({
         pagination_required: false,
@@ -852,6 +860,13 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     } catch (e) {
       console.warn("Customer load error in DeliveryChallanView:", e);
     }
+  }, [setCustomersList]);
+
+  const loadMasterData = useCallback(async () => {
+    hasLoadedFormMasterDataRef.current = true;
+    fetchLiveProducts();
+
+    await loadCustomers();
 
     try {
       const stockRes = await stockApi.getStocks({
@@ -880,11 +895,18 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     } catch (e) {
       console.warn("Batch load error in DeliveryChallanView:", e);
     }
-  }, [fetchLiveProducts, setCustomersList, setStocksList]);
+  }, [fetchLiveProducts, loadCustomers, setStocksList]);
+
+  // List view only needs customers; products/stocks/batches load when the form opens
+  useEffect(() => {
+    loadCustomers();
+  }, [loadCustomers]);
 
   useEffect(() => {
-    loadMasterData();
-  }, [loadMasterData]);
+    if (viewMode === "form" && !hasLoadedFormMasterDataRef.current) {
+      loadMasterData();
+    }
+  }, [viewMode, loadMasterData]);
 
   // Load products when entering form mode if not already loaded
   useEffect(() => {
@@ -1641,6 +1663,78 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     formProductIdsKey.split(",").forEach((id) => loadBatchStock(id));
   }, [viewMode, formProductIdsKey, loadBatchStock]);
 
+  // Document draft: the products added to a NEW delivery challan are saved on the server as a draft while the user types
+  // (one draft per tab), restored on refresh, and marked COMPLETE once the document itself is saved.
+  const billDraft = useBillDraft({
+    module: "deliveryChallan",
+    enabled: viewMode === "form" && !activeTab.editingChallan,
+    contextKey: activeTab.id,
+    partyId: activeTab.formData.customerId,
+    lines: activeTab.formData.items,
+  });
+  const [isResumingDraft, setIsResumingDraft] = useState(false);
+
+  const handleResumeDraft = async () => {
+    setIsResumingDraft(true);
+    try {
+      const restored = await billDraft.resume();
+      if (!restored) return;
+      const [productMap, customer] = await Promise.all([
+        loadDraftProducts(restored.lines.map((l) => l.productId)),
+        loadDraftCustomer(restored.draft.customer_id),
+      ]);
+      const rows = restored.lines.map((l, i) => {
+        const prod = productMap.get(l.productId);
+        const gross = l.quantity * l.unitPrice;
+        const lineDiscountAmount = (gross * l.discountPercent) / 100;
+        const taxable = Math.max(0, gross - lineDiscountAmount);
+        const lineTaxAmount = (taxable * l.taxPercent) / 100;
+        const lineTotal = taxable + lineTaxAmount;
+        return {
+          id: `dci_item_${Date.now()}_${i}`,
+          productId: l.productId,
+          productName: prod?.productName || "Product",
+          sku: prod?.productCode || "",
+          itemCode: prod?.productCode || "",
+          category: prod?.category || "",
+          hsnCode: prod?.hsnCode || "",
+          batch: l.batch,
+          quantity: l.quantity,
+          unit: prod?.unit && prod.unit !== "NONE" ? prod.unit : "PCS",
+          unitPrice: l.unitPrice,
+          discountPercent: l.discountPercent,
+          discountAmount: lineDiscountAmount,
+          taxPercent: l.taxPercent,
+          taxAmount: lineTaxAmount,
+          total: lineTotal,
+        } as ExtendedChallanItem;
+      });
+      updateActiveTabFormData((prev) => ({
+        ...prev,
+        ...(customer
+          ? {
+              customerId: customer.id,
+              partyName: customer.name || "",
+              customerPhone: customer.phone || "",
+              customerEmail: customer.email || "",
+              customerCompany: customer.company || "",
+              billingAddress: customer.billingAddress || customer.address || "",
+              shippingAddress:
+                customer.shippingAddress ||
+                customer.billingAddress ||
+                customer.address ||
+                "",
+              stateOfSupply: customer.state ? `${customer.state}` : prev.stateOfSupply,
+            }
+          : {}),
+        items: rows.length > 0 ? rows : prev.items,
+      }));
+      toast.success(`Draft restored with ${rows.length} item${rows.length === 1 ? "" : "s"}.`);
+    } finally {
+      setIsResumingDraft(false);
+    }
+  };
+
   // Save / Update Delivery Challan (Live Backend Integration)
   const handleSaveChallan = (andConvert = false) =>
     runOnce(async () => {
@@ -1732,6 +1826,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           toast.success(
             `Delivery Challan ${finalChallanNo} created successfully!`,
           );
+          void billDraft.finalize();
         }
 
         // Refresh batch stock so the next form shows current figures (no stock adjustment is made here).
@@ -2676,6 +2771,30 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Saved draft: resume prompt + autosave status */}
+        {!activeTab.editingChallan &&
+          (billDraft.pendingDraft || billDraft.status !== "idle") && (
+            <div className="mb-4 flex flex-col gap-3">
+              {billDraft.pendingDraft && (
+                <ResumeDraftBanner
+                  draft={billDraft.pendingDraft}
+                  documentLabel={DRAFT_MODULES.deliveryChallan.label}
+                  busy={isResumingDraft}
+                  onResume={handleResumeDraft}
+                  onDiscard={billDraft.discardPending}
+                />
+              )}
+              <div className="flex justify-end">
+                <DraftSyncIndicator
+                  status={billDraft.status}
+                  lastSavedAt={billDraft.lastSavedAt}
+                  totals={billDraft.totals}
+                  error={billDraft.error}
+                />
+              </div>
+            </div>
+          )}
 
         {/* 3. MAIN FORM CONTAINER */}
         <form
@@ -4985,6 +5104,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
       {/* Delete Confirmation Modal */}
       <DeleteConfirmationModal
+        variant="centered"
         isOpen={isDeleteModalOpen}
         onClose={() => {
           if (!isDeletingChallan) {

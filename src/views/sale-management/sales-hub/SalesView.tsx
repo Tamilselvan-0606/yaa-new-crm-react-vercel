@@ -24,6 +24,13 @@ import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { toast } from "../../../utils/toast";
+import { useBillDraft } from "../../../hooks/useBillDraft";
+import { DraftSyncIndicator, ResumeDraftBanner } from "../utils/BillDraftUi";
+import { DRAFT_MODULES } from "../../../utils/documentDraft";
+import {
+  loadDraftCustomer,
+  loadDraftProducts,
+} from "../../../utils/documentDraftRestore";
 import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import {
@@ -2270,6 +2277,7 @@ export const SalesView: React.FC = () => {
             invoiceNo: formData.invoiceNo || "",
           };
         }
+        void billDraft.finalize();
       }
 
       if (
@@ -2738,6 +2746,7 @@ export const SalesView: React.FC = () => {
             invoiceNo: formData.invoiceNo || "",
           };
         }
+        void billDraft.finalize();
       }
 
       saveSale(savedApiSale);
@@ -3537,6 +3546,77 @@ export const SalesView: React.FC = () => {
         printSalesInvoicesReport(rows, appliedSaleStatus, summary),
     });
 
+  // Document draft: the products added to a NEW sales invoice are saved on the server as a draft while the user types,
+  // restored on refresh, and marked COMPLETE once the invoice itself is saved.
+  const billDraft = useBillDraft({
+    module: "salesInvoice",
+    enabled: isFormModalOpen && !editingSale,
+    partyId: formData.customerId,
+    overallDiscount: formData.overallDiscount,
+    lines: formData.items,
+    withGst: formData.withGst,
+  });
+  const [isResumingDraft, setIsResumingDraft] = useState(false);
+
+  const handleResumeDraft = async () => {
+    setIsResumingDraft(true);
+    try {
+      const restored = await billDraft.resume();
+      if (!restored) return;
+      const [productMap, customer] = await Promise.all([
+        loadDraftProducts(restored.lines.map((l) => l.productId)),
+        loadDraftCustomer(restored.draft.customer_id),
+      ]);
+      const restoredDiscount = Number(restored.draft.overall_discount);
+      const rows: SaleProductItem[] = restored.lines.map((l, i) => {
+        const prod = productMap.get(l.productId);
+        const lineRes = calculateLineItem(
+          {
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            discountPercent: l.discountPercent,
+            taxPercent: l.taxPercent,
+          },
+          { withGst: formData.withGst, gstType: formData.gstType },
+        );
+        return {
+          id: `s_item_${Date.now()}_${i}`,
+          productId: l.productId,
+          productName: prod?.productName || "Product",
+          sku: prod?.productCode || "",
+          batch: l.batch,
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          taxPercent: l.taxPercent,
+          discountPercent: l.discountPercent,
+          discountAmount: 0,
+          discountType: "percent",
+          total: lineRes.lineTotal,
+        } as SaleProductItem;
+      });
+      setFormData((prev) => ({
+        ...prev,
+        ...(customer
+          ? {
+              customerId: customer.id,
+              customerName: customer.name || "",
+              customerCompany: customer.company || "",
+              customerPhone: customer.phone || "",
+              customerEmail: customer.email || "",
+              billingAddress: customer.billingAddress || customer.address || "",
+            }
+          : {}),
+        ...(Number.isFinite(restoredDiscount) && restoredDiscount > 0
+          ? { overallDiscount: restoredDiscount }
+          : {}),
+        items: rows.length > 0 ? rows : prev.items,
+      }));
+      toast.success(`Draft restored with ${rows.length} item${rows.length === 1 ? "" : "s"}.`);
+    } finally {
+      setIsResumingDraft(false);
+    }
+  };
+
   // Pagination
   const paginatedSales = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
@@ -3581,6 +3661,30 @@ export const SalesView: React.FC = () => {
               <span>Back</span>
             </button>
           </div>
+
+          {/* Saved draft: resume prompt + autosave status */}
+          {!editingSale &&
+            (billDraft.pendingDraft || billDraft.status !== "idle") && (
+              <div className="mb-4 flex flex-col gap-3">
+                {billDraft.pendingDraft && (
+                  <ResumeDraftBanner
+                    draft={billDraft.pendingDraft}
+                    documentLabel={DRAFT_MODULES.salesInvoice.label}
+                    busy={isResumingDraft}
+                    onResume={handleResumeDraft}
+                    onDiscard={billDraft.discardPending}
+                  />
+                )}
+                <div className="flex justify-end">
+                  <DraftSyncIndicator
+                    status={billDraft.status}
+                    lastSavedAt={billDraft.lastSavedAt}
+                    totals={billDraft.totals}
+                    error={billDraft.error}
+                  />
+                </div>
+              </div>
+            )}
 
           {/* Full-Page Form Canvas */}
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden p-6 sm:p-8">
@@ -4035,6 +4139,7 @@ export const SalesView: React.FC = () => {
 
       {/* Delete Confirmation Modal */}
       <DeleteConfirmationModal
+        variant="centered"
         isOpen={isDeleteModalOpen}
         onClose={() => {
           if (!isDeletingSale) {

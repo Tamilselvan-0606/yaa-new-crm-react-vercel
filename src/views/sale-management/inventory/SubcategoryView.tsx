@@ -34,6 +34,7 @@ import { Modal } from "../../../components/common/Modal";
 import { CustomSelect } from "../../../components/common/CustomSelect";
 import { exportTableToExcel } from "../../../utils/excelExport";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
+import { useStatusConfirm } from "../utils/useStatusConfirm";
 import { DeleteConfirmationModal } from "../../../components/common/DeleteConfirmationModal";
 import {
   subcategoryApi,
@@ -163,6 +164,7 @@ export const SubcategoryView: React.FC = () => {
   }, [isModalOpen, reset]);
   const saveGuard = useSubmitGuard();
   const toggleGuard = useSubmitGuard();
+  const { requestStatusChange, statusConfirmModal } = useStatusConfirm();
   const deleteGuard = useSubmitGuard();
 
   // Keystroke sanitizer: disallow typing numeric characters in text-only fields
@@ -570,6 +572,14 @@ export const SubcategoryView: React.FC = () => {
 
   // Toggle Subcategory Status (PATCH /commerce/subcategories/:id)
   const handleToggleStatus = (item: SubcategoryItem) =>
+    requestStatusChange({
+      itemTypeLabel: "Subcategory",
+      itemName: item.subcategory,
+      nextStatus: item.status === "Active" ? "Inactive" : "Active",
+      run: () => performToggleStatus(item),
+    });
+
+  const performToggleStatus = (item: SubcategoryItem) =>
     toggleGuard.runOnce(async () => {
       const nextStatus = item.status === "Active" ? "Inactive" : "Active";
       setActiveDropdownId(null);
@@ -1374,6 +1384,7 @@ export const SubcategoryView: React.FC = () => {
 
       {/* 7. Delete Confirmation Modal */}
       <DeleteConfirmationModal
+        variant="centered"
         isOpen={Boolean(deleteConfirmItem)}
         onClose={() => {
           if (!isDeleting) {
@@ -1388,6 +1399,7 @@ export const SubcategoryView: React.FC = () => {
         isLoading={isDeleting}
         error={deleteError}
       />
+      {statusConfirmModal}
     </div>
   );
 };

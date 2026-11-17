@@ -38,6 +38,8 @@ export const TAG_TYPES = [
   'SalesReturn',
   'Collection',
   'CustomerLedger',
+  // Document drafts (server-saved bill rows while a new Sales Hub / Purchase document is being created)
+  'DocumentDraft',
   // Cross-cutting
   'Notification',
   'Dashboard',

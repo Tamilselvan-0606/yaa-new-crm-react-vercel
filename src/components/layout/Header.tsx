@@ -929,7 +929,11 @@ export const Header: React.FC<HeaderProps> = ({
     if (path === '/' || currentTab === 'dashboard') return 'Dashboard';
     if (path.startsWith('/branches') || currentTab === 'branches') return 'Branches';
     if (path.startsWith('/organization-subscriptions') || currentTab === 'organization-subscriptions') return 'Organization Subscriptions';
-    if (path.startsWith('/organization') || currentTab === 'organization') return isOrgSuperAdmin ? 'Sub Organization' : 'Organizations';
+    if (path.startsWith('/organization') || currentTab === 'organization') {
+      // A platform admin who opened an organization's sub-organizations has ?parentOrgId in the URL.
+      const viewingSubOrgs = isOrgSuperAdmin || new URLSearchParams(location.search).has('parentOrgId');
+      return viewingSubOrgs ? 'Sub Organization' : 'Organizations';
+    }
     if (path.startsWith('/subscription-plans') || currentTab === 'subscription-plans') return 'Subscription Plans';
     if (path.startsWith('/products') || currentTab === 'products') return 'Products';
     if (path.startsWith('/leads') || currentTab === 'leads') return 'Clients & leads';

@@ -116,6 +116,9 @@ const ORGANIZATION_TYPE_OPTIONS = [
   'Sales Management',
 ];
 
+// Sub-organizations must pick one suite, so "All" is not offered.
+const SUB_ORGANIZATION_TYPE_OPTIONS = ORGANIZATION_TYPE_OPTIONS.filter((o) => o !== 'All');
+
 export const parseOrganizationTypeNumber = (type: string | number | undefined): number => {
   if (typeof type === 'number') return type;
   if (!type) return 0;
@@ -338,6 +341,8 @@ export const OrganizationView: React.FC = () => {
   const fetchSubOrganizations = async (page: number, limit: number, search: string, status: string) => {
     const empty = { items: [] as OrganizationItem[], total: 0 };
     try {
+      // A super admin drilling into a parent org sees all of its sub-orgs, whatever suite they are in.
+      const skipSuiteFilter = isSuperAdmin && !!parentOrgContext;
       const res = await subOrganizationApi.getSubOrganizations(
         {
           page_no: page,
@@ -345,14 +350,16 @@ export const OrganizationView: React.FC = () => {
           pagination_required: 'true',
           search: search.trim() || undefined,
           status: status === 'All' ? undefined : status === 'Suspend' ? 'Suspended' : status,
+          // 1 = client, 2 = sales: the server returns only the active suite's sub-organizations
+          subOrganizationType: skipSuiteFilter ? undefined : isSaleManagement ? 2 : 1,
+          sortBy: 'createdAt', // newest first
+          sortOrder: 'desc',
         },
         resolveParentOrgId()
       );
       if (!res || !(res.success || Array.isArray(res.data))) return empty;
 
       const mapped = (Array.isArray(res.data) ? res.data : []).map(mapSubOrgToItem);
-      // A super admin drilling into a parent org sees all of its sub-orgs, whatever suite they are in.
-      const skipSuiteFilter = isSuperAdmin && !!parentOrgContext;
       const items = skipSuiteFilter ? mapped : mapped.filter((item) => matchesActiveSuite(item, isSaleManagement));
 
       // The server total counts every record; fall back to the page count once the suite filter removed rows.
@@ -369,6 +376,8 @@ export const OrganizationView: React.FC = () => {
     const res = await organizationApi.getOrganizations(page, limit, {
       search,
       status, // the organizations API takes Active | Inactive | Suspend | All (not "Suspended")
+      sortBy: 'createdAt', // newest first, so a newly created organization is at the top
+      sortOrder: 'desc',
     });
     if (!res?.success || !Array.isArray(res.data)) return { items: [] as OrganizationItem[], total: 0 };
     const items = res.data.map(mapApiOrgToItem);
@@ -673,7 +682,8 @@ export const OrganizationView: React.FC = () => {
     setCityId('');
     setPincode(org.pincode || '');
     const resolvedType = formatOrganizationTypeName(org.organizationType);
-    setOrganizationType(resolvedType); // 0 = All is shown as All, not swapped for the active suite
+    // 0 = All is shown as All for organizations; a sub-organization has no "All" choice, so it must be picked again.
+    setOrganizationType(isSubOrgMode && resolvedType === 'All' ? '' : resolvedType);
     setIndustry(org.industry);
     setLocation(org.location);
     setSubscriptionPlan(org.subscriptionPlan || '');
@@ -937,7 +947,7 @@ export const OrganizationView: React.FC = () => {
       <SearchBar
         value={pendingSearch}
         onChange={handleSearchChange}
-        placeholder="Search organizations by name, code, type, industry, location..."
+        placeholder={`Search ${isSubOrgMode ? 'sub organizations' : 'organizations'} by name, code, type, industry, location...`}
         onSubmit={handleApply}
         onReset={handleReset}
         filterSlot={
@@ -954,7 +964,7 @@ export const OrganizationView: React.FC = () => {
         }
         rightSlot={
           <span className="text-xs font-semibold text-slate-500 pr-2">
-            Total Organization :{' '}
+            {isSubOrgMode ? 'Total Sub Organization' : 'Total Organization'} :{' '}
             <span className="text-[#33077C] font-bold">{totalRecords}</span>
           </span>
         }
@@ -966,7 +976,7 @@ export const OrganizationView: React.FC = () => {
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[900px]">
             <thead>
               <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">ORGANIZATION & CODE</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">{isSubOrgMode ? 'SUB ORGANIZATION & CODE' : 'ORGANIZATION & CODE'}</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
                   {isSubOrgMode ? 'CONTACT PERSON' : 'ORGANIZATION TYPE'}
                 </th>
@@ -1328,7 +1338,7 @@ export const OrganizationView: React.FC = () => {
                     setOrganizationType(val);
                     clearFieldError('organizationType');
                   }}
-                  options={ORGANIZATION_TYPE_OPTIONS}
+                  options={isSubOrgMode ? SUB_ORGANIZATION_TYPE_OPTIONS : ORGANIZATION_TYPE_OPTIONS}
                   placeholder="Select company type"
                   activeColor="brand"
                   error={!!formErrors.organizationType}

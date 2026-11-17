@@ -360,6 +360,8 @@ export const CollectionsView: React.FC = () => {
   // newest response is applied, so the screen cannot end up showing stale data.
   const invoicesRequestSeqRef = useRef(0);
   const invoicesInFlightRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
+  // True while apiAssignments holds the full (unfiltered) assignment list fetched by loadInvoices.
+  const fullAssignmentsLoadedRef = useRef(false);
 
   const loadInvoices = React.useCallback((overrides?: {
     search?: string;
@@ -368,6 +370,7 @@ export const CollectionsView: React.FC = () => {
     dueDate?: string;
     status?: string;
     paymentStatus?: string;
+    reuseAssignments?: boolean; // filter-driven reload: assignments do not depend on the filters, skip refetch
   }): Promise<void> => {
     const effSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
     const effRep = overrides?.repFilter !== undefined ? overrides.repFilter : selectedRepFilter;
@@ -386,6 +389,7 @@ export const CollectionsView: React.FC = () => {
     ]);
     if (invoicesInFlightRef.current?.key === key) return invoicesInFlightRef.current.promise;
 
+    const reuseAssignments = !!overrides?.reuseAssignments && fullAssignmentsLoadedRef.current;
     const requestId = ++invoicesRequestSeqRef.current;
     const isLatest = () => requestId === invoicesRequestSeqRef.current;
 
@@ -411,7 +415,7 @@ export const CollectionsView: React.FC = () => {
           paymentStatus: effPaymentStatus !== 'ALL' ? effPaymentStatus : undefined,
           page_size: 200,
         }),
-        collectionApi.getCustomerAssignments({ limit: 200 }),
+        reuseAssignments ? Promise.resolve(null) : collectionApi.getCustomerAssignments({ limit: 200 }),
       ]);
 
       if (!isLatest()) return; // a newer load has started; ignore this response
@@ -422,6 +426,7 @@ export const CollectionsView: React.FC = () => {
 
       if (assignRes.status === 'fulfilled' && assignRes.value?.success && Array.isArray(assignRes.value.data)) {
         setApiAssignments(assignRes.value.data);
+        fullAssignmentsLoadedRef.current = true;
       }
 
       let colInvoices: ApiCollectionInvoiceItem[] = [];
@@ -467,6 +472,7 @@ export const CollectionsView: React.FC = () => {
   const loadAssignments = React.useCallback(async () => {
     try {
       setIsAssignmentsLoading(true);
+      fullAssignmentsLoadedRef.current = false; // this call replaces apiAssignments with a filtered page
       const res = await collectionApi.getCustomerAssignments({
         search: appliedSearch || undefined,
         salesRepresentativeId: selectedRepFilter !== 'ALL' ? selectedRepFilter : undefined,
@@ -542,7 +548,7 @@ export const CollectionsView: React.FC = () => {
   // number of the dashboard table re-creating loadAssignments/loadFollowUps/loadHistory) can no longer
   // re-fire the active sub-view's request.
   useEffect(() => {
-    if (subView === 'dashboard') loadInvoices();
+    if (subView === 'dashboard') loadInvoices({ reuseAssignments: true });
   }, [subView, loadInvoices]);
 
   useEffect(() => {

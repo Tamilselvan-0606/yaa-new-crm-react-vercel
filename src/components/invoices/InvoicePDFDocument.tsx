@@ -413,8 +413,8 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
   const balanceDue = Math.max(0, activeInvoice.grandTotal - paidAmount);
   const isPartiallyPaid = activeInvoice.status === 'Partially Paid' || (paidAmount > 0 && balanceDue > 0.005);
 
-  // Logo is intentionally not drawn on the PDF (it would download the image on every print).
-  const logoSrc: string | null = null;
+  // Logo URL from the default company details API (see renderPdfBlob, which retries without it if it can't load).
+  const logoSrc: string | null = logoUrl || null;
 
   return (
     <Document title={`${documentTitle}-${activeInvoice.invoiceNumber}`} author={activeInvoice.company.name}>

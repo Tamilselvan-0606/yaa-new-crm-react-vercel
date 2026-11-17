@@ -28,7 +28,7 @@ import {
 /** hh:mm AM/PM from the first usable timestamp, or '-' when none carries a time. */
 const formatTimeHelper = (...candidates: Array<string | null | undefined>): string => {
   for (const c of candidates) {
-    if (!c || !/d{2}:d{2}/.test(c)) continue;
+    if (!c || !/\d{2}:\d{2}/.test(c)) continue;
     const d = new Date(c);
     if (isNaN(d.getTime())) continue;
     return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
@@ -153,6 +153,7 @@ export const PaymentsView: React.FC = () => {
         outstandingAmount: outstanding,
         dueDate: item.dueDate ? item.dueDate.split('T')[0] : '',
         paymentDate: item.paymentDate ? item.paymentDate.split('T')[0] : (item.createdAt ? item.createdAt.split('T')[0] : undefined),
+        paymentDateTime: item.paymentDateTime || undefined,
         paymentMethod: item.paymentMethod || item.paymentMode || 'Bank Transfer',
         transactionId: item.referenceNumber || item.transactionId,
         status: item.status || (outstanding <= 0.001 ? 'Paid' : paid > 0 ? 'Partially Paid' : 'Pending'),
@@ -470,6 +471,11 @@ export const PaymentsView: React.FC = () => {
                         <span className="text-xs font-medium text-slate-700">
                           {formatDateHelper(item.paymentDate || item.dueDate)}
                         </span>
+                        {formatTimeHelper(item.paymentDateTime) !== '-' && (
+                          <span className="block text-[11px] font-medium text-slate-500 mt-0.5">
+                            {formatTimeHelper(item.paymentDateTime)}
+                          </span>
+                        )}
                       </td>
 
                       {/* 7. STATUS */}
@@ -717,7 +723,7 @@ export const PaymentsView: React.FC = () => {
                   { label: 'Payment Mode', value: selectedInvoice.paymentMethod || 'Bank Transfer' },
                   { label: 'Transaction ID', value: selectedInvoice.transactionId || selectedInvoice.referenceNumber || '-' },
                   { label: 'Payment Date', value: formatDateHelper(selectedInvoice.paymentDate || selectedInvoice.dueDate) },
-                  { label: 'Payment Time', value: formatTimeHelper(selectedInvoice.paymentDate, selectedInvoice.createdAt) },
+                  { label: 'Payment Time', value: formatTimeHelper(selectedInvoice.paymentDateTime, selectedInvoice.createdAt) },
                   {
                     label: 'Status',
                     value: isPaid ? 'Paid' : isPartiallyPaid ? 'Partial' : isPending ? 'Pending' : selectedInvoice.status || '-',

@@ -92,6 +92,8 @@ export interface BranchListParams {
   pagination_required?: boolean | string;
   search?: string;
   status?: string;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
 }
 
 export interface CreateBranchRequest {

@@ -78,6 +78,13 @@ import {
 } from "../../../utils/shareUtils";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import { toast } from "../../../utils/toast";
+import { useBillDraft } from "../../../hooks/useBillDraft";
+import { DraftSyncIndicator, ResumeDraftBanner } from "../utils/BillDraftUi";
+import { DRAFT_MODULES } from "../../../utils/documentDraft";
+import {
+  loadDraftCustomer,
+  loadDraftProducts,
+} from "../../../utils/documentDraftRestore";
 import { getNextSalesReturnNumber } from "../../../utils/documentNumbering";
 import { useAppDispatch } from "../../../hooks/redux";
 import { baseApi } from "../../../api/baseApi";
@@ -847,6 +854,77 @@ export const SalesReturnView: React.FC = () => {
     return filteredTransactions.slice(start, start + pageSize);
   }, [filteredTransactions, safePage, pageSize]);
 
+  // Document draft: the rows of a NEW sales return are saved on the server while the user works, restored on
+  // refresh, and marked COMPLETE once the return itself is saved.
+  const draftLines = useMemo(
+    () =>
+      returnItems.map((it) => ({
+        productId: it.productId,
+        batch: it.batch,
+        quantity: it.returnQuantity,
+        unitPrice: it.unitPrice,
+      })),
+    [returnItems],
+  );
+  // Opening the form pre-fills rows from the first invoice. Nothing is saved as a draft until the user changes them.
+  const draftBaselineRef = useRef<string | null>(null);
+  const draftEditedRef = useRef(false);
+  const draftLinesKey = JSON.stringify(draftLines);
+  if (!isCreateModalOpen || editingReturn) {
+    draftBaselineRef.current = null;
+    draftEditedRef.current = false;
+  } else if (draftBaselineRef.current === null) {
+    draftBaselineRef.current = draftLinesKey;
+  } else if (draftLinesKey !== draftBaselineRef.current) {
+    draftEditedRef.current = true;
+  }
+  const billDraft = useBillDraft({
+    module: "salesReturn",
+    enabled: isCreateModalOpen && !editingReturn && draftEditedRef.current,
+    detectResume: isCreateModalOpen && !editingReturn,
+    partyId: selectedCustomerId,
+    lines: draftLines,
+    withGst: false,
+  });
+  const [isResumingDraft, setIsResumingDraft] = useState(false);
+
+  // Restores the rows + customer only. The original invoice is not part of the draft, so it is chosen again.
+  const handleResumeDraft = async () => {
+    setIsResumingDraft(true);
+    try {
+      const restored = await billDraft.resume();
+      if (!restored) return;
+      const [productMap, customer] = await Promise.all([
+        loadDraftProducts(restored.lines.map((l) => l.productId)),
+        loadDraftCustomer(restored.draft.customer_id),
+      ]);
+      const rows: SalesReturnItem[] = restored.lines.map((l, i) => {
+        const prod = productMap.get(l.productId);
+        return {
+          id: `ret_item_${Date.now()}_${i}`,
+          productId: l.productId,
+          productName: prod?.productName || "Product",
+          sku: prod?.productCode || undefined,
+          batch: l.batch || undefined,
+          soldQuantity: l.quantity,
+          returnQuantity: l.quantity,
+          unitPrice: l.unitPrice,
+          returnAmount: Math.round(l.quantity * l.unitPrice * 100) / 100,
+          reason: "Defective",
+        };
+      });
+      if (customer) {
+        setSelectedCustomerId(customer.id);
+        setPartyName(customer.name || "");
+        setCustomerPhone(customer.phone || "");
+      }
+      if (rows.length > 0) setReturnItems(rows);
+      toast.success(`Draft restored with ${rows.length} item${rows.length === 1 ? "" : "s"}.`);
+    } finally {
+      setIsResumingDraft(false);
+    }
+  };
+
   // Open Create Return Modal
   const handleOpenCreateModal = () => {
     setEditingReturn(null);
@@ -1104,6 +1182,7 @@ export const SalesReturnView: React.FC = () => {
             toast.success(
               `Sales Return ${mapped.returnNo} created successfully!`,
             );
+            void billDraft.finalize();
           }
         }
 
@@ -2040,6 +2119,30 @@ export const SalesReturnView: React.FC = () => {
           showBackIcon={true}
           hideCloseButton={true}
         >
+          {/* Saved draft: resume prompt + autosave status */}
+          {!editingReturn &&
+            (billDraft.pendingDraft || billDraft.status !== "idle") && (
+              <div className="flex flex-col gap-3">
+                {billDraft.pendingDraft && (
+                  <ResumeDraftBanner
+                    draft={billDraft.pendingDraft}
+                    documentLabel={DRAFT_MODULES.salesReturn.label}
+                    busy={isResumingDraft}
+                    onResume={handleResumeDraft}
+                    onDiscard={billDraft.discardPending}
+                  />
+                )}
+                <div className="flex justify-end">
+                  <DraftSyncIndicator
+                    status={billDraft.status}
+                    lastSavedAt={billDraft.lastSavedAt}
+                    totals={billDraft.totals}
+                    error={billDraft.error}
+                  />
+                </div>
+              </div>
+            )}
+
           <form
             noValidate
             onSubmit={handleSubmitCreateReturn}
@@ -2698,6 +2801,7 @@ export const SalesReturnView: React.FC = () => {
 
       {/* Delete Confirmation Modal */}
       <DeleteConfirmationModal
+        variant="centered"
         isOpen={isDeleteModalOpen}
         onClose={() => {
           if (!isDeletingTx) {

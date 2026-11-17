@@ -102,7 +102,11 @@ export interface SubOrganizationListParams {
   page_size?: number;
   pagination_required?: boolean | string;
   status?: string;
+  /** Filter by type: 1 = client, 2 = sales, 3 = both; omit for every type. */
+  subOrganizationType?: 1 | 2 | 3;
   search?: string;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
 }
 
 export interface CreateSubOrganizationRequest {

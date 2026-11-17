@@ -17,7 +17,8 @@ import { ALL_TAG_TYPES, type AnyTagType } from '../store/api/tagTypes';
  *    the record it touched (by id) and its list, plus the related entities listed in MUTATION_RULES.
  *    Eviction is lazy: it refetches nothing; the next visit fetches fresh data.
  *  - Live data is NEVER cached: stock, batches, ledgers, collections, PDFs, notifications, auth. URLs without a
- *    policy are not cached either (allow-list, not deny-list).
+ *    policy are not cached either (allow-list, not deny-list). Identical live requests that are in flight at the same
+ *    moment share one network call (nothing is stored; see `liveGet`).
  *  - Tenant isolation: organisation and user ids are part of every cache key, and the cache is wiped on login
  *    and logout (`clearApiCache`).
  *  - The cache returns a deep copy, so callers can sort or mutate a response exactly as they could with axios.
@@ -411,7 +412,7 @@ let installed = false;
 const typeEpochs: Record<string, number> = {};
 const epochOf = (provides: TagRef[]) => provides.map((t) => typeEpochs[t.type] || 0).join('.');
 
-export const apiCacheStats = { hits: 0, misses: 0, bypass: 0, evictions: 0 };
+export const apiCacheStats = { hits: 0, misses: 0, bypass: 0, evictions: 0, deduped: 0 };
 const debug = (kind: string, url: string, extra = '') => {
   try {
     if (typeof localStorage !== 'undefined' && localStorage.getItem('debug_api_cache') === '1') {
@@ -426,12 +427,43 @@ const debug = (kind: string, url: string, extra = '') => {
 const toAxiosLike = (data: unknown, config?: AxiosRequestConfig): AxiosResponse =>
   ({ data, status: 200, statusText: 'OK', headers: {}, config: (config ?? {}) as any, request: undefined }) as AxiosResponse;
 
+// ---------------------------------------------------------------------------------------------
+// Live data (stock, batches, notifications ...) is never kept, but identical requests that are IN FLIGHT at the same
+// moment (two components mounting together, React Strict Mode, several loaders asking for the same list) share one
+// network call. Nothing is stored afterwards, so the data is exactly as fresh as the request that was sent.
+// A write that finishes starts a new "generation", so a request made after a write never joins one sent before it.
+// ---------------------------------------------------------------------------------------------
+const NO_COALESCE_PREFIXES = ['/auth', '/uploads', '/ai'];
+const inFlightLive = new Map<string, Promise<AxiosResponse>>();
+let writeGeneration = 0;
+
+const liveGet = (url: string, config?: AxiosRequestConfig): Promise<AxiosResponse> => {
+  const path = normalizePath(url);
+  if (!path || NO_COALESCE_PREFIXES.some((p) => matchesPrefix(path, p)) || !isCacheableConfig(config)) {
+    return originalGet(url, config);
+  }
+  const key = JSON.stringify([writeGeneration, readScope(), path, normalizeParams(config?.params) ?? null, scopeHeadersOf(config) ?? null]);
+  const shared = inFlightLive.get(key);
+  if (shared) {
+    apiCacheStats.deduped += 1;
+    debug('SHARED', url);
+    return shared.then((res) => toAxiosLike(deepClone(res.data), config));
+  }
+  const request = originalGet(url, config);
+  inFlightLive.set(key, request);
+  const done = () => {
+    if (inFlightLive.get(key) === request) inFlightLive.delete(key);
+  };
+  request.then(done, done);
+  return request;
+};
+
 const cachedGet = async (url: string, config?: AxiosRequestConfig): Promise<AxiosResponse> => {
   const policy = dispatch ? getCachePolicy(url) : null;
   if (!policy || !dispatch || !isCacheableConfig(config)) {
     apiCacheStats.bypass += 1;
     debug('BYPASS', url);
-    return originalGet(url, config);
+    return liveGet(url, config);
   }
 
   const args: CachedGetArgs = {
@@ -512,6 +544,7 @@ export const installApiCache = (store: { dispatch: Dispatch; getState: GetState 
   baseClient.interceptors.response.use((response) => {
     const method = String(response.config?.method || 'get').toLowerCase();
     if (method !== 'get' && method !== 'head' && method !== 'options') {
+      writeGeneration += 1;
       const tags = getInvalidationTags(String(response.config?.url || ''), method, response.config?.baseURL || API_BASE_URL);
       if (tags.length) evictApiCache(tags);
     }
@@ -530,5 +563,6 @@ export const installApiCache = (store: { dispatch: Dispatch; getState: GetState 
 /** Test helper. */
 export const __resetApiCacheForTests = (): void => {
   Object.keys(typeEpochs).forEach((k) => delete typeEpochs[k]);
-  apiCacheStats.hits = apiCacheStats.misses = apiCacheStats.bypass = apiCacheStats.evictions = 0;
+  apiCacheStats.hits = apiCacheStats.misses = apiCacheStats.bypass = apiCacheStats.evictions = apiCacheStats.deduped = 0;
+  inFlightLive.clear();
 };

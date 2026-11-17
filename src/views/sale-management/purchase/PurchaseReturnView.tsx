@@ -43,6 +43,10 @@ import { exportTableToExcel } from '../../../utils/excelExport';
 import { UniversalShareDropdown, formatPurchaseReturnShare } from '../../../utils/shareUtils';
 import { printBusinessDocument, printTableReport, downloadBusinessDocument, DocumentPrintOptions } from '../../../utils/printUtils';
 import { toast } from "../../../utils/toast";
+import { useBillDraft } from "../../../hooks/useBillDraft";
+import { DraftSyncIndicator, ResumeDraftBanner } from "../utils/BillDraftUi";
+import { DRAFT_MODULES } from "../../../utils/documentDraft";
+import { loadDraftProducts, loadDraftSupplier } from "../../../utils/documentDraftRestore";
 import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { useDispatch } from 'react-redux';
 import {
@@ -867,6 +871,64 @@ export const PurchaseReturnView: React.FC = () => {
     setReturnItems((prev) => prev.filter((_, idx) => idx !== index));
   };
 
+  // Document draft: the rows of a NEW purchase return are saved on the server while the user works, restored on
+  // refresh, and marked COMPLETE once the return itself is saved.
+  const draftLines = useMemo(
+    () =>
+      returnItems.map((it) => ({
+        productId: it.productId,
+        batch: it.batch,
+        quantity: it.returnQuantity,
+        unitPrice: it.unitPrice,
+      })),
+    [returnItems],
+  );
+  const billDraft = useBillDraft({
+    module: 'purchaseReturn',
+    enabled: isCreateModalOpen && !editingReturn,
+    partyId: chosenSupplier.id,
+    lines: draftLines,
+    withGst: false,
+  });
+  const [isResumingDraft, setIsResumingDraft] = useState(false);
+
+  // Restores the rows + supplier only. The original purchase bill is not part of the draft, so it is chosen again.
+  const handleResumeDraft = async () => {
+    setIsResumingDraft(true);
+    try {
+      const restored = await billDraft.resume();
+      if (!restored) return;
+      const [productMap, supplier] = await Promise.all([
+        loadDraftProducts(restored.lines.map((l) => l.productId)),
+        loadDraftSupplier(restored.draft.supplier_id),
+      ]);
+      const rows: PurchaseReturnItem[] = restored.lines.map((l, i) => {
+        const prod = productMap.get(l.productId);
+        return {
+          id: `pr_ret_it_${Date.now()}_${i}`,
+          productId: l.productId,
+          productName: prod?.productName || 'Product',
+          batch: l.batch || undefined,
+          purchasedQuantity: l.quantity,
+          returnQuantity: l.quantity,
+          unitPrice: l.unitPrice,
+          returnAmount: Math.round(l.quantity * l.unitPrice * 100) / 100,
+          reason: 'Damaged',
+          remarks: '',
+        };
+      });
+      if (supplier) {
+        setSelectedPurchaseId('');
+        setSelectedSupplierId(supplier.id);
+        setSelectedSupplierName(supplier.name || '');
+      }
+      if (rows.length > 0) setReturnItems(rows);
+      toast.success(`Draft restored with ${rows.length} item${rows.length === 1 ? '' : 's'}.`);
+    } finally {
+      setIsResumingDraft(false);
+    }
+  };
+
   // Open Create Modal with clean defaults
   const handleOpenCreateModal = () => {
     retErr.reset();
@@ -1218,6 +1280,7 @@ export const PurchaseReturnView: React.FC = () => {
         }
 
         toast.success(`Purchase return ${newReturn.returnNo} created successfully!`);
+        void billDraft.finalize();
       }
 
       setIsCreateModalOpen(false);
@@ -2020,6 +2083,30 @@ export const PurchaseReturnView: React.FC = () => {
           setEditingReturn(null);
         }}
       >
+        {/* Saved draft: resume prompt + autosave status */}
+        {!editingReturn &&
+          (billDraft.pendingDraft || billDraft.status !== "idle") && (
+            <div className="flex flex-col gap-3">
+              {billDraft.pendingDraft && (
+                <ResumeDraftBanner
+                  draft={billDraft.pendingDraft}
+                  documentLabel={DRAFT_MODULES.purchaseReturn.label}
+                  busy={isResumingDraft}
+                  onResume={handleResumeDraft}
+                  onDiscard={billDraft.discardPending}
+                />
+              )}
+              <div className="flex justify-end">
+                <DraftSyncIndicator
+                  status={billDraft.status}
+                  lastSavedAt={billDraft.lastSavedAt}
+                  totals={billDraft.totals}
+                  error={billDraft.error}
+                />
+              </div>
+            </div>
+          )}
+
         <form noValidate onSubmit={handleSubmitReturnForm} className="space-y-5 p-2 sm:p-4 animate-in fade-in duration-150">
           {/* Top Fields: 5-column Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 pt-1">
@@ -2603,6 +2690,7 @@ export const PurchaseReturnView: React.FC = () => {
 
       {/* Delete Confirmation Modal */}
       <DeleteConfirmationModal
+        variant="centered"
         isOpen={isDeleteModalOpen}
         onClose={() => {
           if (!isDeletingReturn) {

@@ -54,6 +54,7 @@ import { exportTableToExcel } from "../../../utils/excelExport";
 import { toast } from "../../../utils/toast";
 import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
+import { useStatusConfirm } from "../utils/useStatusConfirm";
 import { BATCH_PREFIX, cleanBatchNo } from "../utils/textUtils";
 import { BatchPrefixInput } from "../utils/BatchPrefixInput";
 import { DeleteConfirmationModal } from "../../../components/common/DeleteConfirmationModal";
@@ -965,6 +966,7 @@ export const InventoryProductsView: React.FC = () => {
   const [isDeleting, setIsDeleting] = useState(false);
   const saveGuard = useSubmitGuard();
   const toggleGuard = useSubmitGuard();
+  const { requestStatusChange, statusConfirmModal } = useStatusConfirm();
   const deleteGuard = useSubmitGuard();
   const bulkStatusGuard = useSubmitGuard();
   const bulkUpdateGuard = useSubmitGuard();
@@ -1281,6 +1283,14 @@ export const InventoryProductsView: React.FC = () => {
 
   // Toggle Product Status (PATCH /commerce/products/:id)
   const handleToggleStatus = (item: ProductItem) =>
+    requestStatusChange({
+      itemTypeLabel: "Product",
+      itemName: item.productName,
+      nextStatus: item.status === "Active" ? "Inactive" : "Active",
+      run: () => performToggleStatus(item),
+    });
+
+  const performToggleStatus = (item: ProductItem) =>
     toggleGuard.runOnce(async () => {
       const nextStatus = item.status === "Active" ? "Inactive" : "Active";
       setActiveDropdownId(null);
@@ -6266,6 +6276,7 @@ export const InventoryProductsView: React.FC = () => {
 
       {/* 9. Delete Confirmation Modal */}
       <DeleteConfirmationModal
+        variant="centered"
         isOpen={Boolean(deleteConfirmItem)}
         onClose={() => {
           if (!isDeleting) {
@@ -6280,6 +6291,7 @@ export const InventoryProductsView: React.FC = () => {
         isLoading={isDeleting}
         error={deleteProductError}
       />
+      {statusConfirmModal}
     </div>
   );
 };

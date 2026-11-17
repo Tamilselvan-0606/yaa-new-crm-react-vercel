@@ -210,6 +210,8 @@ export const ProductsView: React.FC = () => {
           status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
           subOrganizationId: effectiveSubOrgId,
           branchId: effectiveBranchId,
+          sortBy: 'createdAt', // newest first
+          sortOrder: 'desc',
         }),
         platformClientApi.getClients({ limit: 100 }).catch(() => null),
         platformLeadApi.getLeads({ limit: 100 }).catch(() => null),
@@ -320,9 +322,10 @@ export const ProductsView: React.FC = () => {
     try {
       setLoadingSubOrgs(true);
       let apiSubs: SubOrganizationApiItem[] = [];
+      const isSaleSuite = window.location.pathname.startsWith('/sale-management') || localStorage.getItem('active_org_type_view') === 'Sales Management';
       try {
         const subRes = await subOrganizationApi.getSubOrganizations(
-          { page_no: 1, page_size: 100, pagination_required: 'false' },
+          { page_no: 1, page_size: 100, pagination_required: 'false', subOrganizationType: isSaleSuite ? 2 : 1 },
           activeOrgId || undefined
         );
         if (subRes && Array.isArray(subRes.data)) {
@@ -332,7 +335,6 @@ export const ProductsView: React.FC = () => {
         console.warn('API getSubOrganizations notice:', err);
       }
 
-      const isSaleSuite = window.location.pathname.startsWith('/sale-management') || localStorage.getItem('active_org_type_view') === 'Sales Management';
       const isSubForSuite = (s: SubOrganizationApiItem) => {
         const code = Number(s.subOrganizationType);
         if (code === 3) return true;
