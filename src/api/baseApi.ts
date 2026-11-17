@@ -1,4 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
+import { normalizeDecimals } from '../utils/decimalJson';
 import {
   createApi,
   fetchBaseQuery,
@@ -52,11 +53,18 @@ baseClient.interceptors.request.use(
 );
 
 baseClient.interceptors.response.use(
-  (response) => response,
+  // The backend sends Decimal columns as { s, e, d } objects; turn them into numbers once, here.
+  (response) => {
+    response.data = normalizeDecimals(response.data);
+    return response;
+  },
   async (error) => {
     // Silent token refresh when the short-lived access token has expired
     const retried = await retryWithRefreshedToken(baseClient, error);
-    if (retried) return retried;
+    if (retried) {
+      retried.data = normalizeDecimals(retried.data);
+      return retried;
+    }
 
     const data = error.response?.data;
     let message = 'An unexpected error occurred';
@@ -143,7 +151,9 @@ const dynamicBaseQuery: BaseQueryFn<
     }
   }
 
-  return result;
+  // Decimal columns arrive as { s, e, d } objects: convert them to numbers for every RTK Query endpoint.
+  if (result.error) return result;
+  return { data: normalizeDecimals(result.data), meta: result.meta };
 };
 
 export const baseApi = createApi({

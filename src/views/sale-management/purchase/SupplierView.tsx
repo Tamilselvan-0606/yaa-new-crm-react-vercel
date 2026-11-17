@@ -107,6 +107,7 @@ import {
   FORM_INPUT_CLS,
   FORM_INPUT_DISABLED_CLS,
   FORM_SELECT_CLS,
+  FORM_TEXTAREA_CLS,
   getFormInputCls,
   handleNonNegativeKeyDown,
 } from "../utils/formUtils";
@@ -115,6 +116,34 @@ import { toast } from "../../../utils/toast";
 import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 
 import { formatDate } from "../utils/dateUtils";
+
+/** Payment-term choices; values use the same "Net N Days" format the API stores and returns. */
+const PAYMENT_TERM_OPTIONS = [
+  { value: "Immediate", label: "Immediate / Advance" },
+  { value: "Net 15 Days", label: "15 Days" },
+  { value: "Net 30 Days", label: "30 Days" },
+  { value: "Net 45 Days", label: "45 Days" },
+  { value: "Net 60 Days", label: "60 Days" },
+  { value: "Net 90 Days", label: "90 Days" },
+  { value: "Net 120 Days", label: "120 Days" },
+];
+
+/** Maps any saved spelling ("30 Days", "net 30 days", "Advance") onto one of the dropdown values. */
+const normalizePaymentTerms = (raw?: string | null): string => {
+  const v = (raw || "").trim();
+  if (!v) return "Net 30 Days";
+  const exact = PAYMENT_TERM_OPTIONS.find(
+    (o) => o.value.toLowerCase() === v.toLowerCase(),
+  );
+  if (exact) return exact.value;
+  if (/immediate|advance|cash/i.test(v)) return "Immediate";
+  const days = v.match(/(d+)s*days?/i);
+  if (days) {
+    const hit = PAYMENT_TERM_OPTIONS.find((o) => o.value === `Net ${days[1]} Days`);
+    if (hit) return hit.value;
+  }
+  return v; // unknown custom term: kept as-is and shown as an extra option
+};
 
 export const SupplierView: React.FC = () => {
   const [locationDistrict, setLocationDistrict] = useState("");
@@ -343,7 +372,7 @@ export const SupplierView: React.FC = () => {
       pincode: "",
       gstNumber: "",
       panNumber: "",
-      paymentTerms: "30 Days",
+      paymentTerms: "Net 30 Days",
       creditLimit: 500000,
       bankName: "",
       accountNumber: "",
@@ -550,7 +579,7 @@ export const SupplierView: React.FC = () => {
       pincode: sup.pincode || "",
       gstNumber: sup.gstNumber || "",
       panNumber: sup.panNumber || "",
-      paymentTerms: sup.paymentTerms || "Net 30 Days",
+      paymentTerms: normalizePaymentTerms(sup.paymentTerms),
       creditLimit: sup.creditLimit || 0,
       bankName: sup.bankName || "",
       accountNumber: sup.accountNumber || "",
@@ -1509,7 +1538,7 @@ export const SupplierView: React.FC = () => {
             </div>
           </div>
 
-          {/* Row 2: Phone Number | Email Address | Street Address */}
+          {/* Row 2: Phone Number | WhatsApp Number | Email Address */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <PhoneField
               label="Phone Number"
@@ -1537,16 +1566,32 @@ export const SupplierView: React.FC = () => {
               />
               <FormError message={errors.email?.message} />
             </div>
-            <div className="md:col-span-3">
-              <FormLabel required>Address</FormLabel>
-              <textarea
-                rows={3}
-                {...register("address")}
-                placeholder="e.g. 45 Industrial Area, Phase 2"
-                className={getFormInputCls(!!errors.address)}
-              />
-              <FormError message={errors.address?.message} />
-            </div>
+          </div>
+
+          {/* Section: Address & Location */}
+          <div className="flex items-center gap-2 pt-2 pb-2 border-b border-purple-100">
+            <span className="px-2.5 py-1 rounded-lg bg-purple-50 text-[#33077C] font-bold text-xs flex items-center gap-1.5 border border-purple-200">
+              <MapPin className="w-3.5 h-3.5 text-[#4309A2]" />
+              Address & Location
+            </span>
+          </div>
+          <div className="pt-1">
+            <FormLabel required>Address</FormLabel>
+            <textarea
+              rows={3}
+              {...register("address")}
+              placeholder="e.g. 45 Industrial Area, Phase 2"
+              autoComplete="off"
+              className={
+                errors.address
+                  ? FORM_TEXTAREA_CLS.replace(
+                      "border-slate-200 hover:border-slate-300",
+                      "border-rose-400 hover:border-rose-400",
+                    ).replace("focus:border-[#4309A2]", "focus:border-rose-500")
+                  : FORM_TEXTAREA_CLS
+              }
+            />
+            <FormError message={errors.address?.message} />
           </div>
 
           {/* Row 3: Country | State | District | City (master data) */}
@@ -1659,13 +1704,19 @@ export const SupplierView: React.FC = () => {
             <div>
               <FormLabel>Payment Terms</FormLabel>
               <select {...register("paymentTerms")} className={FORM_SELECT_CLS}>
-                <option value="Immediate">Immediate / Advance</option>
-                <option value="15 Days">15 Days</option>
-                <option value="30 Days">30 Days</option>
-                <option value="45 Days">45 Days</option>
-                <option value="60 Days">60 Days</option>
-                <option value="90 Days">90 Days</option>
-                <option value="120 Days">120 Days</option>
+                {PAYMENT_TERM_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+                {watch("paymentTerms") &&
+                  !PAYMENT_TERM_OPTIONS.some(
+                    (o) => o.value === watch("paymentTerms"),
+                  ) && (
+                    <option value={watch("paymentTerms")}>
+                      {watch("paymentTerms")}
+                    </option>
+                  )}
               </select>
               <FormError message={errors.paymentTerms?.message} />
             </div>

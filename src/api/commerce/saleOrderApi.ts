@@ -1,4 +1,5 @@
 import { resolveGrossSubtotal } from "../../utils/financialCalculations";
+import { withCalculatedLine, readCalculatedTotals, readDocumentExtras } from "../../utils/apiCalculatedValues";
 import { baseClient, baseApi } from '../baseApi';
 import { SaleProductItem } from '../../store/useSalesManagementStore';
 import {
@@ -63,6 +64,11 @@ export interface SaleOrderRecord {
   discount?: number;
   taxAmount?: number;
   roundOff?: number;
+  totalQty?: number;
+  lineDiscountTotal?: number;
+  taxableAmount?: number;
+  unroundedTotal?: number;
+  roundMode?: 'auto' | 'up' | 'down' | 'none';
   amount: number;
   advanceAmount?: number;
   balance: number;
@@ -100,7 +106,7 @@ export const mapApiSaleOrderItemToSaleProductItem = (
   const taxRate = hasTaxCharged ? rawTaxRate : 0;
   const taxAmt = hasTaxCharged ? rawTaxAmt : 0;
 
-  return {
+  return withCalculatedLine({
     id: it.id || `item_${idx}_${Date.now()}`,
     productId: it.productId || '',
     productName: it.productName || 'Unnamed Item',
@@ -118,7 +124,7 @@ export const mapApiSaleOrderItemToSaleProductItem = (
     itemCode: it.itemCode || it.sku || '',
     hsnCode: it.hsnCode || '',
     description: it.description || '',
-  };
+  }, it);
 };
 
 /**
@@ -128,7 +134,8 @@ export const mapApiSaleOrderToSaleOrderRecord = (apiO: ApiSaleOrder): SaleOrderR
   const cgst = Number(apiO.cgst ?? 0);
   const sgst = Number(apiO.sgst ?? 0);
   const igst = Number(apiO.igst ?? 0);
-  const totalTax = Number(apiO.taxAmount ?? cgst + sgst + igst);
+  const calc = readCalculatedTotals(apiO);
+  const totalTax = Number(apiO.totalTax ?? apiO.taxAmount ?? cgst + sgst + igst);
   const parentWithGst = apiO.withGst !== false && totalTax > 0;
 
   const items: ExtendedSaleOrderItem[] = Array.isArray(apiO.items)
@@ -136,11 +143,11 @@ export const mapApiSaleOrderToSaleOrderRecord = (apiO: ApiSaleOrder): SaleOrderR
     : [];
 
   const subtotal = resolveGrossSubtotal(items, Number(apiO.subtotal ?? apiO.subTotal ?? 0));
-  const discount = Number(apiO.discount ?? apiO.discountAmount ?? 0);
+  const discount = Number(apiO.totalDiscount ?? apiO.discount ?? apiO.discountAmount ?? 0);
   const roundOff = Number(apiO.roundOff ?? 0);
   const amount = Number(apiO.amount ?? apiO.grandTotal ?? subtotal - discount + totalTax + roundOff);
   const advanceAmount = Number(apiO.advanceAmount ?? 0);
-  const balance = Number(apiO.balance ?? Math.max(0, amount - advanceAmount));
+  const balance = Number(calc.balance ?? Math.max(0, amount - advanceAmount));
 
   let orderDateStr = apiO.orderDate || (apiO.createdAt ? apiO.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]);
   if (orderDateStr.includes('T')) {
@@ -186,6 +193,7 @@ export const mapApiSaleOrderToSaleOrderRecord = (apiO: ApiSaleOrder): SaleOrderR
     discount,
     taxAmount: totalTax,
     roundOff,
+    ...readDocumentExtras(apiO),
     amount,
     advanceAmount,
     balance,

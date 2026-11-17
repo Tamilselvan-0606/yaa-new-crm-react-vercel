@@ -93,6 +93,39 @@ interface SaleItem {
   discountType?: 'percent' | 'amount';
 }
 
+// The API stores only the document's total discount (no per-line % / ₹), so remember here how each line's
+// discount was entered. Used when the document is opened for edit, so a % discount stays in the % column.
+type DiscountPref = { type: 'percent' | 'amount'; percent: number };
+const discountPrefsKey = (kind: string, docId: string) => `yaa_discount_prefs_${kind}_${docId}`;
+
+const saveDiscountPrefs = (
+  kind: string,
+  docId: string | undefined,
+  lines: Array<{ discountType?: 'percent' | 'amount'; discountPercent?: number }>,
+) => {
+  if (!docId) return;
+  try {
+    const prefs: DiscountPref[] = lines.map((l) => ({
+      type: l.discountType === 'percent' ? 'percent' : 'amount',
+      percent: Number(l.discountPercent) || 0,
+    }));
+    localStorage.setItem(discountPrefsKey(kind, docId), JSON.stringify(prefs));
+  } catch {
+    // storage unavailable: edit falls back to showing the discount as an amount
+  }
+};
+
+const loadDiscountPrefs = (kind: string, docId: string | undefined, lineCount: number): DiscountPref[] | null => {
+  if (!docId) return null;
+  try {
+    const raw = localStorage.getItem(discountPrefsKey(kind, docId));
+    const prefs = raw ? JSON.parse(raw) : null;
+    return Array.isArray(prefs) && prefs.length === lineCount ? prefs : null;
+  } catch {
+    return null;
+  }
+};
+
 interface NewInvoiceViewProps {
   isProforma?: boolean;
 }
@@ -862,21 +895,31 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       }
       if (src.description) setInvoiceDescription(src.description);
       if (invoiceToEdit?.referenceNumbers?.length) setReferenceNumbers(invoiceToEdit.referenceNumbers);
-      if (src.roundMode) setRoundMode(src.roundMode);
       if (src.items?.length) {
+        // The API keeps only the document's total discount, so restore how each line's discount was typed (% or ₹)
+        const savedDiscounts = loadDiscountPrefs(isProforma ? 'proforma' : 'invoice', src.id, src.items.length);
         setItems(
-          src.items.map((it, idx) => ({
-            id: it.id || `item-${idx + 1}`,
-            name: it.name,
-            description: it.description || '',
-            hsnCode: it.hsnCode || '998313',
-            qty: Number(it.qty) || 1,
-            taxPercent: Number(it.taxPercent) || 18,
-            unitPrice: Number(it.unitPrice) || 0,
-            discountPercent: (it as any).discountPercent || 0,
-            discount: Number(it.discount) || 0,
-            discountType: (it as any).discountType || ((it as any).discountPercent ? 'percent' : 'amount'),
-          }))
+          src.items.map((it, idx) => {
+            const saved = savedDiscounts?.[idx];
+            const base = {
+              id: it.id || `item-${idx + 1}`,
+              name: it.name,
+              description: it.description || '',
+              hsnCode: it.hsnCode || '998313',
+              qty: Number(it.qty) || 1,
+              taxPercent: Number(it.taxPercent) || 18,
+              unitPrice: Number(it.unitPrice) || 0,
+            };
+            if (saved?.type === 'percent') {
+              return { ...base, discountPercent: saved.percent, discount: 0, discountType: 'percent' as const };
+            }
+            return {
+              ...base,
+              discountPercent: (it as any).discountPercent || 0,
+              discount: Number(it.discount) || 0,
+              discountType: (it as any).discountType || ((it as any).discountPercent ? 'percent' : 'amount'),
+            };
+          })
         );
       }
       if (src.client) {
@@ -1010,7 +1053,8 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   };
 
   // Section 2 Calculation (Subtotal, Discount, GST, Rounding, Grand Total)
-  const [roundMode, setRoundMode] = useState<'none' | 'up' | 'down'>('none');
+  // Rounding adjustment UI removed: no round-off is applied.
+  const roundMode: 'none' | 'up' | 'down' = 'none';
   const subtotal = items.reduce((acc, item) => acc + (Number(item.qty) || 0) * (Number(item.unitPrice) || 0), 0);
   const totalDiscount = items.reduce((acc, item) => acc + getItemDiscountAmount(item), 0);
   const taxableAmount = Math.max(0, subtotal - totalDiscount);
@@ -1028,7 +1072,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const roundUpDiff = rawGrandTotal % 1 === 0 ? 0 : Math.ceil(rawGrandTotal) - rawGrandTotal;
   const roundDownDiff = rawGrandTotal % 1 === 0 ? 0 : Math.floor(rawGrandTotal) - rawGrandTotal;
   const roundOffAmount =
-    roundMode === 'up' ? roundUpDiff : roundMode === 'down' ? roundDownDiff : 0;
+    0;
   const grandTotal = rawGrandTotal + roundOffAmount;
 
   // Live Existing Invoices
@@ -1746,6 +1790,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             type="number"
                             min="1"
                             value={item.qty}
+                            onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }}
                             onChange={(e) => updateItem(item.id, 'qty', Math.max(1, parseInt(e.target.value) || 1))}
                             className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-bold text-center text-slate-900 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
                           />
@@ -1758,6 +1803,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             min="0"
                             max="100"
                             value={item.taxPercent}
+                            onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }}
                             onChange={(e) => updateItem(item.id, 'taxPercent', Math.max(0, parseFloat(e.target.value) || 0))}
                             className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-semibold text-center text-slate-800 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
                           />
@@ -1770,6 +1816,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             min="0"
                             step="any"
                             value={item.unitPrice}
+                            onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }}
                             onChange={(e) => updateItem(item.id, 'unitPrice', Math.max(0, parseFloat(e.target.value) || 0))}
                             className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-bold text-center text-slate-900 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
                           />
@@ -1784,6 +1831,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             step="any"
                             placeholder="0"
                             value={item.discountPercent === 0 ? '' : (item.discountPercent ?? '')}
+                            onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }}
                             onChange={(e) => updateItem(item.id, 'discountPercent', Number(e.target.value))}
                             className="w-full h-10 px-1 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-semibold text-center text-slate-800 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
                           />
@@ -1797,6 +1845,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             step="any"
                             placeholder="0.00"
                             value={item.discount === 0 ? '' : (item.discount ?? '')}
+                            onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }}
                             onChange={(e) => updateItem(item.id, 'discount', Number(e.target.value))}
                             className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-semibold text-center text-slate-800 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
                           />
@@ -1964,54 +2013,6 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   </div>
                 </div>
 
-                {/* Round Down and Round Up Toggle Buttons */}
-                <div className="pt-3 border-t border-slate-100 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                      Rounding Adjustment
-                    </label>
-                    <span className="text-xs text-slate-400">click to apply</span>
-                  </div>
-
-                  <div className="space-y-2">
-                    <button
-                      type="button"
-                      onClick={() => setRoundMode(roundMode === 'down' ? 'none' : 'down')}
-                      className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border transition-all cursor-pointer ${roundMode === 'down'
-                        ? 'bg-amber-50 border-amber-300 text-amber-900 font-bold shadow-2xs'
-                        : 'bg-slate-50/70 hover:bg-slate-100/80 border-slate-200/80 text-slate-700 font-medium'
-                        }`}
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <div className={`w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${roundMode === 'down' ? 'border-amber-600 bg-amber-600' : 'border-slate-300 bg-white'
-                          }`}>
-                          {roundMode === 'down' && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
-                        </div>
-                        <span className="text-sm">Round Down</span>
-                      </div>
-                      <span className="font-bold text-sm">{roundDownDiff === 0 ? '₹0.00' : `-₹${Math.abs(roundDownDiff).toFixed(2)}`}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setRoundMode(roundMode === 'up' ? 'none' : 'up')}
-                      className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border transition-all cursor-pointer ${roundMode === 'up'
-                        ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold shadow-2xs'
-                        : 'bg-slate-50/70 hover:bg-slate-100/80 border-slate-200/80 text-slate-700 font-medium'
-                        }`}
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <div className={`w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${roundMode === 'up' ? 'border-emerald-600 bg-emerald-600' : 'border-slate-300 bg-white'
-                          }`}>
-                          {roundMode === 'up' && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
-                        </div>
-                        <span className="text-sm">Round Up</span>
-                      </div>
-                      <span className="font-bold text-sm">{roundUpDiff === 0 ? '₹0.00' : `+₹${roundUpDiff.toFixed(2)}`}</span>
-                    </button>
-                  </div>
-                </div>
-
                 {/* Grand Total Banner */}
                 <div className="p-4 bg-blue-50/80 border border-blue-200 rounded-xl flex items-center justify-between">
                   <div>
@@ -2067,6 +2068,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             })),
                           };
                           const res = await proformaInvoiceApi.updateProformaInvoice(invoiceToEdit.id, updatePayload);
+                          saveDiscountPrefs('proforma', invoiceToEdit.id, items);
                           showToast('success', 'Proforma Invoice Updated', `Proforma invoice #${res.data?.proformaNumber || ''} updated successfully!`);
                           navigate('/proforma/invoices');
                         } else {
@@ -2102,6 +2104,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             })),
                           };
                           const res = await proformaInvoiceApi.createProformaInvoice(createPayload);
+                          saveDiscountPrefs('proforma', (res.data as any)?.id, items);
 
                           // If converted from quotation, the server marks it converted (sourceQuoteId); remember it locally too
                           if (convertedFromQuoteId || convertedFromQuoteNumber) {
@@ -2173,6 +2176,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                           })),
                         };
                         const res = await invoiceApi.updateInvoice(invoiceToEdit.id, updatePayload);
+                        saveDiscountPrefs('invoice', invoiceToEdit.id, items);
                         showToast('success', 'Invoice Updated', `Invoice #${res.data?.invoiceNumber || ''} updated successfully!`);
                         navigate('/sales/invoices');
                       } else {
@@ -2205,6 +2209,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                           })),
                         };
                         const res = await invoiceApi.createInvoice(createPayload);
+                        saveDiscountPrefs('invoice', (res.data as any)?.id, items);
 
                         // If converted from proforma, the server marks it Converted (sourceProformaId); remember it locally too
                         if (convertedFromProformaId || convertedFromProformaNumber) {

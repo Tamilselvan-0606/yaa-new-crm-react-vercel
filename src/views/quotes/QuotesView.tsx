@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { readCalculatedTotals, pickNumber, definedOnly } from '../../utils/apiCalculatedValues';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import {
   Plus,
@@ -99,6 +100,14 @@ export interface Quotation {
   status: 'DRAFT' | 'SENT' | 'ACCEPTED' | 'EXPIRED' | 'DECLINED' | 'CONVERTED';
   amount: number;
   discountAmount?: number;
+  /** Backend-calculated totals (BACKEND_CALCULATION_SPEC.md 10.2). */
+  subtotal?: number;
+  taxableAmount?: number;
+  taxAmount?: number;
+  cgst?: number;
+  sgst?: number;
+  igst?: number;
+  roundOff?: number;
   hasAttachment: boolean;
   notes?: string;
   createdAt?: string;
@@ -131,6 +140,39 @@ export interface AvailableClient {
 interface QuotesViewProps {
   initialCreateOpen?: boolean;
 }
+
+// The API stores only the document's total discount (no per-line % / ₹), so remember here how each line's
+// discount was entered. Used when the document is opened for edit, so a % discount stays in the % column.
+type DiscountPref = { type: 'percent' | 'amount'; percent: number };
+const discountPrefsKey = (kind: string, docId: string) => `yaa_discount_prefs_${kind}_${docId}`;
+
+const saveDiscountPrefs = (
+  kind: string,
+  docId: string | undefined,
+  lines: Array<{ discountType?: 'percent' | 'amount'; discountPercent?: number }>,
+) => {
+  if (!docId) return;
+  try {
+    const prefs: DiscountPref[] = lines.map((l) => ({
+      type: l.discountType === 'percent' ? 'percent' : 'amount',
+      percent: Number(l.discountPercent) || 0,
+    }));
+    localStorage.setItem(discountPrefsKey(kind, docId), JSON.stringify(prefs));
+  } catch {
+    // storage unavailable: edit falls back to showing the discount as an amount
+  }
+};
+
+const loadDiscountPrefs = (kind: string, docId: string | undefined, lineCount: number): DiscountPref[] | null => {
+  if (!docId) return null;
+  try {
+    const raw = localStorage.getItem(discountPrefsKey(kind, docId));
+    const prefs = raw ? JSON.parse(raw) : null;
+    return Array.isArray(prefs) && prefs.length === lineCount ? prefs : null;
+  } catch {
+    return null;
+  }
+};
 
 export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = false }) => {
   const { showToast, isSuperAdmin, isOrgSuperAdmin, currentUser } = useAuth();
@@ -316,14 +358,22 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     try {
       const d = new Date(isoStr);
       if (isNaN(d.getTime())) return isoStr;
-      return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+      // dd/mm/yyyy
+      return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
     } catch {
       return isoStr;
     }
   };
 
+  // Reads a date shown on screen (dd/mm/yyyy) or an ISO string. `new Date('05/11/2026')` would read it as May 11, so dd/mm/yyyy is parsed by hand.
+  const parseUiDate = (str?: string): Date => {
+    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec((str || '').trim());
+    return m ? new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])) : new Date(str || '');
+  };
+
   // Map backend QuoteApiItem to UI Quotation format
   const mapApiQuoteToUi = (item: QuoteApiItem): Quotation => {
+    const calc = readCalculatedTotals(item);
     return {
       id: item.id,
       estimateNumber: item.estimateNumber || 'EST-0000',
@@ -346,7 +396,16 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       productName: item.productName || 'Quotation',
       status: item.status,
       amount: Number(item.amount) || 0,
-      discountAmount: Number(item.discountAmount) || 0,
+      discountAmount: Number((item as any).totalDiscount ?? item.discountAmount) || 0,
+      ...definedOnly({
+        subtotal: calc.subtotal,
+        taxableAmount: calc.taxableAmount,
+        taxAmount: calc.totalTax,
+        cgst: calc.cgst,
+        sgst: calc.sgst,
+        igst: calc.igst,
+        roundOff: calc.roundOff,
+      }),
       hasAttachment: false,
       notes: item.notes || '',
       createdAt: formatIsoDate(item.createdAt) || formatIsoDate(item.date),
@@ -358,12 +417,13 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
           quantity: Number(it.quantity) || 1,
           unitPrice: Number(it.unitPrice) || 0,
           discount: (it as any).discount || 0,
-          total: Number(it.amount) || (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0),
+          total: Number(pickNumber((it as any).lineTotal, it.amount)) || (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0),
         }));
         // If quotation has an overall discountAmount from backend but individual line items didn't store item.discount:
         const totalLineDisc = rawList.reduce((acc, it) => acc + (it.discount || 0), 0);
         const overallDisc = Number(item.discountAmount) || 0;
-        if (overallDisc > 0 && totalLineDisc === 0 && rawList.length > 0) {
+        // Only re-derive when the backend did not send its own taxable amount / tax.
+        if (calc.taxableAmount === undefined && overallDisc > 0 && totalLineDisc === 0 && rawList.length > 0) {
           rawList[0].discount = overallDisc;
           const lineGross = rawList[0].quantity * rawList[0].unitPrice;
           const lineTaxable = Math.max(0, lineGross - overallDisc);
@@ -1179,6 +1239,10 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     field: keyof FormItem,
     value: string | number
   ) => {
+    // Numeric line fields can never be negative (typed or pasted)
+    if (['quantity', 'unitPrice', 'taxPercent', 'discount', 'discountPercent'].includes(field as string)) {
+      value = Math.max(0, Number(value) || 0);
+    }
     setItemsList((prev) =>
       prev.map((item) => {
         if (item.id !== id) return item;
@@ -1297,7 +1361,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
     if (quote.date) {
       try {
-        const d = new Date(quote.date);
+        const d = parseUiDate(quote.date);
         setEstimateDate(isNaN(d.getTime()) ? (quote.date.includes('/') ? quote.date : formatDateToDDMMYYYY(new Date())) : formatDateToDDMMYYYY(d));
       } catch {
         setEstimateDate(formatDateToDDMMYYYY(new Date()));
@@ -1308,7 +1372,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
     if (quote.createdAt || quote.date) {
       try {
-        const d = new Date(quote.createdAt || quote.date);
+        const d = parseUiDate(quote.createdAt || quote.date);
         setCreatedDate(isNaN(d.getTime()) ? formatDateToDDMMYYYY(new Date()) : formatDateToDDMMYYYY(d));
       } catch {
         setCreatedDate(formatDateToDDMMYYYY(new Date()));
@@ -1319,7 +1383,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
     if (quote.expiryDate) {
       try {
-        const d = new Date(quote.expiryDate);
+        const d = parseUiDate(quote.expiryDate);
         setExpiryDate(isNaN(d.getTime()) ? (quote.expiryDate.includes('/') ? quote.expiryDate : formatDateToDDMMYYYY(new Date())) : formatDateToDDMMYYYY(d));
       } catch {
         const nextMonth = new Date();
@@ -1337,6 +1401,8 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     setNewNotes(quote.notes || '');
 
     if (quote.items && quote.items.length > 0) {
+      // The API keeps only the total discount, so restore how each line's discount was typed (% or ₹)
+      const savedDiscounts = loadDiscountPrefs('quote', quote.id, quote.items.length);
       setItemsList(
         quote.items.map((it, idx) => {
           const qty = Number(it.quantity) || 1;
@@ -1344,6 +1410,22 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
           const gross = qty * price;
           const disc = Number(it.discount) || 0;
           const discPct = gross > 0 && disc > 0 ? parseFloat(((disc / gross) * 100).toFixed(2)) : 0;
+          const saved = savedDiscounts?.[idx];
+          if (saved?.type === 'percent') {
+            return {
+              id: it.id || `item_${Date.now()}_${idx}`,
+              description: it.description || '',
+              subDescription: '',
+              hsnCode: '',
+              quantity: qty,
+              unitPrice: price,
+              discountPercent: saved.percent,
+              discount: 0,
+              discountType: 'percent' as const,
+              taxPercent: 18,
+              total: Number(it.total) || (qty * price - disc),
+            };
+          }
           return {
             id: it.id || `item_${Date.now()}_${idx}`,
             description: it.description || '',
@@ -1499,6 +1581,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
         const res = await quoteApi.updateQuote(editingQuoteId, updatePayload);
         if (res && res.data) {
+          saveDiscountPrefs('quote', editingQuoteId, itemsList);
           showToast('success', `${singularTerm} Updated`, `${singularTerm} #${res.data.estimateNumber || newEstimateNumber} updated successfully.`);
           handleCloseCreate();
 
@@ -1545,6 +1628,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
         const res = await quoteApi.createQuote(payload);
         if (res && res.data) {
+          saveDiscountPrefs('quote', (res.data as any).id, itemsList);
           showToast('success', `${singularTerm} Created`, `${singularTerm} #${res.data.estimateNumber || newEstimateNumber} created successfully.`);
           handleCloseCreate();
 
@@ -1635,13 +1719,17 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     const activeQuote = selectedQuote;
 
     // Calculate totals matching invoice breakdown
-    const rawSubtotal = activeQuote.items.reduce((acc, item) => acc + item.quantity * item.unitPrice, 0);
+    const rawSubtotal = activeQuote.subtotal ?? activeQuote.items.reduce((acc, item) => acc + item.quantity * item.unitPrice, 0);
     const itemDiscTotal = activeQuote.items.reduce((acc, item) => acc + (item.discount || 0), 0);
     const rawDiscount = itemDiscTotal > 0 ? itemDiscTotal : (Number(activeQuote.discountAmount) || 0);
-    const taxableSubtotal = Math.max(0, rawSubtotal - rawDiscount);
-    const taxTotal = taxableSubtotal * 0.18; // Standard 18% GST matching invoice
+    // Backend values are authoritative; the 18% estimate is only a fallback for responses that omit them.
+    const taxableSubtotal = activeQuote.taxableAmount ?? Math.max(0, rawSubtotal - rawDiscount);
+    const taxTotal = activeQuote.taxAmount ?? taxableSubtotal * 0.18;
     const halfTax = taxTotal / 2;
-    const computedGrandTotal = taxableSubtotal + taxTotal;
+    const computedGrandTotal =
+      activeQuote.taxAmount !== undefined && Number(activeQuote.amount) > 0
+        ? Number(activeQuote.amount)
+        : taxableSubtotal + taxTotal;
 
     const previewSellerDetails = getSellerDetails(activeQuote);
 
@@ -2668,6 +2756,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                                 min="0"
                                 step="any"
                                 value={item.unitPrice}
+                                onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }}
                                 onChange={(e) => handleItemChange(item.id, 'unitPrice', Number(e.target.value))}
                                 className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-bold text-center text-slate-900 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
                               />
@@ -2928,7 +3017,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                 ) : (
                   <>
                     <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">{singularTerm.toUpperCase()}</th>
-                    <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CLIENT & REFERENCE</th>
+                    <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CLIENT / CUSTOMER</th>
                     <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">CREATED DATE</th>
                     <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">EXPIRY DATE</th>
                     <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
@@ -3148,10 +3237,10 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                           <td className="py-4 px-5 border border-slate-200">
                             <div>
                               <div className="font-bold text-slate-900 text-xs sm:text-[13px] tracking-tight">
-                                {quote.customerName}
+                                {quote.customerCompany || quote.customerName}
                               </div>
                               <div className="text-[11px] text-slate-500 font-medium mt-0.5">
-                                {quote.customerName}
+                                {[quote.customerName, quote.customerEmail].filter(Boolean).join(' • ') || '-'}
                               </div>
                             </div>
                           </td>
@@ -3338,11 +3427,11 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                     id: '',
                     invoiceNumber: '',
                     invoiceDate: new Date().toISOString().split('T')[0],
-                    // The quote's expiry is a display string such as "30 Nov 2026"; the form and API need YYYY-MM-DD.
+                    // The quote's expiry is a display string such as "30/11/2026"; the form and API need YYYY-MM-DD.
                     dueDate: (() => {
                       const raw = targetQuote.expiryDate || '';
                       if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
-                      const parsed = new Date(raw);
+                      const parsed = parseUiDate(raw);
                       const d = !raw || isNaN(parsed.getTime()) ? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000) : parsed;
                       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
                     })(),

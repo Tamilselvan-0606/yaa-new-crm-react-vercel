@@ -374,7 +374,7 @@ export const PaymentOutView: React.FC = () => {
       // Includes the supplier-record and outstanding-balance rules so they clear as soon as they pass.
       const extra = evaluatePayment(values).recheck;
       const errs: any = { ...(base.errors || {}) };
-      for (const k of ['supplierId', 'paymentDate', 'amount', 'paymentMode']) {
+      for (const k of ['supplierId', 'purchaseId', 'paymentDate', 'amount', 'paymentMode']) {
         if (extra[k]) errs[k] = { type: 'validate', message: extra[k] };
         else delete errs[k];
       }
@@ -567,8 +567,15 @@ export const PaymentOutView: React.FC = () => {
   // Pure rule evaluation shared by the form resolver and the submit handler.
   const evaluatePayment = (data: any) => {
     const numAmount = Number(data.amount);
+    // A payment must be against a bill. Only an old payment that was already saved without one can still be
+    // edited without choosing a bill.
+    const originalPayment = editingPaymentId ? activePool.find((p) => p.id === editingPaymentId) : null;
+    const isLegacyUnlinked = !!originalPayment && !originalPayment.purchaseId;
+    const billErr =
+      data.purchaseId || isLegacyUnlinked ? null : 'Please select the bill this payment is for.';
     const recheck = collectErrors([
       ['supplierId', checkRequiredSelection(data.supplierId, 'supplier')],
+      ['purchaseId', billErr],
       ['paymentDate', checkRequiredDate(data.paymentDate, 'payment date')],
       ['amount', checkMoney(data.amount, 'payment amount')],
       ['paymentMode', checkRequiredSelection(data.paymentMode, 'payment mode')],
@@ -1689,7 +1696,7 @@ export const PaymentOutView: React.FC = () => {
 
             {/* Field 2: Bill No (Dropdown) */}
             <div>
-              <FormLabel>Bill No</FormLabel>
+              <FormLabel required>Bill No</FormLabel>
               <Controller
                 control={control}
                 name="purchaseId"
@@ -1698,7 +1705,8 @@ export const PaymentOutView: React.FC = () => {
                     value={field.value || ''}
                     onChange={(val) => handlePurchaseSelect(val)}
                     placeholder="Select bill no"
-                    allowClear={true}
+                    allowClear={false}
+                    error={!!errors.purchaseId}
                     options={supplierPurchases.map((p) => ({
                       value: p.id,
                       label: `${p.purchaseInvoiceNo ? `${p.purchaseInvoiceNo} (${p.purchaseNo})` : p.purchaseNo} — Bal: ₹${p.balance.toLocaleString('en-IN')}`,

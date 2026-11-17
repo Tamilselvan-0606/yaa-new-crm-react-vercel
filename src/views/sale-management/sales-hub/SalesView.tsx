@@ -366,7 +366,7 @@ export const SalesView: React.FC = () => {
         paymentRecords: [],
         paymentTerms: convertData.paymentTerms || "Net 15 Days",
         paidAmount: initialPaid,
-        roundMode: (convertData.roundMode as any) || "none",
+        roundOff: Number(convertData.roundOff) || 0,
         invoiceStatus: "Draft",
         saleStatus: "Confirmed",
         salesperson: convertData.salesperson || "",
@@ -961,7 +961,7 @@ export const SalesView: React.FC = () => {
     paymentRecords: [],
     paymentTerms: "Net 15 Days",
     paidAmount: 0,
-    roundMode: "none",
+    roundOff: 0,
     saleStatus: "Confirmed",
     salesperson: "",
     notes: "",
@@ -1279,7 +1279,7 @@ export const SalesView: React.FC = () => {
       ],
       paymentTerms: "",
       paidAmount: 0,
-      roundMode: "none",
+      roundOff: 0,
       invoiceStatus: "Draft",
       paymentRecords: [],
       saleStatus: "Confirmed",
@@ -1359,7 +1359,7 @@ export const SalesView: React.FC = () => {
       paymentSplits: existingSplits,
       paymentTerms: sale.paymentTerms,
       paidAmount: sale.paidAmount,
-      roundMode: (sale as any).roundMode || "none",
+      roundOff: Number((sale as any).roundOff) || 0,
       invoiceStatus: sale.invoiceStatus || "Generated",
       paymentRecords: sale.paymentRecords || [],
       saleStatus: sale.saleStatus,
@@ -1423,7 +1423,7 @@ export const SalesView: React.FC = () => {
       ],
       paymentTerms: sale.paymentTerms,
       paidAmount: 0,
-      roundMode: (sale as any).roundMode || "none",
+      roundOff: Number((sale as any).roundOff) || 0,
       invoiceStatus: "Draft",
       paymentRecords: [],
       saleStatus: "Draft",
@@ -1885,15 +1885,9 @@ export const SalesView: React.FC = () => {
       overallDiscount: Number(formData.overallDiscount) || 0,
       shippingCharges: Number(formData.shippingCharges) || 0,
       otherCharges: Number(formData.otherCharges) || 0,
-      roundMode: formData.roundMode || "none",
+      manualRoundOff: Number(formData.roundOff) || 0,
       paidAmount: paid,
     });
-
-    const unrounded = docTotals.unroundedTotal;
-    const floorInt = Math.floor(unrounded);
-    const ceilInt = Math.ceil(unrounded);
-    const roundDownDiff = round2(floorInt - unrounded);
-    const roundUpDiff = round2(ceilInt - unrounded);
 
     return {
       subtotal: docTotals.subtotal,
@@ -1907,8 +1901,6 @@ export const SalesView: React.FC = () => {
       igst: docTotals.igst,
       shippingCharges: docTotals.shippingCharges,
       roundOff: docTotals.roundOff,
-      roundDownDiff,
-      roundUpDiff,
       grandTotal: docTotals.grandTotal,
       paid: docTotals.paidAmount,
       balance: docTotals.balance,
@@ -2214,6 +2206,7 @@ export const SalesView: React.FC = () => {
         totalTax: calculatedTotals.totalTax,
         shippingCharges: Number(formData.shippingCharges) || 0,
         otherCharges: Number(formData.otherCharges) || 0,
+        roundOff: calculatedTotals.roundOff,
         grandTotal: grandTotal,
         paidAmount: currentPaid,
         balance: balance,
@@ -2693,6 +2686,7 @@ export const SalesView: React.FC = () => {
         totalTax: calculatedTotals.totalTax,
         shippingCharges: Number(formData.shippingCharges) || 0,
         otherCharges: Number(formData.otherCharges) || 0,
+        roundOff: calculatedTotals.roundOff,
         grandTotal: grandTotal,
         paidAmount: currentPaid,
         balance: balance,

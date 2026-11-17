@@ -980,6 +980,9 @@ export const OrganizationView: React.FC = () => {
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
                   {isSubOrgMode ? 'CONTACT PERSON' : 'ORGANIZATION TYPE'}
                 </th>
+                {isSubOrgMode && (
+                  <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">SUB ORGANIZATION TYPE</th>
+                )}
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">CONTACT INFO</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">SUBSCRIPTION PLANS</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CITY</th>
@@ -991,7 +994,7 @@ export const OrganizationView: React.FC = () => {
             <tbody className="text-sm">
               {isLoading ? (
                 <tr>
-                  <td colSpan={8} className="py-20 text-center text-slate-500 border border-slate-200">
+                  <td colSpan={isSubOrgMode ? 9 : 8} className="py-20 text-center text-slate-500 border border-slate-200">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <div className="w-6 h-6 border-2 border-[#33077C] border-t-transparent rounded-full animate-spin" />
                       <span className="text-xs font-semibold text-slate-500">Loading organizations...</span>
@@ -1000,7 +1003,7 @@ export const OrganizationView: React.FC = () => {
                 </tr>
               ) : filteredOrgs.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={isSubOrgMode ? 9 : 8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     No organizations found matching your search.
                   </td>
                 </tr>
@@ -1045,6 +1048,13 @@ export const OrganizationView: React.FC = () => {
                           {isSubOrgMode ? (org.contactPerson || '-') : (org.organizationType || '-')}
                         </span>
                       </td>
+
+                      {/* Sub Organization Type (Client Management / Sales Management) */}
+                      {isSubOrgMode && (
+                        <td className="py-4 px-5 border border-slate-200 text-center">
+                          <span className="text-sm font-semibold text-slate-800">{org.organizationType || '-'}</span>
+                        </td>
+                      )}
 
                       {/* 3. Contact Info Actions */}
                       <td className="py-4 px-4 border border-slate-200">

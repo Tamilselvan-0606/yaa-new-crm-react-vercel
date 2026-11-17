@@ -25,6 +25,14 @@ export interface SaleProductItem {
   discountType?: 'percent' | 'amount';
   taxPercent: number;
   total: number;
+  /** Backend-calculated line breakdown (BACKEND_CALCULATION_SPEC.md 10.2). */
+  grossAmount?: number;
+  taxableAmount?: number;
+  taxAmount?: number;
+  cgst?: number;
+  sgst?: number;
+  igst?: number;
+  isTaxInclusive?: boolean;
 }
 
 export interface PaymentSplitItem {
@@ -76,6 +84,13 @@ export interface SaleTransaction {
   totalTax: number;
   shippingCharges: number;
   otherCharges: number;
+  /** Backend-calculated totals ("Amount (After Discount)", round-off, ...). */
+  totalQty?: number;
+  lineDiscountTotal?: number;
+  taxableAmount?: number;
+  unroundedTotal?: number;
+  roundOff?: number;
+  roundMode?: 'auto' | 'up' | 'down' | 'none';
   grandTotal: number;
   paidAmount: number;
   balance: number;
@@ -136,6 +151,11 @@ export interface SaleQuotation {
   convertedAt?: string | null;
   stateOfSupply?: string;
   roundOff?: number;
+  totalQty?: number;
+  lineDiscountTotal?: number;
+  taxableAmount?: number;
+  unroundedTotal?: number;
+  roundMode?: 'auto' | 'up' | 'down' | 'none';
   attachedImageName?: string | null;
   attachedDocName?: string | null;
   notes?: string;
@@ -281,6 +301,9 @@ export interface SalesCustomer {
   paymentDuePeriod?: string | null;
   lastPaymentDate?: string | null;
   outstandingAmount?: number;
+  /** Backend-calculated credit figures (spec section 7). */
+  availableCredit?: number;
+  creditUtilizationPercent?: number;
   salesRepresentativeId?: string;
   salesRepresentativeName?: string;
   salesRepresentativeType?: 'Primary' | 'Temporary';
@@ -492,6 +515,12 @@ export interface PurchaseProductItem {
   discountAmount?: number;
   taxPercent: number;
   total: number;
+  taxAmount?: number;
+  grossAmount?: number;
+  taxableAmount?: number;
+  cgst?: number;
+  sgst?: number;
+  igst?: number;
 }
 
 export interface PurchaseOrder {
@@ -521,6 +550,12 @@ export interface PurchaseOrder {
   igst?: number;
   shipping: number;
   otherCharges: number;
+  totalQty?: number;
+  lineDiscountTotal?: number;
+  taxableAmount?: number;
+  unroundedTotal?: number;
+  roundOff?: number;
+  roundMode?: 'auto' | 'up' | 'down' | 'none';
   grandTotal: number;
   paidAmount: number;
   balance: number;

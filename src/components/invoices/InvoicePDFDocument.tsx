@@ -313,10 +313,10 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   bankCol: {
-    width: '47%',
+    width: '62%', // wide enough for "account number (bank name)" to stay on one line
   },
   signCol: {
-    width: '49%',
+    width: '36%',
     alignItems: 'flex-end',
   },
   signDate: {
@@ -598,7 +598,14 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
         </View>
 
         {/* 6. Summary Ribbon (Subtotal, Discount, GST, Rounding, Grand Total, Paid, TDS, Balance) */}
-        <View style={styles.summaryRow}>
+        <View style={[styles.summaryRow, { justifyContent: 'space-between' }]}>
+          {/* Total (in words) - left of the summary, right under the line items */}
+          <View style={{ width: '42%', paddingTop: 10 }}>
+            <Text style={{ fontSize: 9, fontFamily: PDF_FONT, color: '#0F172A' }}>
+              <Text style={{ fontFamily: PDF_FONT_BOLD }}>Total (in words) : </Text>
+              {numberToWordsIndian(activeInvoice.grandTotal).toUpperCase()}
+            </Text>
+          </View>
           <View style={styles.summaryRibbon}>
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>Subtotal</Text>
@@ -665,14 +672,6 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
           </View>
         </View>
 
-        {/* Total (in words) */}
-        <View style={{ marginTop: 6, marginBottom: 10 }}>
-          <Text style={{ fontSize: 9, fontFamily: PDF_FONT, color: '#0F172A' }}>
-            <Text style={{ fontFamily: PDF_FONT_BOLD }}>Total (in words) : </Text>
-            {numberToWordsIndian(activeInvoice.grandTotal).toUpperCase()}
-          </Text>
-        </View>
-
         {/* 7. Bottom Settlement / Bank Information */}
         <View style={styles.bottomGrid}>
           {/* Bank Info */}
@@ -719,6 +718,13 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
         {/* 8. Bottom Footer Section (Pinned to bottom of the page) */}
         <View style={{ marginTop: 'auto', paddingTop: 16 }}>
           {/* Electronic Document Disclaimer (Both Invoice and Proforma Invoice) */}
+          {isProforma && (activeInvoice.company.email || activeInvoice.company.phone) && (
+            <View style={{ paddingTop: 4, alignItems: 'center' }}>
+              <Text style={{ fontSize: 8, fontFamily: PDF_FONT_BOLD, color: '#64748B', textAlign: 'center' }}>
+                For any enquiry, reach out via email at {activeInvoice.company.email || '-'}, call on {activeInvoice.company.phone || '-'}
+              </Text>
+            </View>
+          )}
           <View style={{ paddingTop: 4, alignItems: 'center' }}>
             <Text style={{ fontSize: 8, fontFamily: PDF_FONT, color: '#64748B', textAlign: 'center' }}>
               This is an electronically generated document, no signature is required.

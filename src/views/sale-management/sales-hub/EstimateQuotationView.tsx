@@ -2283,6 +2283,7 @@ export const EstimateQuotationView: React.FC = () => {
           items: validItems as any,
           withGst: validItems.some((it) => Number(it.taxPercent) > 0),
           gstType: calculatedGstType,
+          roundOff: formCalculations.roundOffDiff,
           notes:
             formData.notes && formData.notes.trim()
               ? formData.notes.trim()

@@ -1,4 +1,5 @@
 import { resolveGrossSubtotal } from "../../utils/financialCalculations";
+import { withCalculatedLine, readCalculatedTotals, readDocumentExtras } from '../../utils/apiCalculatedValues';
 import { baseClient, baseApi } from '../baseApi';
 import {
   SaleTransaction,
@@ -46,7 +47,7 @@ export const mapApiInvoiceItemToSaleProductItem = (
   const hasTaxCharged = parentWithGst && (rawTaxAmt > 0 || (rawTaxRate > 0 && Math.abs(lineTotal - taxable) > 0.01));
   const taxRate = hasTaxCharged ? rawTaxRate : 0;
 
-  return {
+  return withCalculatedLine({
     id: it.id || `inv_item_${idx}_${Date.now()}`,
     productId: it.productId || '',
     productName: it.productName || 'Unnamed Item',
@@ -61,7 +62,9 @@ export const mapApiInvoiceItemToSaleProductItem = (
     discountPercent: discPct,
     taxPercent: taxRate,
     total: lineTotal,
-  };
+    discountAmount: discAmt,
+    taxAmount: hasTaxCharged ? rawTaxAmt : 0,
+  }, it);
 };
 
 /**
@@ -93,6 +96,7 @@ export const mapApiInvoiceToSaleTransaction = (apiInv: ApiSalesInvoice): SaleTra
   const cgst = Number(apiInv.cgst ?? 0);
   const sgst = Number(apiInv.sgst ?? 0);
   const igst = Number(apiInv.igst ?? 0);
+  const calc = readCalculatedTotals(apiInv);
   const totalTax = Number(apiInv.totalTax ?? apiInv.taxAmount ?? cgst + sgst + igst);
   const parentWithGst = (apiInv as any).withGst !== false && totalTax > 0;
 
@@ -101,7 +105,7 @@ export const mapApiInvoiceToSaleTransaction = (apiInv: ApiSalesInvoice): SaleTra
     : [];
 
   const subtotal = resolveGrossSubtotal(items, Number(apiInv.subtotal ?? apiInv.subTotal ?? 0));
-  const totalDiscount = Number(apiInv.totalDiscount ?? apiInv.discountAmount ?? apiInv.discount ?? 0);
+  const totalDiscount = Number(apiInv.totalDiscount ?? apiInv.discountAmount ?? apiInv.discount ?? calc.lineDiscountTotal ?? 0);
   const shippingCharges = Number(apiInv.shippingCharges ?? 0);
   const otherCharges = Number(apiInv.otherCharges ?? 0);
   const roundOff = Number(apiInv.roundOff ?? 0);
@@ -109,7 +113,7 @@ export const mapApiInvoiceToSaleTransaction = (apiInv: ApiSalesInvoice): SaleTra
     apiInv.grandTotal ?? apiInv.amount ?? subtotal - totalDiscount + totalTax + shippingCharges + otherCharges + roundOff
   );
   const paidAmount = Number(apiInv.paidAmount ?? 0);
-  const balance = Number(apiInv.balanceAmount ?? apiInv.balance ?? Math.max(0, grandTotal - paidAmount));
+  const balance = Number(calc.balance ?? Math.max(0, grandTotal - paidAmount));
 
   let saleDateStr = apiInv.saleDate || (apiInv.invoiceDate ? apiInv.invoiceDate.split('T')[0] : apiInv.createdAt ? apiInv.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]);
   if (saleDateStr.includes('T')) {
@@ -174,6 +178,8 @@ export const mapApiInvoiceToSaleTransaction = (apiInv: ApiSalesInvoice): SaleTra
     cgst,
     sgst,
     igst,
+    ...readDocumentExtras(apiInv),
+    roundOff,
     overallDiscount: Number(apiInv.overallDiscount ?? 0),
     totalDiscount,
     totalTax,
@@ -285,6 +291,10 @@ export const mapSaleTransactionToInvoicePayload = (
   }
   if (typeof sale.otherCharges === 'number' && !isNaN(sale.otherCharges)) {
     payload.otherCharges = sale.otherCharges;
+  }
+  // Signed round-off (e.g. -0.35 / +0.65). 0 is sent too so clearing a round-off on edit is saved.
+  if (typeof sale.roundOff === 'number' && !isNaN(sale.roundOff)) {
+    payload.roundOff = Number(sale.roundOff.toFixed(2));
   }
   // Payment method only when the user actually entered a payment
   if (sale.paymentMethod && Number(sale.paidAmount) > 0) {

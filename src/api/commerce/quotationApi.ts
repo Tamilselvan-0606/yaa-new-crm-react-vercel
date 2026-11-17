@@ -1,4 +1,5 @@
 import { resolveGrossSubtotal } from "../../utils/financialCalculations";
+import { withCalculatedLine, readCalculatedTotals, readDocumentExtras } from "../../utils/apiCalculatedValues";
 import { baseClient, baseApi } from "../baseApi";
 import {
   QuotationStatus,
@@ -57,7 +58,7 @@ export const mapApiQuotationItemToSaleProductItem = (
   const taxRate = hasTaxCharged ? rawTaxRate : 0;
   const taxAmt = hasTaxCharged ? rawTaxAmt : 0;
 
-  return {
+  return withCalculatedLine({
     id: it.id || `item_${idx}_${Date.now()}`,
     productId: it.productId || "",
     productName: it.productName || "Unnamed Item",
@@ -75,7 +76,7 @@ export const mapApiQuotationItemToSaleProductItem = (
     itemCode: it.itemCode || it.sku || "",
     hsnCode: it.hsnCode || "",
     description: it.description || "",
-  };
+  }, it);
 };
 
 /**
@@ -90,9 +91,10 @@ export const mapApiQuotationToSaleQuotation = (
     ? apiQ.validUntil.split("T")[0]
     : apiQ.validUntil || "";
 
-  const totalTax = Number(apiQ.taxAmount ?? 0);
+  const calc = readCalculatedTotals(apiQ);
+  const totalTax = Number(calc.totalTax ?? 0);
   const totalAmount = Number(apiQ.amount ?? apiQ.grandTotal ?? 0);
-  const balance = Number(apiQ.balance ?? totalAmount);
+  const balance = Number(calc.balance ?? totalAmount);
   const parentWithGst = apiQ.withGst !== false && totalTax > 0;
 
   const mappedItems: SaleProductItem[] = Array.isArray(apiQ.items)
@@ -103,7 +105,7 @@ export const mapApiQuotationToSaleQuotation = (
 
   const subtotal = resolveGrossSubtotal(mappedItems, Number(apiQ.subtotal ?? apiQ.subTotal ?? 0));
   const totalDiscount = Number(
-    apiQ.discount ?? apiQ.discountAmount ?? apiQ.overallDiscount ?? 0,
+    apiQ.totalDiscount ?? apiQ.discount ?? apiQ.discountAmount ?? apiQ.overallDiscount ?? 0,
   );
 
   return {
@@ -137,6 +139,7 @@ export const mapApiQuotationToSaleQuotation = (
     discount: totalDiscount,
     taxAmount: totalTax,
     roundOff: Number(apiQ.roundOff ?? 0),
+    ...readDocumentExtras(apiQ),
     amount: totalAmount,
     balance: balance,
     status: (apiQ.status as QuotationStatus) || "Open",
@@ -261,6 +264,9 @@ export const mapSaleQuotationToPayload = (
   }
   if (quotation.stateOfSupply && quotation.stateOfSupply.trim()) {
     payload.stateOfSupply = quotation.stateOfSupply.trim();
+  }
+  if (typeof quotation.roundOff === "number" && !isNaN(quotation.roundOff)) {
+    payload.roundOff = Number(quotation.roundOff.toFixed(2));
   }
 
   return payload;

@@ -19,6 +19,13 @@ export interface ApiQuotationItem {
   taxPercent?: number;
   discountAmount?: number;
   taxAmount?: number;
+  grossAmount?: number;
+  taxableAmount?: number;
+  cgst?: number;
+  sgst?: number;
+  igst?: number;
+  lineTotal?: number;
+  isTaxInclusive?: boolean;
   totalAmount?: number;
   total?: number;
   unit?: string;
@@ -81,6 +88,14 @@ export interface ApiQuotation {
   discount?: number;
   taxAmount?: number;
   roundOff?: number;
+  totalTax?: number;
+  totalDiscount?: number;
+  lineDiscountTotal?: number;
+  taxableAmount?: number;
+  unroundedTotal?: number;
+  totalQty?: number;
+  roundMode?: string;
+  balanceDue?: number;
   grandTotal?: number;
   amount: number;
   balance: number;
@@ -167,6 +182,7 @@ export interface CreateQuotationPayload {
   items: CreateQuotationItemPayload[];
   withGst?: boolean;
   gstType?: string;
+  roundOff?: number;
   notes?: string;
   terms?: string;
   stateOfSupply?: string;

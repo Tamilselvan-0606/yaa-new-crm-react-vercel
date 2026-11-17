@@ -15,6 +15,13 @@ export interface ApiProformaInvoiceItem {
   taxPercent?: number;
   discountAmount?: number;
   taxAmount?: number;
+  grossAmount?: number;
+  taxableAmount?: number;
+  cgst?: number;
+  sgst?: number;
+  igst?: number;
+  lineTotal?: number;
+  isTaxInclusive?: boolean;
   totalAmount?: number;
   total?: number;
   unit?: string;
@@ -65,6 +72,14 @@ export interface ApiProformaInvoice {
   withGst?: boolean;
   gstType?: 'intra_state' | 'inter_state' | string;
   roundOff?: number;
+  totalTax?: number;
+  totalDiscount?: number;
+  lineDiscountTotal?: number;
+  taxableAmount?: number;
+  unroundedTotal?: number;
+  totalQty?: number;
+  roundMode?: string;
+  balanceDue?: number;
   notes?: string | null;
   terms?: string | null;
   attachedImageName?: string | null;

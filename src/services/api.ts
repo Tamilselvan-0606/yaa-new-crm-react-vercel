@@ -1,4 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
+import { normalizeDecimals } from '../utils/decimalJson';
 import { jwtDecode } from 'jwt-decode';
 import {
   Role,
@@ -72,11 +73,17 @@ axiosClient.interceptors.request.use(
 
 // Response Interceptor: Format error messages & silent token refresh on 401
 axiosClient.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    response.data = normalizeDecimals(response.data);
+    return response;
+  },
   async (error) => {
     // Silent token refresh when the short-lived access token has expired
     const retried = await retryWithRefreshedToken(axiosClient, error);
-    if (retried) return retried;
+    if (retried) {
+      retried.data = normalizeDecimals(retried.data);
+      return retried;
+    }
 
     const message =
       error.response?.data?.error?.message ||

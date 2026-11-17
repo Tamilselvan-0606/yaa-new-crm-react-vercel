@@ -40,7 +40,8 @@ export interface SalesInvoiceFormData {
   paymentRecords: SalePaymentRecord[];
   paymentTerms: string;
   paidAmount: number;
-  roundMode: "none" | "up" | "down";
+  /** Signed manual round-off amount (e.g. -0.35 or 0.65); 0 = none. */
+  roundOff: number;
   saleStatus: SaleStatus;
   salesperson: string;
   notes: string;
@@ -59,8 +60,6 @@ export interface SalesInvoiceTotals {
   igst: number;
   shippingCharges: number;
   roundOff: number;
-  roundDownDiff: number;
-  roundUpDiff: number;
   grandTotal: number;
   paid: number;
   balance: number;

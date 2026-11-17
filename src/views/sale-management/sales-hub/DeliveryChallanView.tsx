@@ -1871,6 +1871,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                 discount: currentCalculations.totalDiscount || 0,
                 totalDiscount: currentCalculations.totalDiscount || 0,
                 taxAmount: currentCalculations.totalTax || 0,
+                roundOff: currentCalculations.roundOff || 0,
                 grandTotal: currentCalculations.finalAmount,
                 paidAmount: 0,
                 paymentMethod: "Bank Transfer",

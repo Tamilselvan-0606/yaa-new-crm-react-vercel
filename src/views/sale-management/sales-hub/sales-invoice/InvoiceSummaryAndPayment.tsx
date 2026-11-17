@@ -55,6 +55,19 @@ export const InvoiceSummaryAndPayment: React.FC<
   splitShowErrors,
   isActionLoading,
 }) => {
+  const [roundOffText, setRoundOffText] = React.useState(
+    formData.roundOff ? String(formData.roundOff) : "",
+  );
+  React.useEffect(() => {
+    // Sync when the value changes from outside (editing a saved invoice, conversions, new form).
+    setRoundOffText((cur) =>
+      (parseFloat(cur) || 0) === (Number(formData.roundOff) || 0)
+        ? cur
+        : formData.roundOff
+          ? String(formData.roundOff)
+          : "",
+    );
+  }, [formData.roundOff]);
   return (
     <div className="pt-6 border-t border-slate-200/80 flex flex-col md:flex-row items-start justify-between gap-6">
       {/* LEFT CARD: Notes / Instructions & Details */}
@@ -281,93 +294,44 @@ export const InvoiceSummaryAndPayment: React.FC<
               className="justify-end"
             />
 
-            {/* 3. Rounding Adjustment */}
-            <div className="pt-3 border-t border-slate-100 space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                  Rounding Adjustment
-                </label>
-                <span className="text-[11px] text-slate-400">
-                  click to apply
+            {/* 3. Round Off (signed amount, e.g. -0.35 or 0.65) */}
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 text-xs">
+              <label className="font-semibold text-slate-600">Round Off</label>
+              <div className="relative">
+                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">
+                  ₹
                 </span>
-              </div>
-
-              <div className="space-y-2">
-                {/* Round Down */}
-                <button
-                  type="button"
-                  onClick={() =>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={roundOffText}
+                  placeholder="0.00"
+                  {...fieldAttr("roundOff")}
+                  onChange={(e) => {
+                    clearFormError("roundOff");
+                    clearFormError("totals");
+                    // digits, one leading minus and one decimal point, max 2 decimals
+                    let raw = e.target.value.replace(/[^0-9.-]/g, "");
+                    const neg = raw.startsWith("-");
+                    raw = raw.replace(/-/g, "");
+                    const parts = raw.split(".");
+                    raw =
+                      parts.length > 1
+                        ? `${parts[0]}.${parts.slice(1).join("").slice(0, 2)}`
+                        : raw;
+                    const text = (neg ? "-" : "") + raw;
+                    setRoundOffText(text);
+                    const num = parseFloat(text);
                     setFormData((prev) => ({
                       ...prev,
-                      roundMode:
-                        prev.roundMode === "down" ? "none" : "down",
-                    }))
-                  }
-                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border transition-all cursor-pointer ${
-                    formData.roundMode === "down"
-                      ? "bg-amber-50 border-amber-300 text-amber-900 font-bold shadow-2xs"
-                      : "bg-white hover:bg-slate-50 border-slate-200 text-slate-700 font-medium"
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <div
-                      className={`w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${
-                        formData.roundMode === "down"
-                          ? "border-amber-600 bg-amber-600"
-                          : "border-slate-300 bg-white"
-                      }`}
-                    >
-                      {formData.roundMode === "down" && (
-                        <div className="w-1.5 h-1.5 bg-white rounded-full" />
-                      )}
-                    </div>
-                    <span className="text-xs">Round Down</span>
-                  </div>
-                  <span className="font-bold text-xs">
-                    {calculatedTotals.roundDownDiff === 0
-                      ? "₹0.00"
-                      : `-₹${Math.abs(calculatedTotals.roundDownDiff).toFixed(2)}`}
-                  </span>
-                </button>
-
-                {/* Round Up */}
-                <button
-                  type="button"
-                  onClick={() =>
-                    setFormData((prev) => ({
-                      ...prev,
-                      roundMode:
-                        prev.roundMode === "up" ? "none" : "up",
-                    }))
-                  }
-                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border transition-all cursor-pointer ${
-                    formData.roundMode === "up"
-                      ? "bg-emerald-50 border-emerald-300 text-emerald-900 font-bold shadow-2xs"
-                      : "bg-white hover:bg-slate-50 border-slate-200 text-slate-700 font-medium"
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <div
-                      className={`w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${
-                        formData.roundMode === "up"
-                          ? "border-emerald-600 bg-emerald-600"
-                          : "border-slate-300 bg-white"
-                      }`}
-                    >
-                      {formData.roundMode === "up" && (
-                        <div className="w-1.5 h-1.5 bg-white rounded-full" />
-                      )}
-                    </div>
-                    <span className="text-xs">Round Up</span>
-                  </div>
-                  <span className="font-bold text-xs">
-                    {calculatedTotals.roundUpDiff === 0
-                      ? "₹0.00"
-                      : `+₹${calculatedTotals.roundUpDiff.toFixed(2)}`}
-                  </span>
-                </button>
+                      roundOff: Number.isFinite(num) ? num : 0,
+                    }));
+                  }}
+                  className="w-28 h-9 text-right pl-6 pr-2.5 bg-white border-2 border-[#33077C] rounded-[6px] text-xs sm:text-sm font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#33077C]/20 shadow-2xs transition-all"
+                />
               </div>
             </div>
+            <FormError message={formErrors.roundOff} className="justify-end" />
 
             {/* 4. Grand Total Banner */}
             <div className="p-3.5 bg-blue-50/80 border border-blue-200 rounded-xl flex items-center justify-between">

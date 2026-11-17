@@ -2528,6 +2528,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           igst: proforma.igst,
           discount: proforma.discount || 0,
           taxAmount: proforma.taxAmount || 0,
+          roundOff: proforma.roundOff,
           amount: proforma.amount,
           advanceAmount: 0,
           balance: proforma.amount,

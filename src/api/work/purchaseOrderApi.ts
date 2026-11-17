@@ -1,4 +1,5 @@
 import { baseClient, baseApi } from '../baseApi';
+import { withCalculatedLine, readCalculatedTotals, readDocumentExtras } from '../../utils/apiCalculatedValues';
 import {
   PurchaseOrder,
   PurchaseProductItem,
@@ -51,7 +52,7 @@ export const mapApiItemToUiProductItem = (
   const calculatedTax = (qty * cost * taxPct) / 100;
   const total = Number(it.totalAmount ?? (qty * cost + (it.taxAmount ?? calculatedTax)));
 
-  return {
+  return withCalculatedLine({
     id: `po_item_${idx}_${Date.now()}`,
     productId: it.productId,
     productName: it.productName || (it as any).name || 'Product',
@@ -68,7 +69,8 @@ export const mapApiItemToUiProductItem = (
     discountAmount: Number((it as any).discountAmount || 0),
     taxPercent: taxPct,
     total: Math.round(total * 100) / 100,
-  };
+    taxAmount: Number(it.taxAmount ?? calculatedTax),
+  }, it);
 };
 
 /**
@@ -81,9 +83,10 @@ export const mapApiPurchaseOrderToUi = (
     ? apiPo.items.map((it, idx) => mapApiItemToUiProductItem(it, idx))
     : [];
 
-  const subTotal = Number(apiPo.subTotal ?? 0);
-  const taxAmount = Number(apiPo.taxAmount ?? 0);
-  const discountAmount = Number(apiPo.discountAmount ?? 0);
+  const calc = readCalculatedTotals(apiPo);
+  const subTotal = Number(apiPo.subTotal ?? calc.subtotal ?? 0);
+  const taxAmount = Number(calc.totalTax ?? 0);
+  const discountAmount = Number(apiPo.totalDiscount ?? apiPo.discountAmount ?? 0);
 
   // Return and net calculations
   const originalBill = Number(
@@ -175,12 +178,15 @@ export const mapApiPurchaseOrderToUi = (
     tax: taxAmount,
     taxAmount: taxAmount,
     withGst: taxAmount > 0,
-    gstType: 'intra_state',
-    cgst: Math.round((taxAmount / 2) * 100) / 100,
-    sgst: Math.round((taxAmount / 2) * 100) / 100,
-    igst: 0,
-    shipping: 0,
-    otherCharges: 0,
+    // Backend CGST/SGST/IGST split; the intra-state half/half is only a fallback for older responses.
+    gstType: (apiPo as any).gstType || (calc.igst ? 'inter_state' : 'intra_state'),
+    cgst: calc.cgst ?? Math.round((taxAmount / 2) * 100) / 100,
+    sgst: calc.sgst ?? Math.round((taxAmount / 2) * 100) / 100,
+    igst: calc.igst ?? 0,
+    shipping: calc.shippingCharges ?? 0,
+    otherCharges: calc.otherCharges ?? 0,
+    ...readDocumentExtras(apiPo),
+    roundOff: calc.roundOff,
     grandTotal: effectiveGrandTotal,
     originalBillAmount: originalBill,
     totalPurchaseReturnAmount: totalReturnAmount,

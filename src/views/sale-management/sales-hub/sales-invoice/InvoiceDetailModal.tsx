@@ -293,6 +293,17 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
                 </span>
               </div>
             )}
+            {sale.taxableAmount !== undefined && (
+              <div className="flex justify-between text-slate-700 font-semibold border-t border-slate-200 pt-1.5">
+                <span>Amount (After Discount):</span>
+                <span>
+                  ₹
+                  {sale.taxableAmount.toLocaleString("en-IN", {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
+              </div>
+            )}
             {sale.withGst !== false && sale.totalTax > 0 ? (
               sale.gstType === "inter_state" ? (
                 <div className="flex justify-between text-slate-600">
@@ -345,6 +356,28 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
                 <span>
                   +₹
                   {sale.shippingCharges.toLocaleString("en-IN", {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
+              </div>
+            )}
+            {Number(sale.otherCharges) > 0 && (
+              <div className="flex justify-between text-slate-600">
+                <span>Other Charges:</span>
+                <span>
+                  +₹
+                  {Number(sale.otherCharges).toLocaleString("en-IN", {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
+              </div>
+            )}
+            {Number(sale.roundOff) !== 0 && sale.roundOff !== undefined && (
+              <div className="flex justify-between text-slate-600">
+                <span>Round Off:</span>
+                <span>
+                  {Number(sale.roundOff) > 0 ? "+" : "-"}₹
+                  {Math.abs(Number(sale.roundOff)).toLocaleString("en-IN", {
                     minimumFractionDigits: 2,
                   })}
                 </span>

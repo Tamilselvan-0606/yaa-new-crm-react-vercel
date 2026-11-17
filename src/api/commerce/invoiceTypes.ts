@@ -34,6 +34,13 @@ export interface ApiSalesInvoiceItem {
   taxPercent?: number;
   discountAmount?: number;
   taxAmount?: number;
+  grossAmount?: number;
+  taxableAmount?: number;
+  cgst?: number;
+  sgst?: number;
+  igst?: number;
+  lineTotal?: number;
+  isTaxInclusive?: boolean;
   totalAmount?: number;
   total?: number;
   unit?: string;
@@ -126,6 +133,12 @@ export interface ApiSalesInvoice {
   totalDiscount?: number;
   discount?: number;
   roundOff?: number;
+  lineDiscountTotal?: number;
+  taxableAmount?: number;
+  unroundedTotal?: number;
+  totalQty?: number;
+  roundMode?: string;
+  balanceDue?: number;
   grandTotal?: number;
   amount?: number;
   paidAmount?: number;

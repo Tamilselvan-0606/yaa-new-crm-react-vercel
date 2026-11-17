@@ -2105,6 +2105,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           igst: order.igst,
           discount: order.discount || 0,
           taxAmount: order.taxAmount || 0,
+          roundOff: order.roundOff,
           amount: order.amount,
           balance: order.balance,
           status: "Open",

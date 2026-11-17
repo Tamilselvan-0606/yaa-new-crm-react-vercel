@@ -34,7 +34,7 @@ export interface InvoiceFormInput {
   otherCharges: number;
   paidAmount: number;
   paymentSplits: PaymentSplitItem[];
-  roundMode?: "none" | "up" | "down";
+  roundOff?: number;
 }
 
 export interface InvoiceValidationContext {
@@ -217,7 +217,7 @@ export const validateInvoiceForm = (
       overallDiscount: Number(form.overallDiscount) || 0,
       shippingCharges: Number(form.shippingCharges) || 0,
       otherCharges: Number(form.otherCharges) || 0,
-      roundMode: form.roundMode || "none",
+      manualRoundOff: Number(form.roundOff) || 0,
       paidAmount: Math.max(0, Number(form.paidAmount) || 0),
     });
     const tol = Math.max(0.05, 0.01 * rows.length);

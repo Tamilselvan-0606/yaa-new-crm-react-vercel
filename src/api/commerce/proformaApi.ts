@@ -1,4 +1,5 @@
 import { resolveGrossSubtotal } from "../../utils/financialCalculations";
+import { withCalculatedLine, readCalculatedTotals, readDocumentExtras } from "../../utils/apiCalculatedValues";
 import { baseClient, baseApi } from '../baseApi';
 import { SaleProductItem } from '../../store/useSalesManagementStore';
 import {
@@ -61,6 +62,11 @@ export interface SaleProformaInvoice {
   discount?: number;
   taxAmount?: number;
   roundOff?: number;
+  totalQty?: number;
+  lineDiscountTotal?: number;
+  taxableAmount?: number;
+  unroundedTotal?: number;
+  roundMode?: 'auto' | 'up' | 'down' | 'none';
   amount: number;
   balance: number;
   status: 'Open' | 'Converted' | 'Expired' | 'Cancelled';
@@ -96,7 +102,7 @@ export const mapApiProformaItemToSaleProductItem = (
   const taxRate = hasTaxCharged ? rawTaxRate : 0;
   const taxAmt = hasTaxCharged ? rawTaxAmt : 0;
 
-  return {
+  return withCalculatedLine({
     id: it.id || `item_${idx}_${Date.now()}`,
     productId: it.productId || '',
     productName: it.productName || 'Unnamed Item',
@@ -114,7 +120,7 @@ export const mapApiProformaItemToSaleProductItem = (
     itemCode: it.itemCode || it.sku || '',
     hsnCode: it.hsnCode || '',
     description: it.description || '',
-  };
+  }, it);
 };
 
 /**
@@ -127,9 +133,10 @@ export const mapApiProformaToSaleProforma = (apiP: ApiProformaInvoice): SaleProf
     ? apiP.validUntil.split('T')[0]
     : apiP.validUntil || '';
 
-  const totalTax = Number(apiP.taxAmount ?? 0);
+  const calc = readCalculatedTotals(apiP);
+  const totalTax = Number(calc.totalTax ?? 0);
   const totalAmount = Number(apiP.amount ?? apiP.grandTotal ?? 0);
-  const balance = Number(apiP.balance ?? totalAmount);
+  const balance = Number(calc.balance ?? totalAmount);
   const parentWithGst = apiP.withGst !== false && totalTax > 0;
 
   const mappedItems: ExtendedProformaItem[] = Array.isArray(apiP.items)
@@ -137,7 +144,7 @@ export const mapApiProformaToSaleProforma = (apiP: ApiProformaInvoice): SaleProf
     : [];
 
   const subtotal = resolveGrossSubtotal(mappedItems, Number(apiP.subtotal ?? apiP.subTotal ?? 0));
-  const totalDiscount = Number(apiP.discount ?? apiP.discountAmount ?? apiP.overallDiscount ?? 0);
+  const totalDiscount = Number(apiP.totalDiscount ?? apiP.discount ?? apiP.discountAmount ?? apiP.overallDiscount ?? 0);
 
   // Status mapping
   let normStatus: 'Open' | 'Converted' | 'Expired' | 'Cancelled' = 'Open';
@@ -177,6 +184,7 @@ export const mapApiProformaToSaleProforma = (apiP: ApiProformaInvoice): SaleProf
     discount: totalDiscount,
     taxAmount: totalTax,
     roundOff: Number(apiP.roundOff || 0),
+    ...readDocumentExtras(apiP),
     amount: totalAmount,
     balance: balance,
     status: normStatus,

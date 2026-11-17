@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { readCalculatedTotals, pickNumber, definedOnly } from '../../utils/apiCalculatedValues';
 import {
   PlusCircle,
   Pencil,
@@ -165,7 +166,9 @@ const mapLineItems = (items: any[] | undefined, idPrefix: string, defaultHsn: st
   const subs = list.map((it: any) => (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0));
   const grossSum = subs.reduce((a, b) => a + b, 0);
   const hasLineDiscount = list.some((it: any) => Number(it.discount) > 0);
-  const toShare = !hasLineDiscount && discountTotal > 0 && grossSum > 0 ? Math.min(discountTotal, grossSum) : 0;
+  // When the backend returns its own line breakdown (taxableAmount / discountAmount) use it as-is instead of re-deriving.
+  const backendLines = list.some((it: any) => it.taxableAmount !== undefined && it.taxableAmount !== null);
+  const toShare = !backendLines && !hasLineDiscount && discountTotal > 0 && grossSum > 0 ? Math.min(discountTotal, grossSum) : 0;
   let allocated = 0;
   return list.map((it: any, idx: number) => {
     const qty = Number(it.quantity) || 1;
@@ -173,8 +176,8 @@ const mapLineItems = (items: any[] | undefined, idPrefix: string, defaultHsn: st
     const taxRate = Number(it.gstPercent) || 0;
     const sub = qty * price;
     const taxAmount = Number(it.taxAmount) || (sub * taxRate) / 100;
-    let disc = Number(it.discount) || 0;
-    if (toShare > 0) {
+    let disc = Number(it.discountAmount ?? it.discount) || 0;
+    if (toShare > 0 && !backendLines) {
       // last line takes the remainder so the rows add up exactly to the total
       disc = idx === list.length - 1 ? toShare - allocated : Math.round(((toShare * sub) / grossSum) * 100) / 100;
       allocated += disc;
@@ -187,11 +190,34 @@ const mapLineItems = (items: any[] | undefined, idPrefix: string, defaultHsn: st
       hsnCode: it.hsnCode || defaultHsn,
       qty,
       unitPrice: price,
-      taxPercent: taxRate,
+      taxPercent: Number(it.taxPercent ?? it.gstPercent) || 0,
       discount: disc,
       subtotal: sub,
       total,
+      ...(backendLines
+        ? definedOnly({
+            taxableAmount: pickNumber(it.taxableAmount),
+            taxAmount: pickNumber(it.taxAmount),
+            cgst: pickNumber(it.cgst),
+            sgst: pickNumber(it.sgst),
+            igst: pickNumber(it.igst),
+          })
+        : {}),
     };
+  });
+};
+
+// Backend-calculated document totals (BACKEND_CALCULATION_SPEC.md 10.2). Anything the backend omits keeps the local fallback.
+const crmCalculatedTotals = (api: any) => {
+  const c = readCalculatedTotals(api);
+  return definedOnly({
+    subtotal: c.subtotal,
+    totalDiscount: pickNumber(api.totalDiscount, api.discountTotal),
+    taxableAmount: c.taxableAmount,
+    taxTotal: pickNumber(api.taxTotal, api.totalTax),
+    roundOffAmount: pickNumber(api.roundOffAmount, api.roundOff),
+    roundMode: c.roundMode,
+    balanceDue: pickNumber(api.balanceDue),
   });
 };
 
@@ -257,6 +283,7 @@ const mapApiProformaToSavedInvoice =(api: ProformaInvoiceApiItem): SavedInvoice 
     grandTotal: Number(api.grandTotal) || 0,
     createdAt: api.createdAt,
     ...(api as any),
+    ...crmCalculatedTotals(api),
     items: mapLineItems(api.items as any[], 'pitem', '', Number(api.discountTotal) || 0),
     bank: mapBankField((api as any).bank ?? (api as any).bankAccount ?? (api as any).bankAccountId, (api as any).bankDetails || seller.bank),
   };
@@ -345,6 +372,7 @@ const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
     paymentDetails,
     createdAt: api.createdAt,
     ...(api as any),
+    ...crmCalculatedTotals(api),
     items: mapLineItems(api.items as any[], 'item', '998314', Number(api.discountTotal) || 0),
     bank: mapBankField((api as any).bank ?? (api as any).bankAccount ?? (api as any).bankAccountId, (api as any).bankDetails || seller.bank),
   };
@@ -1572,7 +1600,12 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 </tbody>
                 <tfoot>
                   <tr>
-                    <td colSpan={5} className="border-0 p-0 bg-transparent"></td>
+                    <td colSpan={5} className="border-0 p-0 bg-transparent align-top">
+                      <div className="pt-4 pr-4 text-xs sm:text-sm font-medium text-slate-800">
+                        <span className="font-bold">Total (in words)</span>
+                        <span> : {numberToWordsIndian(activeInvoice.grandTotal).toUpperCase()}</span>
+                      </div>
+                    </td>
                     <td colSpan={5} className="border-0 p-0">
                       <div
                         className="invoice-summary-ribbon w-full bg-white border border-slate-200 text-slate-800 p-4 sm:p-5 font-sans !rounded-none"
@@ -1682,11 +1715,6 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
               </table>
             </div>
 
-            {/* Total (in words) */}
-            <div className="pt-3 text-xs sm:text-sm font-medium text-slate-800">
-              <span className="font-bold">Total (in words)</span>
-              <span> : {numberToWordsIndian(activeInvoice.grandTotal).toUpperCase()}</span>
-            </div>
           </div>
 
           {/* 7. Bottom Section: Payment / Billing Information */}
@@ -1747,7 +1775,14 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
           {/* 8. Bottom Footer Section */}
           <div className="pt-8 mt-auto border-t border-slate-200/80 space-y-3">
             {/* Electronic Document Disclaimer (Both Invoice and Proforma Invoice) */}
-            <div className="text-center pt-2">
+            {isProforma && (activeInvoice.company.email || activeInvoice.company.phone) && (
+              <div className="text-center pt-2">
+                <p className="text-[11px] sm:text-xs text-slate-400 italic">
+                  For any enquiry, reach out via email at {activeInvoice.company.email || '-'}, call on {activeInvoice.company.phone || '-'}
+                </p>
+              </div>
+            )}
+            <div className="text-center">
               <p className="text-[11px] sm:text-xs text-slate-400 italic">
                 This is an electronically generated document, no signature is required.
               </p>
@@ -3213,6 +3248,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                               type="number"
                               min={1}
                               value={it.qty}
+                              onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }}
                               onChange={(e) => handleEditItemChange(idx, 'qty', Math.max(1, Number(e.target.value) || 1))}
                               style={{ borderRadius: '4px' }}
                               className="w-full h-11 px-3.5 text-center bg-white border border-[#E2E8F0] !rounded-[4px] text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
@@ -3229,6 +3265,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                               min={0}
                               step="0.01"
                               value={it.unitPrice}
+                              onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }}
                               onChange={(e) => handleEditItemChange(idx, 'unitPrice', Math.max(0, Number(e.target.value) || 0))}
                               style={{ borderRadius: '4px' }}
                               className="w-full h-11 px-3.5 text-right bg-white border border-[#E2E8F0] !rounded-[4px] text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
@@ -3245,6 +3282,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                               min={0}
                               max={100}
                               value={it.taxPercent}
+                              onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }}
                               onChange={(e) => handleEditItemChange(idx, 'taxPercent', Math.max(0, Number(e.target.value) || 0))}
                               style={{ borderRadius: '4px' }}
                               className="w-full h-11 px-3.5 text-center bg-white border border-[#E2E8F0] !rounded-[4px] text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
@@ -3261,6 +3299,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                               min={0}
                               step="0.01"
                               value={it.discount || 0}
+                              onKeyDown={(e) => { if (e.key === '-' || e.key === 'e' || e.key === 'E') e.preventDefault(); }}
                               onChange={(e) => handleEditItemChange(idx, 'discount', Math.max(0, Number(e.target.value) || 0))}
                               style={{ borderRadius: '4px' }}
                               className="w-full h-11 px-3.5 text-right bg-white border border-[#E2E8F0] !rounded-[4px] text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"

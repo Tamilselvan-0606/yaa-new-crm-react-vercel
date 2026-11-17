@@ -2464,7 +2464,8 @@ export const PurchaseOrderView: React.FC = () => {
       gstType: formData.gstType,
       shippingCharges: Number(formData.shipping) || 0,
       otherCharges: Number(formData.otherCharges) || 0,
-      roundMode: formData.roundMode || "none",
+      // Purchase bills are not rounded: the grand total is the exact sum.
+      roundMode: "none",
       paidAmount: Number(formData.paidAmount) || 0,
     });
 
@@ -4892,16 +4893,7 @@ export const PurchaseOrderView: React.FC = () => {
                           </div>
                         </div>
 
-                        {calculatedTotals.balance > 0 ? (
-                          <button
-                            type="button"
-                            onClick={handleOpenRecordPaymentModal}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#33077C] hover:bg-[#4309A2] text-white text-[11px] font-bold shadow-xs hover:shadow transition-all cursor-pointer"
-                          >
-                            <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                            <span>+ Record Payment</span>
-                          </button>
-                        ) : (
+                        {calculatedTotals.balance <= 0 && (
                           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                             <span>Paid in Full</span>
@@ -4919,7 +4911,7 @@ export const PurchaseOrderView: React.FC = () => {
                           <p className="text-[11px] text-slate-400 mt-0.5">
                             {formData.paidAmount > 0
                               ? `₹${formData.paidAmount.toLocaleString("en-IN")} recorded against this bill.`
-                              : 'Click "+ Record Payment" to disburse a vendor payment.'}
+                              : "No payments have been recorded against this bill yet."}
                           </p>
                         </div>
                       ) : (
@@ -5178,94 +5170,6 @@ export const PurchaseOrderView: React.FC = () => {
                           message={formErr.errors.shipping}
                           className="justify-end"
                         />
-                      </div>
-
-                      {/* 3. Rounding Adjustment */}
-                      <div className="pt-3 border-t border-slate-100 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                            Rounding Adjustment
-                          </label>
-                          <span className="text-[11px] text-slate-400">
-                            click to apply
-                          </span>
-                        </div>
-
-                        <div className="space-y-2">
-                          {/* Round Down */}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setFormData((prev) => ({
-                                ...prev,
-                                roundMode:
-                                  prev.roundMode === "down" ? "none" : "down",
-                              }))
-                            }
-                            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border transition-all cursor-pointer ${
-                              formData.roundMode === "down"
-                                ? "bg-amber-50 border-amber-300 text-amber-900 font-bold shadow-2xs"
-                                : "bg-white hover:bg-slate-50 border-slate-200 text-slate-700 font-medium"
-                            }`}
-                          >
-                            <div className="flex items-center gap-2.5">
-                              <div
-                                className={`w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${
-                                  formData.roundMode === "down"
-                                    ? "border-amber-600 bg-amber-600"
-                                    : "border-slate-300 bg-white"
-                                }`}
-                              >
-                                {formData.roundMode === "down" && (
-                                  <div className="w-1.5 h-1.5 bg-white rounded-full" />
-                                )}
-                              </div>
-                              <span className="text-xs">Round Down</span>
-                            </div>
-                            <span className="font-bold text-xs">
-                              {calculatedTotals.roundDownDiff === 0
-                                ? "₹0.00"
-                                : `-₹${Math.abs(calculatedTotals.roundDownDiff).toFixed(2)}`}
-                            </span>
-                          </button>
-
-                          {/* Round Up */}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setFormData((prev) => ({
-                                ...prev,
-                                roundMode:
-                                  prev.roundMode === "up" ? "none" : "up",
-                              }))
-                            }
-                            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border transition-all cursor-pointer ${
-                              formData.roundMode === "up"
-                                ? "bg-emerald-50 border-emerald-300 text-emerald-900 font-bold shadow-2xs"
-                                : "bg-white hover:bg-slate-50 border-slate-200 text-slate-700 font-medium"
-                            }`}
-                          >
-                            <div className="flex items-center gap-2.5">
-                              <div
-                                className={`w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${
-                                  formData.roundMode === "up"
-                                    ? "border-emerald-600 bg-emerald-600"
-                                    : "border-slate-300 bg-white"
-                                }`}
-                              >
-                                {formData.roundMode === "up" && (
-                                  <div className="w-1.5 h-1.5 bg-white rounded-full" />
-                                )}
-                              </div>
-                              <span className="text-xs">Round Up</span>
-                            </div>
-                            <span className="font-bold text-xs">
-                              {calculatedTotals.roundUpDiff === 0
-                                ? "₹0.00"
-                                : `+₹${calculatedTotals.roundUpDiff.toFixed(2)}`}
-                            </span>
-                          </button>
-                        </div>
                       </div>
 
                       {/* 4. Grand Total Banner */}

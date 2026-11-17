@@ -1,4 +1,5 @@
 import { resolveGrossSubtotal } from "../../utils/financialCalculations";
+import { withCalculatedLine, readCalculatedTotals, readDocumentExtras } from "../../utils/apiCalculatedValues";
 import { baseClient, baseApi } from '../baseApi';
 import { SaleProductItem } from '../../store/useSalesManagementStore';
 import {
@@ -64,6 +65,11 @@ export interface DeliveryChallanRecord {
   discount?: number;
   taxAmount?: number;
   roundOff?: number;
+  totalQty?: number;
+  lineDiscountTotal?: number;
+  taxableAmount?: number;
+  unroundedTotal?: number;
+  roundMode?: 'auto' | 'up' | 'down' | 'none';
   amount: number;
   balance: number;
   status: 'Open' | 'Converted' | 'Delivered' | 'Cancelled';
@@ -102,7 +108,7 @@ export const mapApiDeliveryChallanItemToExtendedItem = (
   const taxRate = hasTaxCharged ? rawTaxRate : 0;
   const taxAmt = hasTaxCharged ? rawTaxAmt : 0;
 
-  return {
+  return withCalculatedLine({
     id: it.id || `challan_item_${idx}_${Date.now()}`,
     productId: it.productId || '',
     productName: it.productName || 'Unnamed Item',
@@ -120,7 +126,7 @@ export const mapApiDeliveryChallanItemToExtendedItem = (
     itemCode: it.itemCode || it.sku || '',
     hsnCode: it.hsnCode || '',
     description: it.description || '',
-  };
+  }, it);
 };
 
 /**
@@ -130,7 +136,8 @@ export const mapApiDeliveryChallanToRecord = (apiC: ApiDeliveryChallan): Deliver
   const cgst = Number(apiC.cgst ?? 0);
   const sgst = Number(apiC.sgst ?? 0);
   const igst = Number(apiC.igst ?? 0);
-  const totalTax = Number(apiC.taxAmount ?? cgst + sgst + igst);
+  const calc = readCalculatedTotals(apiC);
+  const totalTax = Number(apiC.totalTax ?? apiC.taxAmount ?? cgst + sgst + igst);
   const parentWithGst = apiC.withGst !== false && totalTax > 0;
 
   const items: ExtendedChallanItem[] = Array.isArray(apiC.items)
@@ -138,10 +145,10 @@ export const mapApiDeliveryChallanToRecord = (apiC: ApiDeliveryChallan): Deliver
     : [];
 
   const subtotal = resolveGrossSubtotal(items, Number(apiC.subtotal ?? apiC.subTotal ?? 0));
-  const discount = Number(apiC.discount ?? apiC.discountAmount ?? 0);
+  const discount = Number(apiC.totalDiscount ?? apiC.discount ?? apiC.discountAmount ?? 0);
   const roundOff = Number(apiC.roundOff ?? 0);
   const amount = Number(apiC.amount ?? apiC.grandTotal ?? subtotal - discount + totalTax + roundOff);
-  const balance = Number(apiC.balance ?? amount);
+  const balance = Number(calc.balance ?? amount);
 
   let dateStr = apiC.invoiceDate || (apiC.challanDate ? apiC.challanDate.split('T')[0] : apiC.createdAt ? apiC.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]);
   if (dateStr.includes('T')) {
@@ -186,6 +193,7 @@ export const mapApiDeliveryChallanToRecord = (apiC: ApiDeliveryChallan): Deliver
     discount,
     taxAmount: totalTax,
     roundOff,
+    ...readDocumentExtras(apiC),
     amount,
     balance,
     status: normalizedStatus,

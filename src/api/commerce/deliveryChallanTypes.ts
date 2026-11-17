@@ -20,6 +20,13 @@ export interface ApiDeliveryChallanItem {
   taxPercent?: number;
   discountAmount?: number;
   taxAmount?: number;
+  grossAmount?: number;
+  taxableAmount?: number;
+  cgst?: number;
+  sgst?: number;
+  igst?: number;
+  lineTotal?: number;
+  isTaxInclusive?: boolean;
   totalAmount?: number;
   total?: number;
   unit?: string;
@@ -71,6 +78,14 @@ export interface ApiDeliveryChallan {
   withGst?: boolean;
   gstType?: 'intra_state' | 'inter_state' | string;
   roundOff?: number;
+  totalTax?: number;
+  totalDiscount?: number;
+  lineDiscountTotal?: number;
+  taxableAmount?: number;
+  unroundedTotal?: number;
+  totalQty?: number;
+  roundMode?: string;
+  balanceDue?: number;
   vehicleNo?: string | null;
   driverName?: string | null;
   driverPhone?: string | null;

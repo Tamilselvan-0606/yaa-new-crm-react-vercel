@@ -11,6 +11,13 @@ export interface ApiPurchaseOrderItem {
   taxPercent: number;
   taxAmount?: number;
   totalAmount?: number;
+  grossAmount?: number;
+  discountAmount?: number;
+  taxableAmount?: number;
+  cgst?: number;
+  sgst?: number;
+  igst?: number;
+  lineTotal?: number;
 }
 
 export interface ApiPurchaseOrderSupplier {
@@ -31,6 +38,20 @@ export interface ApiPurchaseOrder {
   subTotal: number;
   taxAmount: number;
   discountAmount: number;
+  totalTax?: number;
+  totalDiscount?: number;
+  lineDiscountTotal?: number;
+  taxableAmount?: number;
+  unroundedTotal?: number;
+  totalQty?: number;
+  roundOff?: number;
+  roundMode?: string;
+  cgst?: number;
+  sgst?: number;
+  igst?: number;
+  shippingCharges?: number;
+  otherCharges?: number;
+  balanceDue?: number;
   grandTotal: number;
   /** Amount of the bill already paid, balance still due and the resulting payment status (from the API). */
   paidAmount?: number;

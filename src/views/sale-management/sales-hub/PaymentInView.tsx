@@ -1216,6 +1216,12 @@ export const PaymentInView: React.FC = () => {
     const amountErr = checkMoney(formReceivedAmount, "received amount");
     if (amountErr) errs.amount = amountErr;
 
+    // A payment must be linked to an invoice. Only an old payment that was already saved without one can still
+    // be edited without choosing an invoice.
+    if (!selectedInvoiceId && !(editingPaymentIn && !editingPaymentIn.invoiceId)) {
+      errs.invoice = "Please select the invoice this payment is for.";
+    }
+
     if (selectedInvoiceId) {
       const linkedInv = sales.find((s) => s.id === selectedInvoiceId);
       const unchangedLinkedInvoice =
@@ -2283,14 +2289,14 @@ export const PaymentInView: React.FC = () => {
 
                 {/* Linked Invoice Selector */}
                 <div>
-                  <FormLabel>Linked Invoice (Optional)</FormLabel>
+                  <FormLabel required>Linked Invoice</FormLabel>
                   <select
                     value={selectedInvoiceId}
                     data-field="invoice"
                     onChange={(e) => handleInvoiceSelect(e.target.value)}
                     className={FORM_SELECT_CLS}
                   >
-                    <option value="">No Linked Invoice</option>
+                    <option value="">Select invoice</option>
                     {sales
                       .filter(
                         (s) =>

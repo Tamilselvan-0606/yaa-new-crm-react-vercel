@@ -1,3 +1,4 @@
+import { pickNumber } from '../../utils/apiCalculatedValues';
 import { CustomerStatus, CustomerType, SalesCustomer } from '../../store/useSalesManagementStore';
 
 export interface ApiCustomer {
@@ -260,12 +261,16 @@ export const mapApiCustomerToSalesCustomer = (apiCust: ApiCustomer): SalesCustom
       (apiCust as any).paidDate ||
       (apiCust as any).lastPayment?.date ||
       null,
+    // Backend outstanding is authoritative, including 0 (fully paid). The opening balance is only a
+    // fallback when the response carries no figure at all.
     outstandingAmount: (() => {
       const openingBal = Number(apiCust.openingBalance) || 0;
       const raw = (apiCust as any).outstandingAmount ?? (apiCust.outstandingBalance);
-      const parsed = raw !== undefined && raw !== null ? Number(raw) : NaN;
-      return !isNaN(parsed) && parsed > 0 ? parsed : openingBal;
+      const parsed = raw !== undefined && raw !== null && raw !== '' ? Number(raw) : NaN;
+      return !isNaN(parsed) ? Math.max(0, parsed) : openingBal;
     })(),
+    availableCredit: pickNumber((apiCust as any).availableCredit),
+    creditUtilizationPercent: pickNumber((apiCust as any).creditUtilizationPercent),
     salesRepresentativeId: apiCust.salesRepresentativeId || (apiCust as any).salesRepresentative?.id || undefined,
     salesRepresentativeName: apiCust.salesRepresentativeName || (apiCust as any).salesRepresentative?.name || undefined,
     salesRepresentativeType: (apiCust.salesRepresentativeType as 'Primary' | 'Temporary') || undefined,

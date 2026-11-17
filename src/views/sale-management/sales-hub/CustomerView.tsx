@@ -1964,7 +1964,11 @@ export const CustomerView: React.FC = () => {
       ),
       totalReturnAmount: Number(ledger?.creditNotes ?? 0),
       outstandingAmount,
-      availableCredit: Math.max(0, creditLimit - outstandingAmount),
+      availableCredit: Number(
+        ledger?.availableCredit ??
+          selectedCustomer.availableCredit ??
+          Math.max(0, creditLimit - outstandingAmount),
+      ),
     };
   }, [selectedCustomer, customerLedgerMap]);
 
@@ -2597,19 +2601,20 @@ export const CustomerView: React.FC = () => {
                     totalPaidAmount: cust.paidAmount || 0,
                     outstandingAmount: custOutstanding,
                     creditLimit: cust.creditLimit || 0,
-                    availableCredit: Math.max(
-                      0,
-                      (cust.creditLimit || 0) - custOutstanding,
-                    ),
+                    availableCredit:
+                      cust.availableCredit ??
+                      Math.max(0, (cust.creditLimit || 0) - custOutstanding),
                     creditUtilizationPercent:
-                      (cust.creditLimit || 0) > 0
-                        ? Math.min(
-                            100,
-                            Math.round(
-                              (custOutstanding / cust.creditLimit) * 100,
-                            ),
-                          )
-                        : 0,
+                      cust.creditUtilizationPercent !== undefined
+                        ? Math.min(100, Math.round(cust.creditUtilizationPercent))
+                        : (cust.creditLimit || 0) > 0
+                          ? Math.min(
+                              100,
+                              Math.round(
+                                (custOutstanding / cust.creditLimit) * 100,
+                              ),
+                            )
+                          : 0,
                   };
 
                   return (
@@ -4958,10 +4963,9 @@ export const CustomerView: React.FC = () => {
                 const creditLimitVal = liveLedger
                   ? liveLedger.creditLimit
                   : selectedCustomer.creditLimit || 0;
-                const availableCreditVal = Math.max(
-                  0,
-                  creditLimitVal - netDueVal,
-                );
+                const availableCreditVal =
+                  (liveLedger as any)?.availableCredit ??
+                  Math.max(0, creditLimitVal - netDueVal);
                 const utilPercentVal =
                   creditLimitVal > 0
                     ? Math.min(100, (netDueVal / creditLimitVal) * 100)

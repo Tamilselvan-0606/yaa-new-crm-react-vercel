@@ -83,7 +83,7 @@ export interface SavedInvoice {
   totalDiscount: number;
   taxableAmount: number;
   taxTotal: number;
-  roundMode?: 'none' | 'up' | 'down';
+  roundMode?: 'none' | 'up' | 'down' | 'auto';
   roundOffAmount?: number;
   grandTotal: number;
   amountPaid?: number;
