@@ -69,6 +69,7 @@ import {
   FORM_TEXTAREA_CLS,
   handleNonNegativeKeyDown,
 } from "../utils/formUtils";
+import { IMAGE_FILE_ACCEPT, validateImageFile } from "../utils/imageUpload";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import { toast } from "../../../utils/toast";
 import { getNextPaymentInNumber } from "../../../utils/documentNumbering";
@@ -914,19 +915,16 @@ export const PaymentInView: React.FC = () => {
   // Handle Image Upload
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      setImageError(
-        "Please attach an image file (JPG, PNG, etc.) as the receipt photo.",
-      );
-      e.target.value = "";
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      setImageError(
+    const validation = validateImageFile(file, {
+      maxSizeBytes: 5 * 1024 * 1024,
+      tooLargeMessage:
         "The image is larger than 5 MB. Please choose a smaller file.",
-      );
-      e.target.value = "";
+    });
+    if (!validation.valid) {
+      setImageError(validation.error);
+      toast.error(validation.error);
       return;
     }
     setImageError(null);
@@ -960,6 +958,10 @@ export const PaymentInView: React.FC = () => {
     partyPhone: item.customerPhone,
     partyCompany: item.customerCompany,
     extraMeta: [
+      { label: "Payment In ID", value: item.receiptNo },
+      ...(item.paymentInManualNo
+        ? [{ label: "Payment In No", value: item.paymentInManualNo }]
+        : []),
       { label: "Payment Mode", value: item.paymentType },
       ...(item.invoiceNo
         ? [{ label: "Linked Invoice", value: item.invoiceNo }]
@@ -1486,6 +1488,7 @@ export const PaymentInView: React.FC = () => {
     const excelRows = rows.map((p, idx) => ({
       srNo: idx + 1,
       receiptNo: p.receiptNo,
+      paymentInManualNo: p.paymentInManualNo || "-",
       date: isoToDdmmyyyy(p.date),
       partyName: p.partyName,
       customerPhone: p.customerPhone || "-",
@@ -1503,7 +1506,8 @@ export const PaymentInView: React.FC = () => {
       columns: [
         { header: "#", key: "srNo", align: "center", width: 8 },
         { header: "Date", key: "date", align: "center", width: 15 },
-        { header: "Receipt No.", key: "receiptNo", align: "center", width: 16 },
+        { header: "Payment In ID", key: "receiptNo", align: "center", width: 16 },
+        { header: "Payment In No.", key: "paymentInManualNo", align: "center", width: 16 },
         { header: "Customer Name", key: "partyName", align: "left", width: 28 },
         { header: "Phone", key: "customerPhone", align: "left", width: 18 },
         {
@@ -1554,6 +1558,7 @@ export const PaymentInView: React.FC = () => {
     const printRows = rows.map((p, idx) => ({
       index: idx + 1,
       receiptNo: p.receiptNo || "-",
+      paymentInManualNo: p.paymentInManualNo || "-",
       paymentDate: p.paymentDate,
       partyName: p.partyName,
       invoiceNo: p.invoiceNo || "-",
@@ -1567,10 +1572,16 @@ export const PaymentInView: React.FC = () => {
       columns: [
         { header: "#", key: "index", align: "center", width: "6%" },
         {
-          header: "Receipt No.",
+          header: "Payment In ID",
           key: "receiptNo",
           align: "center",
-          width: "16%",
+          width: "12%",
+        },
+        {
+          header: "Payment In No.",
+          key: "paymentInManualNo",
+          align: "center",
+          width: "12%",
         },
         { header: "Date", key: "paymentDate", align: "center", width: "14%" },
         {
@@ -1945,7 +1956,12 @@ export const PaymentInView: React.FC = () => {
                 <CommonTableHead
                   columns={[
                     {
-                      label: "PAYMENT IN S.NO.",
+                      label: "PAYMENT IN ID",
+                      align: "center",
+                      minWidth: "120px",
+                    },
+                    {
+                      label: "PAYMENT IN NO.",
                       align: "center",
                       minWidth: "120px",
                     },
@@ -2001,6 +2017,11 @@ export const PaymentInView: React.FC = () => {
                           <div className="flex flex-col items-center justify-center gap-1">
                             <span>{item.receiptNo}</span>
                           </div>
+                        </td>
+
+                        {/* Payment In No. (manual) */}
+                        <td className="py-3.5 px-3 font-semibold text-slate-700 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                          {item.paymentInManualNo || "—"}
                         </td>
 
                         {/* Party Name */}
@@ -2438,7 +2459,7 @@ export const PaymentInView: React.FC = () => {
                     type="file"
                     ref={fileInputRef}
                     onChange={handleImageUpload}
-                    accept="image/*"
+                    accept={IMAGE_FILE_ACCEPT}
                     className="hidden"
                   />
                   <FormError message={imageError ?? undefined} />
@@ -2462,7 +2483,10 @@ export const PaymentInView: React.FC = () => {
                       />
                       <button
                         type="button"
-                        onClick={() => setImageAttachment(null)}
+                        onClick={() => {
+                          setImageAttachment(null);
+                          setImageError(null);
+                        }}
                         className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-rose-500 text-white flex items-center justify-center shadow-md cursor-pointer"
                         title="Remove image"
                       >
@@ -2723,6 +2747,14 @@ export const PaymentInView: React.FC = () => {
                     #{selectedPaymentIn.receiptNo}
                   </span>
                 </div>
+                {selectedPaymentIn.paymentInManualNo && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Payment In No:</span>
+                    <span className="font-bold text-slate-900">
+                      {selectedPaymentIn.paymentInManualNo}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span className="text-slate-500">Date:</span>
                   <span className="font-bold text-slate-900">
@@ -2838,6 +2870,10 @@ export const PaymentInView: React.FC = () => {
               {
                 label: "Receipt Date",
                 value: isoToDdmmyyyy(historyPaymentIn.date),
+              },
+              {
+                label: "Payment In No",
+                value: historyPaymentIn.paymentInManualNo,
               },
               { label: "Invoice", value: historyPaymentIn.invoiceNo },
               { label: "Reference No", value: historyPaymentIn.referenceNo },

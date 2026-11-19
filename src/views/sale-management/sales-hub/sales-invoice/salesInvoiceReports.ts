@@ -30,6 +30,7 @@ export const exportSalesInvoicesToExcel = (
     return {
       srNo: idx + 1,
       invoiceNo: s.invoiceNo,
+      manualNo: s.salesInvoiceManualNo || "—",
       date: s.saleDate,
       dueDate: s.dueDate || "-",
       createdDt: createdDt ? createdDt.full : "—",
@@ -61,7 +62,8 @@ export const exportSalesInvoicesToExcel = (
     subtitle: `Filter: ${appliedSaleStatus} | Total Invoices: ${filteredSales.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
     columns: [
       { header: "#", key: "srNo", align: "center", width: 8 },
-      { header: "Invoice No", key: "invoiceNo", align: "center", width: 16 },
+      { header: "Invoice ID", key: "invoiceNo", align: "center", width: 16 },
+      { header: "Invoice No", key: "manualNo", align: "center", width: 16 },
       { header: "Sale Date", key: "date", align: "center", width: 14 },
       { header: "Due Date", key: "dueDate", align: "center", width: 14 },
       {
@@ -154,6 +156,7 @@ export const printSalesInvoicesReport = (
     return {
       srNo: idx + 1,
       invoiceNo: s.invoiceNo,
+      manualNo: s.salesInvoiceManualNo || "—",
       date: s.saleDate,
       dueDate: s.dueDate || "-",
       createdDt: createdDt ? createdDt.full : "—",
@@ -195,11 +198,12 @@ export const printSalesInvoicesReport = (
     columns: [
       { header: "#", key: "srNo", align: "center", width: "35px" },
       {
-        header: "Invoice No",
+        header: "Invoice ID",
         key: "invoiceNo",
         align: "center",
         width: "105px",
       },
+      { header: "Invoice No", key: "manualNo", align: "center", width: "85px" },
       { header: "Date", key: "date", align: "center", width: "85px" },
       {
         header: "Created At",

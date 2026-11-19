@@ -495,8 +495,8 @@ export const PurchaseReturnView: React.FC = () => {
                 id: `pr_ret_it_${Date.now()}_0`,
                 productId: '',
                 productName: '',
-                purchasedQuantity: 1,
-                returnQuantity: 1,
+                purchasedQuantity: 0,
+                returnQuantity: 0,
                 unitPrice: 0,
                 returnAmount: 0,
                 reason: 'Defective',
@@ -657,6 +657,7 @@ export const PurchaseReturnView: React.FC = () => {
       const matchesSearch =
         !q ||
         r.returnNo.toLowerCase().includes(q) ||
+        (r.purchaseReturnManualNo || '').toLowerCase().includes(q) ||
         r.purchaseNo.toLowerCase().includes(q) ||
         r.supplierName.toLowerCase().includes(q);
 
@@ -854,8 +855,8 @@ export const PurchaseReturnView: React.FC = () => {
         id: `pr_ret_it_${Date.now()}_${prev.length}`,
         productId: '',
         productName: '',
-        purchasedQuantity: 1,
-        returnQuantity: 1,
+        purchasedQuantity: 0,
+        returnQuantity: 0,
         unitPrice: 0,
         returnAmount: 0,
         reason: 'Damaged',
@@ -947,8 +948,8 @@ export const PurchaseReturnView: React.FC = () => {
         id: `pr_ret_it_${Date.now()}_0`,
         productId: '',
         productName: '',
-        purchasedQuantity: 1,
-        returnQuantity: 1,
+        purchasedQuantity: 0,
+        returnQuantity: 0,
         unitPrice: 0,
         returnAmount: 0,
         reason: 'Damaged',
@@ -1000,8 +1001,8 @@ export const PurchaseReturnView: React.FC = () => {
               id: `pr_ret_it_${Date.now()}_0`,
               productId: '',
               productName: '',
-              purchasedQuantity: 1,
-              returnQuantity: 1,
+              purchasedQuantity: 0,
+              returnQuantity: 0,
               unitPrice: 0,
               returnAmount: 0,
               reason: 'Damaged',
@@ -1403,8 +1404,8 @@ export const PurchaseReturnView: React.FC = () => {
               id: `pr_ret_it_${Date.now()}_0`,
               productId: '',
               productName: '',
-              purchasedQuantity: 1,
-              returnQuantity: 1,
+              purchasedQuantity: 0,
+              returnQuantity: 0,
               unitPrice: 0,
               returnAmount: 0,
               reason: 'Damaged',
@@ -1482,6 +1483,7 @@ export const PurchaseReturnView: React.FC = () => {
     const excelRows = listToExport.map((r, idx) => ({
       sNo: idx + 1,
       returnNo: r.returnNo,
+      purchaseReturnManualNo: r.purchaseReturnManualNo || '—',
       purchaseNo: r.purchaseNo,
       returnDate: r.returnDate,
       supplierName: r.supplierName,
@@ -1501,7 +1503,8 @@ export const PurchaseReturnView: React.FC = () => {
       subtitle: `Total Returns: ${listToExport.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
-        { header: 'Return #', key: 'returnNo', align: 'center', width: 18 },
+        { header: 'Return ID', key: 'returnNo', align: 'center', width: 18 },
+        { header: 'Return No.', key: 'purchaseReturnManualNo', align: 'center', width: 16 },
         { header: 'Purchase PO #', key: 'purchaseNo', align: 'center', width: 16 },
         { header: 'Return Date', key: 'returnDate', align: 'center', width: 14 },
         { header: 'Supplier Name', key: 'supplierName', align: 'left', width: 24 },
@@ -1535,6 +1538,8 @@ export const PurchaseReturnView: React.FC = () => {
       partyTitle: 'Supplier / Vendor',
       partyName: pret.supplierName,
       extraMeta: [
+        { label: 'Return ID', value: pret.returnNo },
+        ...(pret.purchaseReturnManualNo ? [{ label: 'Return No', value: pret.purchaseReturnManualNo }] : []),
         { label: 'Original Purchase Bill', value: pret.purchaseNo || 'N/A' },
         { label: 'Refund Method / Status', value: pret.refundStatus },
       ],
@@ -1599,6 +1604,7 @@ export const PurchaseReturnView: React.FC = () => {
     onRows: (listToPrint) => {
     const printRows = listToPrint.map((r) => ({
       returnNo: r.returnNo,
+      purchaseReturnManualNo: r.purchaseReturnManualNo || '—',
       returnDate: r.returnDate,
       purchaseNo: r.purchaseNo,
       supplierName: r.supplierName,
@@ -1613,7 +1619,8 @@ export const PurchaseReturnView: React.FC = () => {
       title: 'Purchase Returns & Debit Notes Report',
       subtitle: `Total Returns: ${listToPrint.length} | Status Filter: ${appliedStatus} | Refund Filter: ${appliedRefundStatus}`,
       columns: [
-        { header: 'Debit Note #', key: 'returnNo', width: '16%' },
+        { header: 'Return ID', key: 'returnNo', width: '12%' },
+        { header: 'Return No.', key: 'purchaseReturnManualNo', width: '10%' },
         { header: 'Return Date', key: 'returnDate', width: '12%' },
         { header: 'Purchase Bill #', key: 'purchaseNo', width: '16%' },
         { header: 'Supplier Name', key: 'supplierName', width: '22%' },
@@ -1854,7 +1861,8 @@ export const PurchaseReturnView: React.FC = () => {
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
             <CommonTableHead
                 columns={[
-                  { label: "RETURN NO & DATE", align: "center", minWidth: "160px" },
+                  { label: "RETURN ID & DATE", align: "center", minWidth: "160px" },
+                  { label: "RETURN NO.", align: "center", minWidth: "130px" },
                   { label: "ORIGINAL PURCHASE", align: "left", minWidth: "150px" },
                   { label: "SUPPLIER", align: "left", minWidth: "180px" },
                   { label: "ITEMS RETURNED", align: "left", minWidth: "150px" },
@@ -1866,14 +1874,14 @@ export const PurchaseReturnView: React.FC = () => {
             <tbody className="text-sm">
               {isApiLoading && paginatedReturns.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-16 text-center text-slate-500 border border-slate-200">
+                  <td colSpan={8} className="py-16 text-center text-slate-500 border border-slate-200">
                     <Loader2 className="w-8 h-8 mx-auto mb-2 text-[#33077C] animate-spin" />
                     <p className="font-semibold text-slate-700 text-sm">Fetching purchase returns...</p>
                   </td>
                 </tr>
               ) : paginatedReturns.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <ArrowDownLeft className="w-10 h-10 mx-auto mb-2 text-slate-300 stroke-[1.5]" />
                     <p className="font-semibold text-slate-600 text-sm">No purchase returns recorded</p>
                     <p className="text-xs text-slate-400 mt-1">
@@ -1895,6 +1903,11 @@ export const PurchaseReturnView: React.FC = () => {
                         </span>
                         <span className="text-xs text-slate-400 font-medium">{formatDate(pret.returnDate)}</span>
                       </div>
+                    </td>
+
+                    {/* 1b. Return No. (manual) */}
+                    <td className="py-3.5 px-3 font-semibold text-slate-700 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                      {pret.purchaseReturnManualNo || "—"}
                     </td>
 
                     {/* 2. Original Purchase */}

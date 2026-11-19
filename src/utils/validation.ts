@@ -427,3 +427,35 @@ export const normalizePhoneForSave = (val?: string | null): string => {
   const national = normalizeIndianPhoneTo10Digits(v);
   return national ? `+91${national}` : "";
 };
+
+/** Allowed characters for Invoice / Proforma Invoice numbers: letters, digits, and hyphen (-). */
+export const DOCUMENT_NUMBER_REGEX = /^[a-zA-Z0-9-]+$/;
+
+export const DOCUMENT_NUMBER_ERROR_MESSAGE =
+  "Only letters, numbers, and hyphens (-) are allowed.";
+
+/** Strips any character other than A-Z, a-z, 0-9, and hyphen (-) from a document number input. */
+export const sanitizeDocumentNumberInput = (val: string): string =>
+  val.replace(/[^a-zA-Z0-9-]/g, "");
+
+/** Returns true when a non-empty document number contains only letters, digits, and hyphens (-). */
+export const isValidDocumentNumber = (val?: string | null): boolean => {
+  const trimmed = (val ?? "").trim();
+  return trimmed.length > 0 && DOCUMENT_NUMBER_REGEX.test(trimmed);
+};
+
+/** HSN / SAC codes contain digits only (no letters or special characters). */
+export const HSN_CODE_REGEX = /^\d+$/;
+
+export const HSN_CODE_ERROR_MESSAGE =
+  "HSN / SAC code must contain digits only.";
+
+/** Strips any non-digit character from an HSN / SAC code input. */
+export const sanitizeHsnCodeInput = (val: string): string =>
+  val.replace(/\D/g, "");
+
+/** Returns true when HSN / SAC code is empty (optional) or digits only. */
+export const isValidHsnCode = (val?: string | null): boolean => {
+  const trimmed = (val ?? "").trim();
+  return trimmed.length === 0 || HSN_CODE_REGEX.test(trimmed);
+};

@@ -669,7 +669,7 @@ export const PurchaseRequestView: React.FC = () => {
               productId: availableProducts[0]?.id || '',
               productName: availableProducts[0]?.productName || '',
               currentStock: availableProducts[0]?.openingStock ?? 0,
-              requestedQuantity: 1,
+              requestedQuantity: 0,
               estimatedUnitPrice: availableProducts[0]?.purchasePrice ?? 0,
               requiredDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
               remarks: '',
@@ -706,7 +706,7 @@ export const PurchaseRequestView: React.FC = () => {
               productId: availableProducts[0]?.id || '',
               productName: availableProducts[0]?.productName || '',
               currentStock: availableProducts[0]?.openingStock ?? 0,
-              requestedQuantity: 1,
+              requestedQuantity: 0,
               estimatedUnitPrice: availableProducts[0]?.purchasePrice ?? 0,
               requiredDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
               remarks: '',
@@ -774,7 +774,7 @@ export const PurchaseRequestView: React.FC = () => {
       productId: '',
       productName: '',
       currentStock: 0,
-      requestedQuantity: 1,
+      requestedQuantity: 0,
       estimatedUnitPrice: 0,
       requiredDate: requiredDate,
       remarks: '',
@@ -1123,6 +1123,7 @@ export const PurchaseRequestView: React.FC = () => {
       return {
         sNo: idx + 1,
         requestNo: r.requestNo,
+        purchaseRequestManualNo: r.purchaseRequestManualNo || '—',
         requestDate: r.requestDate,
         requestedBy: r.requestedBy,
         department: r.department,
@@ -1144,7 +1145,8 @@ export const PurchaseRequestView: React.FC = () => {
       subtitle: `Total Requests: ${listToExport.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
-        { header: 'Request #', key: 'requestNo', align: 'center', width: 14 },
+        { header: 'Request ID', key: 'requestNo', align: 'center', width: 14 },
+        { header: 'Request No.', key: 'purchaseRequestManualNo', align: 'center', width: 14 },
         { header: 'Request Date', key: 'requestDate', align: 'center', width: 14 },
         { header: 'Requested By', key: 'requestedBy', align: 'left', width: 20 },
         { header: 'Department', key: 'department', align: 'left', width: 18 },
@@ -1184,6 +1186,8 @@ export const PurchaseRequestView: React.FC = () => {
       partyName: req.requestedBy,
       partyCompany: `Department: ${req.department}`,
       extraMeta: [
+        { label: 'Request ID', value: req.requestNo },
+        ...(req.purchaseRequestManualNo ? [{ label: 'Request No', value: req.purchaseRequestManualNo }] : []),
         { label: 'Priority', value: req.priority },
         ...(req.supplierName ? [{ label: 'Suggested Supplier', value: req.supplierName }] : []),
         ...(req.rejectionReason ? [{ label: 'Rejection Reason', value: req.rejectionReason }] : []),
@@ -1258,6 +1262,7 @@ export const PurchaseRequestView: React.FC = () => {
       );
       return {
         requestNo: r.requestNo,
+        purchaseRequestManualNo: r.purchaseRequestManualNo || '—',
         requestDate: r.requestDate,
         requestedBy: `${r.requestedBy} (${r.department})`,
         priority: r.priority,
@@ -1273,7 +1278,8 @@ export const PurchaseRequestView: React.FC = () => {
       title: 'Purchase Requisitions & Requests Report',
       subtitle: `Total Requests: ${listToPrint.length} | Status Filter: ${appliedStatus} | Priority: ${appliedPriority}`,
       columns: [
-        { header: 'Request #', key: 'requestNo', width: '15%' },
+        { header: 'Request ID', key: 'requestNo', width: '12%' },
+        { header: 'Request No.', key: 'purchaseRequestManualNo', width: '12%' },
         { header: 'Date', key: 'requestDate', width: '12%' },
         { header: 'Requested By & Department', key: 'requestedBy', width: '25%' },
         { header: 'Priority', key: 'priority', align: 'center', width: '12%' },
@@ -1535,7 +1541,8 @@ export const PurchaseRequestView: React.FC = () => {
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
             <CommonTableHead
               columns={[
-                { label: "REQUEST NO.", align: "center", minWidth: "140px" },
+                { label: "REQUEST ID", align: "center", minWidth: "140px" },
+                { label: "REQUEST NO.", align: "center", minWidth: "130px" },
                 { label: "DATE", align: "left", minWidth: "120px" },
                 { label: "REQUESTED BY", align: "left", minWidth: "160px" },
                 { label: "DEPARTMENT", align: "left", minWidth: "140px" },
@@ -1548,7 +1555,7 @@ export const PurchaseRequestView: React.FC = () => {
             <tbody className="text-sm">
               {isApiLoading && paginatedRequests.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={9} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <Loader2 className="w-8 h-8 mx-auto mb-2 text-[#33077C] animate-spin" />
                     <p className="font-semibold text-slate-600 text-sm">Loading purchase requests...</p>
                     <p className="text-xs text-slate-400 mt-1">Connecting to Commerce API</p>
@@ -1556,7 +1563,7 @@ export const PurchaseRequestView: React.FC = () => {
                 </tr>
               ) : paginatedRequests.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={9} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <FilePlus className="w-10 h-10 mx-auto mb-2 text-slate-300 stroke-[1.5]" />
                     <p className="font-semibold text-slate-600 text-sm">No purchase requests found</p>
                     <p className="text-xs text-slate-400 mt-1">Submit a new requisition to order supplies.</p>
@@ -1575,6 +1582,11 @@ export const PurchaseRequestView: React.FC = () => {
                           {req.requestNo}
                         </span>
                       </div>
+                    </td>
+
+                    {/* 1b. Request No. (manual) */}
+                    <td className="py-3.5 px-3 font-semibold text-slate-700 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                      {req.purchaseRequestManualNo || "—"}
                     </td>
 
                     {/* 2. Date */}

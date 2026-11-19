@@ -148,6 +148,7 @@ import { SaleTransaction } from "../../../store/useSalesManagementStore";
 import {
   isValidIndianPhone,
   normalizeIndianPhoneTo10Digits,
+  sanitizeHsnCodeInput,
 } from "../../../utils/validation";
 import { store } from "../../../store/store";
 import { baseApi } from "../../../api/baseApi";
@@ -186,6 +187,7 @@ import {
 } from "../../../utils/formValidation";
 import { useBatchStock } from "../../../hooks/useBatchStock";
 import { FormError } from "../../../components/common/FormError";
+import { ImageAttachmentBox } from "../utils/ImageAttachmentBox";
 import { evictApiCache } from "../../../api/queryCache";
 import { DateInput } from "../../../components/common/DateInput";
 
@@ -754,7 +756,7 @@ export const EstimateQuotationView: React.FC = () => {
         id: `row_${Date.now()}_1`,
         productId: "",
         productName: "",
-        quantity: 1,
+        quantity: 0,
         unit: "NONE",
         unitPrice: 0,
         discountPercent: 0,
@@ -795,7 +797,7 @@ export const EstimateQuotationView: React.FC = () => {
             id: `row_${Date.now()}_1`,
             productId: "",
             productName: "",
-            quantity: 1,
+            quantity: 0,
             unit: "NONE",
             unitPrice: 0,
             discountPercent: 0,
@@ -1099,29 +1101,55 @@ export const EstimateQuotationView: React.FC = () => {
       })
       .catch((err) => console.warn("Customer load error:", err));
 
-    stockApi
-      .getStocks({ pagination_required: false, page_size: 100 })
-      .then((res) => {
-        if (isMounted && res.data && Array.isArray(res.data)) {
-          const mapped = res.data.map(mapApiStockToInventoryStockItem);
-          setLiveStocks(mapped);
-        }
-      })
-      .catch((err) => console.warn("Stock load error:", err));
-
-    stockApi
-      .getStockBatches({ pagination_required: false, page_size: 100 })
-      .then((res) => {
-        if (isMounted && res.data && Array.isArray(res.data)) {
-          setLiveBatches(res.data);
-        }
-      })
-      .catch((err) => console.warn("Stock batches load error:", err));
-
     return () => {
       isMounted = false;
     };
   }, [viewMode, liveProducts.length, fetchLiveProducts]);
+
+  // Stocks and batches are live (never cached) and only needed by the item rows, so they are NOT loaded when the form
+  // opens. They load on the first product dropdown open, or once the form holds a line item (edit / convert / duplicate).
+  const stockDataLoadedRef = useRef(false);
+  const batchDataLoadedRef = useRef(false);
+  const ensureStocks = useCallback(() => {
+    if (stockDataLoadedRef.current) return;
+    stockDataLoadedRef.current = true;
+    stockApi
+      .getStocks({ pagination_required: false, page_size: 100 })
+      .then((res) => {
+        if (res.data && Array.isArray(res.data)) {
+          setLiveStocks(res.data.map(mapApiStockToInventoryStockItem));
+        }
+      })
+      .catch((err) => {
+        stockDataLoadedRef.current = false;
+        console.warn("Stock load error:", err);
+      });
+  }, []);
+  const ensureBatches = useCallback(() => {
+    if (batchDataLoadedRef.current) return;
+    batchDataLoadedRef.current = true;
+    stockApi
+      .getStockBatches({ pagination_required: false, page_size: 100 })
+      .then((res) => {
+        if (res.data && Array.isArray(res.data)) {
+          setLiveBatches(res.data);
+        }
+      })
+      .catch((err) => {
+        batchDataLoadedRef.current = false;
+        console.warn("Stock batches load error:", err);
+      });
+  }, []);
+
+  // Existing document opened with line items: its quantities / batches must display, so load stock data now.
+  const formHasLineItems = (formData.items || []).some(
+    (it: any) => it && (it.productId || it.productName),
+  );
+  useEffect(() => {
+    if (viewMode !== "form" || !formHasLineItems) return;
+    ensureStocks();
+    ensureBatches();
+  }, [viewMode, formHasLineItems, ensureStocks, ensureBatches]);
 
   // Clean products list: live products from Commerce API + inventory stocks + stock batches
   const availableProducts = useMemo(() => {
@@ -1313,6 +1341,8 @@ export const EstimateQuotationView: React.FC = () => {
   useEffect(() => {
     if (openProductDropdownRow === null || openProductDropdownRow === undefined)
       return;
+    stockDataLoadedRef.current = true; // this open fetches fresh stock itself
+    ensureBatches();
     let cancelled = false;
     stockApi
       .getStocks({ pagination_required: false, page_size: 100 })
@@ -1328,7 +1358,7 @@ export const EstimateQuotationView: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [openProductDropdownRow]);
+  }, [openProductDropdownRow, ensureBatches]);
 
   const matchingProducts = useMemo(() => {
     const q = productSearchQuery.toLowerCase().trim();
@@ -1371,6 +1401,7 @@ export const EstimateQuotationView: React.FC = () => {
         (item.referenceNo &&
           String(item.referenceNo).toLowerCase().includes(q)) ||
         item.quotationNo.toLowerCase().includes(q) ||
+        (item.estimateManualNo || "").toLowerCase().includes(q) ||
         (item.customerPhone && item.customerPhone.includes(q)) ||
         (item.customerCompany &&
           item.customerCompany.toLowerCase().includes(q)) ||
@@ -1466,7 +1497,7 @@ export const EstimateQuotationView: React.FC = () => {
         id: `row_${Date.now()}_1`,
         productId: "",
         productName: "",
-        quantity: 1,
+        quantity: 0,
         unit: "NONE",
         unitPrice: 0,
         discountPercent: 0,
@@ -1742,7 +1773,7 @@ export const EstimateQuotationView: React.FC = () => {
                 id: `row_${Date.now()}`,
                 productId: "",
                 productName: "",
-                quantity: 1,
+                quantity: 0,
                 unit: "NONE",
                 unitPrice: 0,
                 discountPercent: 0,
@@ -1852,7 +1883,7 @@ export const EstimateQuotationView: React.FC = () => {
       id: `row_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       productId: "",
       productName: "",
-      quantity: 1,
+      quantity: 0,
       unit: "NONE",
       unitPrice: 0,
       discountPercent: 0,
@@ -3367,6 +3398,7 @@ export const EstimateQuotationView: React.FC = () => {
 
       return {
         estimateNo: q.quotationNo,
+        estimateManualNo: q.estimateManualNo || "—",
         createdDateTime: created ? created.full : q.date,
         convertedDateTime: converted ? converted.full : "—",
         customerCode: code || "—",
@@ -3385,8 +3417,14 @@ export const EstimateQuotationView: React.FC = () => {
       subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${rows.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
       columns: [
         {
-          header: "Estimate No.",
+          header: "Estimate ID",
           key: "estimateNo",
+          align: "center",
+          width: 18,
+        },
+        {
+          header: "Estimate No.",
+          key: "estimateManualNo",
           align: "center",
           width: 18,
         },
@@ -3484,6 +3522,7 @@ export const EstimateQuotationView: React.FC = () => {
 
       return {
         quotationNo: q.quotationNo,
+        estimateManualNo: q.estimateManualNo || "—",
         createdDateTime: created ? created.full : isoToDdmmyyyy(q.date),
         convertedDateTime: converted ? converted.full : "—",
         partyName: code ? `${q.partyName} (${code})` : q.partyName,
@@ -3499,10 +3538,16 @@ export const EstimateQuotationView: React.FC = () => {
       subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${rows.length}`,
       columns: [
         {
-          header: "Estimate No.",
+          header: "Estimate ID",
           key: "quotationNo",
           align: "center",
-          width: "13%",
+          width: "11%",
+        },
+        {
+          header: "Estimate No.",
+          key: "estimateManualNo",
+          align: "center",
+          width: "11%",
         },
         {
           header: "Created Date & Time",
@@ -3594,6 +3639,10 @@ export const EstimateQuotationView: React.FC = () => {
       partyEmail: quot.customerEmail,
       partyAddress: quot.billingAddress,
       extraMeta: [
+        { label: "Estimate ID", value: quot.quotationNo },
+        ...(quot.estimateManualNo
+          ? [{ label: "Estimate No", value: quot.estimateManualNo }]
+          : []),
         ...(quot.referenceNo
           ? [{ label: "Ref #", value: quot.referenceNo }]
           : []),
@@ -3718,8 +3767,9 @@ export const EstimateQuotationView: React.FC = () => {
             <div>
               <div class="doc-title">ESTIMATE / QUOTATION</div>
               <div style="font-size: 12px; color: #64748b; text-align: right; margin-top: 4px;">
-                Quotation #: <strong>${quot.quotationNo}</strong>
+                Estimate ID: <strong>${quot.quotationNo}</strong>
               </div>
+              ${quot.estimateManualNo ? `<div style="font-size: 12px; color: #64748b; text-align: right; margin-top: 2px;">Estimate No: <strong>${quot.estimateManualNo}</strong></div>` : ""}
               <div style="text-align: right; margin-top: 4px;">
                 <span class="badge">${quot.status.toUpperCase()}</span>
               </div>
@@ -4736,9 +4786,10 @@ export const EstimateQuotationView: React.FC = () => {
                         <td className="p-1.5 border-r border-slate-200">
                           <input
                             type="text"
+                            inputMode="numeric"
                             value={row.hsnCode || ""}
                             onChange={(e) =>
-                              handleRowChange(idx, "hsnCode", e.target.value)
+                              handleRowChange(idx, "hsnCode", sanitizeHsnCodeInput(e.target.value))
                             }
                             placeholder="HSN / SAC"
                             className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-mono font-medium text-slate-700 outline-none transition-colors"
@@ -5275,33 +5326,11 @@ export const EstimateQuotationView: React.FC = () => {
                 )}
 
                 {showImageSection && (
-                  <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-2 animate-in fade-in duration-100 text-xs">
-                    <FormLabel>Attach Image</FormLabel>
-                    <div className="flex items-center gap-3">
-                      <label className="px-3 py-1.5 bg-white border border-slate-200 hover:border-[#33077C] rounded-lg font-semibold text-slate-700 cursor-pointer flex items-center gap-1.5 transition-colors">
-                        <ImageIcon className="w-3.5 h-3.5 text-[#33077C]" />
-                        <span>Choose Image</span>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={(e) => {
-                            if (e.target.files?.[0]) {
-                              setAttachedImageName(e.target.files[0].name);
-                              toast.success(
-                                `Image "${e.target.files[0].name}" attached!`,
-                              );
-                            }
-                          }}
-                        />
-                      </label>
-                      {attachedImageName && (
-                        <span className="text-slate-600 font-medium truncate max-w-xs">
-                          {attachedImageName}
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                  <ImageAttachmentBox
+                    attachedImageName={attachedImageName}
+                    onImageSelect={(fileName) => setAttachedImageName(fileName)}
+                    onImageClear={() => setAttachedImageName(null)}
+                  />
                 )}
 
                 {showDocumentSection && (
@@ -5731,7 +5760,8 @@ export const EstimateQuotationView: React.FC = () => {
             {/* Table Purple Themed Header with Standard Icons */}
             <CommonTableHead
               columns={[
-                { label: "ESTIMATE S.NO.", align: "center", minWidth: "140px" },
+                { label: "ESTIMATE ID", align: "center", minWidth: "140px" },
+                { label: "ESTIMATE NO.", align: "center", minWidth: "130px" },
                 { label: "CUSTOMER NAME", align: "left", minWidth: "200px" },
                 {
                   label: "CREATED DATE & TIME",
@@ -5753,7 +5783,7 @@ export const EstimateQuotationView: React.FC = () => {
               {isApiLoading ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="py-16 text-center text-slate-500 font-medium"
                   >
                     <div className="inline-flex flex-col items-center justify-center gap-2">
@@ -5767,7 +5797,7 @@ export const EstimateQuotationView: React.FC = () => {
               ) : pagedQuotations.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="py-12 text-center text-slate-400 font-medium"
                   >
                     No estimate / quotation transactions found. Click "+ Add
@@ -5854,6 +5884,11 @@ export const EstimateQuotationView: React.FC = () => {
                             className="justify-center"
                           />
                         </div>
+                      </td>
+
+                      {/* 1b. Estimate No. (manual number entered by user) */}
+                      <td className="py-3.5 px-3 font-semibold text-slate-700 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                        {item.estimateManualNo || "—"}
                       </td>
 
                       {/* 2. Customer Name with Customer ID */}
@@ -6187,6 +6222,11 @@ export const EstimateQuotationView: React.FC = () => {
                 <div className="font-mono text-xl sm:text-2xl font-black text-[#33077C] tracking-tight">
                   #{previewQuotation.quotationNo}
                 </div>
+                {previewQuotation.estimateManualNo && (
+                  <div className="text-slate-600 font-semibold mt-0.5">
+                    Estimate No: {previewQuotation.estimateManualNo}
+                  </div>
+                )}
                 <div className="text-slate-500 mt-1">
                   Date: {isoToDdmmyyyy(previewQuotation.date)}
                 </div>

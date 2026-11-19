@@ -1,4 +1,9 @@
 import { CommonTableHead } from '../../components/common/CommonTableHead';
+import {
+  sanitizeDocumentNumberInput,
+  isValidDocumentNumber,
+  DOCUMENT_NUMBER_ERROR_MESSAGE,
+} from '../../utils/validation';
 import React, { useState, useMemo } from 'react';
 import {
   Clock,
@@ -240,6 +245,10 @@ export const PendingDuesView: React.FC = () => {
 
   const handleSaveDue = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isValidDocumentNumber(formData.invoiceNo)) {
+      toast.error(DOCUMENT_NUMBER_ERROR_MESSAGE);
+      return;
+    }
     const total = parseFloat(formData.totalAmount) || 0;
     const paid = parseFloat(formData.paidAmount) || 0;
     const due = Math.max(0, total - paid);
@@ -921,7 +930,12 @@ export const PendingDuesView: React.FC = () => {
                 type="text"
                 required
                 value={formData.invoiceNo}
-                onChange={(e) => setFormData({ ...formData, invoiceNo: e.target.value })}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    invoiceNo: sanitizeDocumentNumberInput(e.target.value),
+                  })
+                }
                 placeholder="e.g. INV-2026-001"
                 className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#33077C]/20 focus:border-[#33077C]"
               />

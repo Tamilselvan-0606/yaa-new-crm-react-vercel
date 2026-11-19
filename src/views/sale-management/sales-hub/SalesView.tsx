@@ -35,6 +35,7 @@ import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import {
   downloadBusinessDocument,
+  printBusinessDocument,
   DocumentPrintOptions,
 } from "../../../utils/printUtils";
 import { useCompanyDocumentProfile } from "../../../hooks/useCompanyDocumentProfile";
@@ -43,6 +44,7 @@ import { salesRepresentativeApi } from "../../../api/commerce/salesRepresentativ
 import { collectionApi } from "../../../api/commerce/collectionApi";
 import { useAppDispatch } from "../../../hooks/redux";
 import { baseApi } from "../../../api/baseApi";
+import { commerceSalesReturnApi } from "../../../api/commerce/salesReturnApi";
 import {
   commerceInvoiceApi,
   mapApiInvoiceToSaleTransaction,
@@ -123,7 +125,6 @@ import {
   printSalesInvoicesReport,
 } from "./sales-invoice/salesInvoiceReports";
 import {
-  buildSalesInvoicePrintHtml,
   mapSaleToDocumentPrintOptions as mapSaleToDocumentPrintOptionsPure,
 } from "./sales-invoice/salesInvoiceDocument";
 import type {
@@ -315,7 +316,7 @@ export const SalesView: React.FC = () => {
           productName: "",
           sku: "",
           batch: "",
-          quantity: 1,
+          quantity: 0,
           purchasePrice: 0,
           salesPrice: 0,
           unitPrice: 0,
@@ -632,6 +633,14 @@ export const SalesView: React.FC = () => {
 
     if (hasLoadedProductsRef.current) return;
     hasLoadedProductsRef.current = true;
+  }, [fetchLiveProducts]);
+
+  // Stocks and batches are live data: they load on the first product dropdown open, or when the form already holds
+  // items (edit / duplicate / convert) - not merely because the form modal opened.
+  const hasLoadedStockDataRef = useRef(false);
+  const ensureStockData = useCallback(async () => {
+    if (hasLoadedStockDataRef.current) return;
+    hasLoadedStockDataRef.current = true;
     try {
       const stockRes = await stockApi
         .getStocks({ pagination_required: false, page_size: 100 })
@@ -657,7 +666,7 @@ export const SalesView: React.FC = () => {
     } catch (err) {
       console.warn("Failed to load batches for form modal in SalesView:", err);
     }
-  }, [fetchLiveProducts, setStocksList]);
+  }, [setStocksList]);
 
   useEffect(() => {
     if (isFormModalOpen) {
@@ -1171,6 +1180,11 @@ export const SalesView: React.FC = () => {
   useEffect(() => {
     if (openProductDropdownRow === null || openProductDropdownRow === undefined)
       return;
+    // First open loads stocks + batches; later opens only refresh the stock quantities.
+    if (!hasLoadedStockDataRef.current) {
+      ensureStockData();
+      return;
+    }
     let cancelled = false;
     stockApi
       .getStocks({ pagination_required: false, page_size: 100 })
@@ -1185,7 +1199,15 @@ export const SalesView: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [openProductDropdownRow]);
+  }, [openProductDropdownRow, ensureStockData]);
+
+  // An existing invoice (edit / duplicate / convert) already has items: load stock so quantities and batches resolve.
+  const formHasItems = Boolean(
+    formData.items?.some((i: any) => i.productId || i.productName),
+  );
+  useEffect(() => {
+    if (isFormModalOpen && formHasItems) ensureStockData();
+  }, [isFormModalOpen, formHasItems, ensureStockData]);
 
   const matchingProducts = useMemo(() => {
     const q = productSearchQuery.toLowerCase().trim();
@@ -1244,7 +1266,7 @@ export const SalesView: React.FC = () => {
       productName: "",
       sku: "",
       batch: "",
-      quantity: 1,
+      quantity: 0,
       purchasePrice: 0,
       salesPrice: 0,
       unitPrice: 0,
@@ -1302,6 +1324,7 @@ export const SalesView: React.FC = () => {
       } catch (err) {
         console.warn("Could not fetch fresh invoice details:", err);
       }
+      targetSale = await withSalesReturns(targetSale);
     }
     setSelectedSale(targetSale);
     setIsInvoiceModalOpen(true);
@@ -1444,6 +1467,26 @@ export const SalesView: React.FC = () => {
   ): DocumentPrintOptions =>
     mapSaleToDocumentPrintOptionsPure(sale, companyProfile);
 
+  // Adds the total of the invoice's sales returns (when the invoice response did not carry it).
+  const withSalesReturns = async (
+    sale: SaleTransaction,
+  ): Promise<SaleTransaction> => {
+    if (sale.totalReturned !== undefined || !UUID_REGEX.test(sale.id)) return sale;
+    try {
+      const res = await commerceSalesReturnApi.getSalesReturns({
+        invoiceId: sale.id,
+        pagination_required: false,
+      });
+      const total = (res?.data || [])
+        .filter((r) => !/^(rejected|cancelled|void)/i.test(String(r.returnStatus || "")))
+        .reduce((sum, r) => sum + (Number(r.returnAmount) || 0), 0);
+      return { ...sale, totalReturned: Math.round(total * 100) / 100 };
+    } catch (err) {
+      console.warn("Could not load sales returns for invoice:", err);
+      return sale;
+    }
+  };
+
   // Load the latest record (GET /commerce/invoices/:id) so print / download use server data
   const fetchLatestInvoice = async (
     sale: SaleTransaction,
@@ -1451,7 +1494,7 @@ export const SalesView: React.FC = () => {
     if (!UUID_REGEX.test(sale.id)) return sale;
     try {
       const res = await commerceInvoiceApi.getInvoiceById(sale.id);
-      if (res?.data) return mapApiInvoiceToSaleTransaction(res.data);
+      if (res?.data) return withSalesReturns(mapApiInvoiceToSaleTransaction(res.data));
     } catch (err) {
       console.warn("Could not fetch latest invoice for print/download:", err);
     }
@@ -1545,16 +1588,8 @@ export const SalesView: React.FC = () => {
   // Direct Print Invoice
   const handlePrintSaleInvoice = async (listSale: SaleTransaction) => {
     const sale = await fetchLatestInvoice(listSale);
-    const printWindow = window.open("", "_blank", "width=850,height=900");
-    if (!printWindow) {
-      toast.error("Unable to open print preview. Please allow popups.");
-      return;
-    }
-
-    printWindow.document.write(
-      buildSalesInvoicePrintHtml(sale, companyProfile),
-    );
-    printWindow.document.close();
+    // Same shared document layout as the purchase bill / other documents.
+    await printBusinessDocument(mapSaleToDocumentPrintOptions(sale));
   };
 
   const handleToggleWithGst = (enableGst: boolean) => {
@@ -1834,7 +1869,7 @@ export const SalesView: React.FC = () => {
       productName: "",
       sku: "",
       batch: "",
-      quantity: 1,
+      quantity: 0,
       unitPrice: 0,
       taxPercent: 0,
       discountPercent: 0,
@@ -3320,6 +3355,7 @@ export const SalesView: React.FC = () => {
       const matchesSearch =
         !q ||
         s.invoiceNo.toLowerCase().includes(q) ||
+        (s.salesInvoiceManualNo || "").toLowerCase().includes(q) ||
         s.customerName.toLowerCase().includes(q) ||
         (s.customerCompany || "").toLowerCase().includes(q) ||
         s.items.some((it) => it.productName.toLowerCase().includes(q)) ||
@@ -4093,7 +4129,9 @@ export const SalesView: React.FC = () => {
             ...prev.filter((p) => p.id !== pId),
           ]);
           hasLoadedProductsRef.current = false;
+          hasLoadedStockDataRef.current = false;
           loadProductAndStockData();
+          ensureStockData();
           if (activeItemRowIndex !== null) {
             handleItemProductChange(activeItemRowIndex, pId);
           }

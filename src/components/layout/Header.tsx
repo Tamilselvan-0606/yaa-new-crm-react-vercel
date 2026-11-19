@@ -27,6 +27,7 @@ import {
 
 import { api } from '../../services/api';
 import { Branch } from '../../types';
+import { normalizeSuite, readSuiteMap } from '../../utils/branchSuite';
 import { subOrganizationApi, branchApi, clientProductApi, getStoredOrganizationId } from '../../api';
 import { useActiveOrgType } from '../../hooks/useActiveOrgType';
 import { formatDateTimeAmPm } from '../../api/platform/adminNotificationApi';
@@ -453,7 +454,9 @@ export const Header: React.FC<HeaderProps> = ({
               item.location ||
               item.branch_location ||
               '',
-            organizationType: normalizeTypeString(item.organizationType || item.organizationTypeName || ''),
+            // The API may send the type as a name or as 1 / 2 / 3; normalizeSuite reads both
+            organizationType:
+              normalizeSuite(item.organizationType ?? item.organization_type ?? item.branchType ?? item.organizationTypeName) || '',
             status: item.status || 'Active',
             subOrganizationId:
               item.subOrganizationId ||
@@ -476,20 +479,30 @@ export const Header: React.FC<HeaderProps> = ({
   }, [branchChangeTrigger, currentUser, isSalesMode, isSuperAdmin]); // not keyed on the draft: choosing a sub-organization filters this list locally, with no API call
 
   const branches = useMemo<Branch[]>(() => {
-    const isMatch = (bTypeStr?: any) => {
-      const bType = String(normalizeTypeString(bTypeStr) || '').toLowerCase();
-      return isSalesMode
-        ? bType.includes('sale')
-        : bType.includes('client') || !bType.includes('sale');
+    // Same rule as the Branches page: the branch's own type, else the type remembered for it,
+    // else the type of its sub-organization. "All" belongs to both Client and Sales Management.
+    const suiteMap = readSuiteMap();
+    const isMatch = (b: Branch) => {
+      let suite = (normalizeSuite(b.organizationType) || suiteMap[b.id] || '').toLowerCase();
+      if (!suite) {
+        const sub = apiSubOrgs.find((s) => s.id === b.subOrganizationId);
+        if (sub) {
+          const code = Number(sub.subOrganizationType);
+          suite =
+            code === 1 ? 'client' : code === 2 ? 'sales' : code === 3 ? 'all' : (normalizeSuite(sub.organizationType) || '').toLowerCase();
+        }
+      }
+      if (suite === 'all') return true;
+      return isSalesMode ? suite.includes('sale') : !suite.includes('sale');
     };
     return apiBranches.filter((b) => {
-      if (!isMatch(b.organizationType)) return false;
+      if (!isMatch(b)) return false;
       if (currentSubOrgId) {
         return b.subOrganizationId === currentSubOrgId;
       }
       return true;
     });
-  }, [isSalesMode, apiBranches, currentSubOrgId]);
+  }, [isSalesMode, apiBranches, apiSubOrgs, currentSubOrgId]);
 
   const branchOptions = useMemo(() => {
     const list: { id: string; name: string; fullBranchName: string; location?: string }[] = [
@@ -1464,19 +1477,6 @@ export const Header: React.FC<HeaderProps> = ({
                   </>
                 ) : (
                   <>
-                    {(isOrgSuperAdmin || isOrgAdmin) && (
-                      <button
-                        onClick={() => {
-                          setIsUserSwitcherOpen(false);
-                          navigate('/organization');
-                        }}
-                        className="w-full flex items-center gap-3 px-3.5 py-2.5 text-sm font-semibold text-slate-800 hover:text-slate-900 hover:bg-slate-50 rounded-xl transition-colors cursor-pointer text-left"
-                      >
-                        <Building2 className="w-4.5 h-4.5 text-slate-600" strokeWidth={1.8} />
-                        <span>Sub Organization</span>
-                      </button>
-                    )}
-
                     <button
                       onClick={() => {
                         setIsUserSwitcherOpen(false);
@@ -1487,18 +1487,6 @@ export const Header: React.FC<HeaderProps> = ({
                     >
                       <User className="w-4.5 h-4.5 text-slate-600" strokeWidth={1.8} />
                       <span>Account</span>
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        setIsUserSwitcherOpen(false);
-                        if (onSelectTab) onSelectTab('employees');
-                        navigate('/employees');
-                      }}
-                      className="w-full flex items-center gap-3 px-3.5 py-2.5 text-sm font-semibold text-slate-800 hover:text-slate-900 hover:bg-slate-50 rounded-xl transition-colors cursor-pointer text-left"
-                    >
-                      <Users className="w-4.5 h-4.5 text-slate-600" strokeWidth={1.8} />
-                      <span>Team Members</span>
                     </button>
 
                     <button

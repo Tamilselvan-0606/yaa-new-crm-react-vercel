@@ -293,7 +293,7 @@ export const LoginView: React.FC = () => {
   const onResetSubmit = async (data: SetNewPasswordFields) => {
     try {
       const fullOtp = otpValues.join('');
-      await api.resetPassword(fullOtp, data.newPassword);
+      await api.resetPassword(submittedEmail, fullOtp, data.newPassword);
       setCurrentScreen('forgot-success');
       toast.success('Password has been reset successfully!');
       setTimeout(() => {

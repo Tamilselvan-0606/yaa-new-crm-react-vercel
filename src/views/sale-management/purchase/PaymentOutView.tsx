@@ -72,6 +72,7 @@ import { exportTableToExcel } from '../../../utils/excelExport';
 import { UniversalShareDropdown, formatPaymentOutShare } from '../../../utils/shareUtils';
 import { printBusinessDocument, printTableReport, downloadBusinessDocument, DocumentPrintOptions } from '../../../utils/printUtils';
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS, FORM_SELECT_CLS, getFormInputCls, handleNonNegativeKeyDown } from '../utils/formUtils';
+import { IMAGE_FILE_ACCEPT, validateImageFile } from '../utils/imageUpload';
 import { SaleActionDropdown } from '../utils';
 import { toast } from "../../../utils/toast";
 import { fetchAllReportRows, runReport } from "../../../utils/reportData";
@@ -788,6 +789,7 @@ export const PaymentOutView: React.FC = () => {
         const q = appliedSearch.toLowerCase().trim();
         const matchesSearch =
           p.paymentNo.toLowerCase().includes(q) ||
+          (p.paymentOutManualNo && p.paymentOutManualNo.toLowerCase().includes(q)) ||
           p.supplierName.toLowerCase().includes(q) ||
           (p.purchaseNo && p.purchaseNo.toLowerCase().includes(q)) ||
           (p.referenceNo && p.referenceNo.toLowerCase().includes(q));
@@ -979,6 +981,7 @@ export const PaymentOutView: React.FC = () => {
     const excelRows = filteredPayments.map((p, idx) => ({
       sNo: idx + 1,
       paymentNo: p.paymentNo,
+      paymentOutManualNo: p.paymentOutManualNo || '-',
       paymentDate: p.paymentDate,
       supplierName: p.supplierName,
       supplierCode: p.supplierCode || '-',
@@ -1001,7 +1004,8 @@ export const PaymentOutView: React.FC = () => {
       subtitle: `Total Payments: ${filteredPayments.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
-        { header: 'Payment Out #', key: 'paymentNo', align: 'center', width: 16 },
+        { header: 'Payment Out ID', key: 'paymentNo', align: 'center', width: 16 },
+        { header: 'Payment Out No.', key: 'paymentOutManualNo', align: 'center', width: 16 },
         { header: 'Payment Date', key: 'paymentDate', align: 'center', width: 14 },
         { header: 'Supplier Name', key: 'supplierName', align: 'left', width: 24 },
         { header: 'Linked Bill #', key: 'purchaseNo', align: 'left', width: 18 },
@@ -1040,6 +1044,8 @@ export const PaymentOutView: React.FC = () => {
       partyAddress: (matchedSup as any)?.billingAddress || (matchedSup as any)?.address,
       partyGstin: (matchedSup as any)?.gstNumber,
       extraMeta: [
+        { label: 'Payment Out ID', value: po.paymentNo },
+        ...(po.paymentOutManualNo ? [{ label: 'Payment Out No', value: po.paymentOutManualNo }] : []),
         { label: 'Payment Mode', value: po.paymentMode },
         { label: 'Against Bill #', value: po.purchaseNo || 'Direct / Advance Payment' },
         ...(po.referenceNo ? [{ label: 'UTR / Ref No', value: po.referenceNo }] : []),
@@ -1108,6 +1114,7 @@ export const PaymentOutView: React.FC = () => {
     onRows: (filteredPayments) => {
     const printRows = filteredPayments.map((p) => ({
       paymentNo: p.paymentNo,
+      paymentOutManualNo: p.paymentOutManualNo || '—',
       paymentDate: p.paymentDate,
       supplierName: p.supplierName,
       purchaseNo: p.purchaseNo || 'Direct / Advance',
@@ -1126,7 +1133,8 @@ export const PaymentOutView: React.FC = () => {
       title: 'Payment-Out & Vendor Disbursements Report',
       subtitle: `Total Payments: ${filteredPayments.length} | Period: ${appliedPeriod} | Mode: ${appliedPaymentMode}`,
       columns: [
-        { header: 'Payment Out #', key: 'paymentNo', width: '15%' },
+        { header: 'Payment Out ID', key: 'paymentNo', width: '12%' },
+        { header: 'Payment Out No.', key: 'paymentOutManualNo', width: '12%' },
         { header: 'Date', key: 'paymentDate', width: '12%' },
         { header: 'Supplier Name', key: 'supplierName', width: '24%' },
         { header: 'Bill Ref #', key: 'purchaseNo', width: '15%' },
@@ -1385,7 +1393,8 @@ export const PaymentOutView: React.FC = () => {
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
             <CommonTableHead
                 columns={[
-                  { label: "PAYMENT OUT NO", align: "center", minWidth: "140px" },
+                  { label: "PAYMENT OUT ID", align: "center", minWidth: "140px" },
+                  { label: "PAYMENT OUT NO.", align: "center", minWidth: "130px" },
                   { label: "DATE", align: "left", minWidth: "120px" },
                   { label: "SUPPLIER / VENDOR", align: "left", minWidth: "180px" },
                   { label: "PAYMENT MODE", align: "center", minWidth: "130px" },
@@ -1398,14 +1407,14 @@ export const PaymentOutView: React.FC = () => {
             <tbody className="text-sm">
               {isApiLoading ? (
                 <tr>
-                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={9} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <Loader2 className="w-8 h-8 mx-auto mb-2 text-[#33077C] animate-spin" />
                     <p className="font-semibold text-slate-600 text-sm">Fetching outward payments from Work API...</p>
                   </td>
                 </tr>
               ) : displayedPayments.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={9} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <CreditCard className="w-10 h-10 mx-auto mb-2 text-slate-300 stroke-[1.5]" />
                     <p className="font-semibold text-slate-600 text-sm">No payment outs found</p>
                     <p className="text-xs text-slate-400 mt-1">Record a new payment out when settling supplier dues</p>
@@ -1423,6 +1432,11 @@ export const PaymentOutView: React.FC = () => {
                         <div className="flex flex-col items-center justify-center gap-1">
                           <span>{po.paymentNo}</span>
                         </div>
+                      </td>
+
+                      {/* 1b. Payment Out No. (manual) */}
+                      <td className="py-3.5 px-3 font-semibold text-slate-700 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                        {po.paymentOutManualNo || '—'}
                       </td>
 
                       {/* 2. Date */}
@@ -1818,7 +1832,11 @@ export const PaymentOutView: React.FC = () => {
                   </span>
                   <button
                     type="button"
-                    onClick={() => setValue('receiptImage', '')}
+                    onClick={() => {
+                      setValue('receiptImage', '');
+                      setReceiptError(null);
+                      setReceiptFileProblem(null);
+                    }}
                     className="text-slate-400 hover:text-rose-500 transition-colors p-1 cursor-pointer"
                     title="Remove Image"
                   >
@@ -1831,14 +1849,20 @@ export const PaymentOutView: React.FC = () => {
                   <span>Upload Image / Receipt</span>
                   <input
                     type="file"
-                    accept="image/*"
+                    accept={IMAGE_FILE_ACCEPT}
                     className="hidden"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
+                      e.target.value = '';
                       if (file) {
-                        if (!(file.type && file.type.startsWith('image/'))) {
-                          setReceiptFileProblem('Please attach an image file for the receipt.');
-                          e.target.value = '';
+                        const validation = validateImageFile(file, {
+                          maxSizeBytes: 5 * 1024 * 1024,
+                          tooLargeMessage: 'The receipt image must be smaller than 5 MB.',
+                        });
+                        if (!validation.valid) {
+                          setReceiptError(validation.error);
+                          setReceiptFileProblem(null);
+                          toast.error(validation.error);
                           return;
                         }
                         setReceiptError(null);
@@ -2063,6 +2087,7 @@ export const PaymentOutView: React.FC = () => {
               { label: selectedPayment.paymentMode, tone: "primary" },
             ]}
             facts={[
+              { label: "Payment Out No", value: selectedPayment.paymentOutManualNo },
               { label: "Payment Date", value: selectedPayment.paymentDate ? formatDate(selectedPayment.paymentDate) : "" },
               { label: "Reference No", value: selectedPayment.referenceNo },
               { label: "Linked Bill", value: selectedPayment.purchaseNo },

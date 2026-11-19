@@ -1,5 +1,5 @@
 import { CommonTableHead } from '../../components/common/CommonTableHead';
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import {
   branchApi,
@@ -45,10 +45,11 @@ import {
   phoneNumber,
   PHONE_MAX_DIGITS,
   liveMobileStartError,
-  minLength,
   required,
   requiredWhen,
   pincodeMatching,
+  formatPhoneNumber,
+  strongPassword,
   cleanPincode,
   validateFields,
   when,
@@ -133,7 +134,7 @@ const BRANCH_TYPES = ['Client Management', 'Sales Management'];
 
 export const BranchesView: React.FC = () => {
   const { showToast, currentUser } = useAuth();
-  const { isSaleManagement, isClientManagement, activeOrgType, setOrgType, isAll } = useActiveOrgType();
+  const { isSaleManagement, isClientManagement, activeOrgType, setOrgType, isAll, isClientOnly, isSaleOnly } = useActiveOrgType();
   const canSwitch = isAll;
 
   // Data states
@@ -494,18 +495,52 @@ export const BranchesView: React.FC = () => {
     return () => window.removeEventListener('branchesChanged', handleBranchesChanged);
   }, [page, pageSize, appliedSearch, appliedStatus, isSaleManagement]);
 
+  // Allowed branch types derived from selected sub-organization or main organization capability:
+  // If parent/sub-organization is Client Management -> only 'Client Management'
+  // If parent/sub-organization is Sales Management -> only 'Sales Management'
+  // If parent/sub-organization is All -> both ['Client Management', 'Sales Management']
+  const selectedSubOrg =
+    formData.subOrganizationId && formData.subOrganizationId !== '__PARENT_ORG__'
+      ? subOrganizations.find((s) => s.id === formData.subOrganizationId)
+      : null;
+
+  const allowedBranchTypes = useMemo(() => {
+    if (selectedSubOrg) {
+      const code = Number(selectedSubOrg.subOrganizationType);
+      if (code === 1) return ['Client Management'];
+      if (code === 2) return ['Sales Management'];
+      if (code === 3) return BRANCH_TYPES;
+      const typeStr = (selectedSubOrg.organizationType || '').toLowerCase();
+      if (typeStr.includes('client') && !typeStr.includes('sale')) return ['Client Management'];
+      if (typeStr.includes('sale') && !typeStr.includes('client')) return ['Sales Management'];
+      if (typeStr === 'all') return BRANCH_TYPES;
+    }
+    // Main organization capabilities
+    if (isClientOnly) return ['Client Management'];
+    if (isSaleOnly) return ['Sales Management'];
+    return BRANCH_TYPES;
+  }, [selectedSubOrg, isClientOnly, isSaleOnly]);
+
   // Modal Handlers
   const handleOpenAddModal = () => {
     setEditingBranch(null);
     setShowPassword(false);
     setFormErrors({});
     const activeOrgId = currentUser?.organizationId || getStoredOrganizationId() || '';
+    const defaultBranchType = isClientOnly
+      ? 'Client Management'
+      : isSaleOnly
+      ? 'Sales Management'
+      : isSaleManagement
+      ? 'Sales Management'
+      : 'Client Management';
+
     setFormData({
       name: '',
       code: '',
       organizationId: activeOrgId,
       subOrganizationId: '',
-      organizationType: isSaleManagement ? 'Sales Management' : 'Client Management',
+      organizationType: defaultBranchType,
       contactPerson: '',
       mobileNumber: '',
       whatsapp: '',
@@ -582,7 +617,7 @@ export const BranchesView: React.FC = () => {
       ['address', formData.address, [required('Address is required')]],
       ['pincode', formData.pincode, [required('Pincode is required'), pincodeMatching()]],
       ['email', formData.email, [required('Email is required'), emailAddress]],
-      ['password', formData.password, when(isCreate, [required('Password is required'), minLength(8, 'Password must be at least 8 characters')])],
+      ['password', formData.password, [...when(isCreate, [required('Password is required')]), strongPassword]],
       ['status', formData.status, [required('Status is required')]],
     ]);
     setFormErrors(errors);
@@ -1227,7 +1262,30 @@ export const BranchesView: React.FC = () => {
               <CustomSelect
                 value={formData.subOrganizationId}
                 onChange={(val) => {
-                  setFormData({ ...formData, subOrganizationId: val });
+                  const targetSub = val && val !== '__PARENT_ORG__' ? subOrganizations.find((s) => s.id === val) : null;
+                  let targetTypes = BRANCH_TYPES;
+                  if (targetSub) {
+                    const code = Number(targetSub.subOrganizationType);
+                    if (code === 1) targetTypes = ['Client Management'];
+                    else if (code === 2) targetTypes = ['Sales Management'];
+                    else if (code === 3) targetTypes = BRANCH_TYPES;
+                    else {
+                      const t = (targetSub.organizationType || '').toLowerCase();
+                      if (t.includes('client') && !t.includes('sale')) targetTypes = ['Client Management'];
+                      else if (t.includes('sale') && !t.includes('client')) targetTypes = ['Sales Management'];
+                    }
+                  } else {
+                    if (isClientOnly) targetTypes = ['Client Management'];
+                    else if (isSaleOnly) targetTypes = ['Sales Management'];
+                  }
+
+                  setFormData((prev) => ({
+                    ...prev,
+                    subOrganizationId: val,
+                    organizationType: targetTypes.includes(prev.organizationType)
+                      ? prev.organizationType
+                      : targetTypes[0] || prev.organizationType,
+                  }));
                   if (formErrors.subOrganizationId) setFormErrors((prev) => ({ ...prev, subOrganizationId: '' }));
                 }}
                 options={(() => {
@@ -1278,7 +1336,7 @@ export const BranchesView: React.FC = () => {
               <CustomSelect
                 value={formData.organizationType}
                 onChange={(val) => updateField('organizationType', val)}
-                options={BRANCH_TYPES}
+                options={allowedBranchTypes}
                 placeholder="Select branch type"
                 optionVariant="strong"
                 activeColor="brand"
@@ -1593,11 +1651,11 @@ export const BranchesView: React.FC = () => {
                   </div>
                   <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
                     <span className="text-slate-400 font-medium shrink-0">Mobile Number</span>
-                    <span className="font-bold text-slate-800 text-right">{viewBranch.mobileNumber || '-'}</span>
+                    <span className="font-bold text-slate-800 text-right">{formatPhoneNumber(viewBranch.mobileNumber) || '-'}</span>
                   </div>
                   <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
                     <span className="text-slate-400 font-medium shrink-0">WhatsApp Number</span>
-                    <span className="font-bold text-slate-800 text-right">{viewBranch.whatsapp || '-'}</span>
+                    <span className="font-bold text-slate-800 text-right">{formatPhoneNumber(viewBranch.whatsapp || viewBranch.mobileNumber) || '-'}</span>
                   </div>
                   <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
                     <span className="text-slate-400 font-medium shrink-0">Official Email</span>

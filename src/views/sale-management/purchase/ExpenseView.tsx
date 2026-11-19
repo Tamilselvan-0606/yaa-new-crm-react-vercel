@@ -60,6 +60,7 @@ import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { printBusinessDocument, printTableReport, downloadBusinessDocument, DocumentPrintOptions } from '../../../utils/printUtils';
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, getFormInputCls, handleNonNegativeKeyDown } from '../utils/formUtils';
+import { IMAGE_FILE_ACCEPT, validateImageFile } from '../utils/imageUpload';
 import { SaleActionDropdown } from '../utils';
 import { toast } from "../../../utils/toast";
 import { fetchAllReportRows, runReport } from "../../../utils/reportData";
@@ -733,34 +734,30 @@ export const ExpenseView: React.FC = () => {
   // Image Upload Handler
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const allowedExtensions = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg', '.avif'];
-      const fileName = (file.name || '').toLowerCase();
-      const hasValidExtension = allowedExtensions.some((ext) => fileName.endsWith(ext));
-      const isImageMime = Boolean(file.type && file.type.startsWith('image/'));
+    e.target.value = '';
+    if (!file) return;
 
-      if (!isImageMime && !hasValidExtension) {
-        setReceiptFileProblem('Please attach an image file (.png, .jpg, .jpeg, .webp, .gif, .bmp, .svg or .avif).');
-        e.target.value = '';
-        return;
-      }
-
-      if (file.size > 5 * 1024 * 1024) {
-        setReceiptFileProblem('The receipt image must be smaller than 5 MB.');
-        e.target.value = '';
-        return;
-      }
-      setReceiptError(null);
+    const validation = validateImageFile(file, {
+      maxSizeBytes: 5 * 1024 * 1024,
+      tooLargeMessage: 'The receipt image must be smaller than 5 MB.',
+    });
+    if (!validation.valid) {
+      setReceiptError(validation.error);
       setReceiptFileProblem(null);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const result = reader.result as string;
-        setReceiptImageState(result);
-        setValue('receiptImage', result, { shouldValidate: true, shouldDirty: true });
-        toast.success('Receipt image attached successfully');
-      };
-      reader.readAsDataURL(file);
+      toast.error(validation.error);
+      return;
     }
+
+    setReceiptError(null);
+    setReceiptFileProblem(null);
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result as string;
+      setReceiptImageState(result);
+      setValue('receiptImage', result, { shouldValidate: true, shouldDirty: true });
+      toast.success('Receipt image attached successfully');
+    };
+    reader.readAsDataURL(file);
   };
 
   // Submit Expense Form (Create or Update)
@@ -2113,6 +2110,8 @@ export const ExpenseView: React.FC = () => {
                     type="button"
                     onClick={() => {
                       setReceiptImageState('');
+                      setReceiptError(null);
+                      setReceiptFileProblem(null);
                       setValue('receiptImage', '', { shouldValidate: true, shouldDirty: true });
                     }}
                     className="text-slate-400 hover:text-rose-500 transition-colors p-1 cursor-pointer"
@@ -2127,7 +2126,7 @@ export const ExpenseView: React.FC = () => {
                   <span>Upload Receipt</span>
                   <input
                     type="file"
-                    accept="image/png,image/jpeg,image/jpg,image/webp,image/gif,image/bmp,image/svg+xml,.png,.jpg,.jpeg,.webp,.gif,.bmp,.svg,.avif"
+                    accept={IMAGE_FILE_ACCEPT}
                     onChange={handleImageUpload}
                     className="hidden"
                   />

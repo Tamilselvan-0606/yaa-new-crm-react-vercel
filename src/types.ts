@@ -54,6 +54,9 @@ export interface DocumentItem {
   uploadedAt: string;
   category: 'Contract' | 'Agreement' | 'Invoice' | 'Brief' | 'Asset' | 'NDA' | 'Report' | 'Tax/GST' | 'Other' | string;
   type?: 'shared_by_company' | 'shared_by_client'; // 'shared_by_company' (Sent to Client) | 'shared_by_client' (Received from Client)
+  dataUrl?: string;
+  name?: string;
+  file?: File;
 }
 
 export type BillingCycle = 'Monthly' | 'Quarterly' | 'Annually' | 'One-Time' | 'Custom';
@@ -210,6 +213,11 @@ export interface Lead {
   address?: string;
   city?: string;
   state?: string;
+  country?: string;
+  district?: string;
+  countryId?: string;
+  stateId?: string;
+  districtId?: string;
   pincode?: string;
   location?: string;
   source?: LeadSource;
@@ -292,6 +300,11 @@ export interface Customer {
   address?: string;
   city?: string;
   state?: string;
+  country?: string;
+  district?: string;
+  countryId?: string;
+  stateId?: string;
+  districtId?: string;
   pincode?: string;
   location?: string;
   industry?: string;

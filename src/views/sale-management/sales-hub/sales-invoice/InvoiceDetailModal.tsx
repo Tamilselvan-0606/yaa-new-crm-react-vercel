@@ -151,6 +151,11 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
             <div className="text-base font-extrabold text-[#33077C]">
               {sale.invoiceNo}
             </div>
+            {sale.salesInvoiceManualNo && (
+              <div className="text-xs text-slate-600 font-semibold">
+                Invoice No: {sale.salesInvoiceManualNo}
+              </div>
+            )}
             <div className="text-xs text-slate-500 mt-1 font-medium">
               Date: {formatDate(sale.saleDate)}
             </div>
@@ -392,6 +397,29 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
                 })}
               </span>
             </div>
+            {Number(sale.totalReturned) > 0 && (
+              <>
+                <div className="flex justify-between text-rose-600 font-semibold">
+                  <span>Sales Return:</span>
+                  <span>
+                    -₹
+                    {Number(sale.totalReturned).toLocaleString("en-IN", {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
+                <div className="flex justify-between font-bold text-slate-800">
+                  <span>Net Invoice Amount:</span>
+                  <span>
+                    ₹
+                    {Math.max(
+                      0,
+                      sale.grandTotal - Number(sale.totalReturned),
+                    ).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              </>
+            )}
             <div className="flex justify-between text-emerald-700 font-semibold">
               <span>Amount Paid:</span>
               <span>

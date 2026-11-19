@@ -3206,7 +3206,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   }}
                   options={customers.map((c) => ({
                     value: c.id,
-                    label: `${c.company || c.name}${c.clientId && c.clientId !== c.id ? ` (${c.clientId})` : ''}`,
+                    label: `${c.name || c.company}${c.clientId && c.clientId !== c.id ? ` (${c.clientId})` : ''}`,
                   }))}
                   optionVariant="strong"
                   placeholder="Select Customer"
@@ -3260,7 +3260,6 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                     { value: 'Quarterly', label: 'Quarterly' },
                     { value: 'Annually', label: 'Annually' },
                     { value: 'One-Time', label: 'One-Time' },
-                    { value: 'Custom', label: 'Custom' },
                   ]}
                   placeholder="Select Billing Cycle"
                   activeColor="brand"

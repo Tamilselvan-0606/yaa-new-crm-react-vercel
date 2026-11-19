@@ -105,7 +105,8 @@ export interface ApiForgotPasswordResponse {
 }
 
 export interface ApiResetPasswordRequest {
-  token: string;
+  email: string;
+  code: string;
   password?: string;
 }
 

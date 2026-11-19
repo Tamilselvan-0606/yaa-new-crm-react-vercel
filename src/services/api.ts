@@ -472,8 +472,8 @@ class ApiService {
     return authApi.forgotPassword({ email });
   }
 
-  async resetPassword(token: string, password: string): Promise<void> {
-    await authApi.resetPassword({ token, password });
+  async resetPassword(email: string, code: string, password: string): Promise<void> {
+    await authApi.resetPassword({ email, code, password });
   }
 
   async verifyToken(): Promise<{ valid: boolean; userId: string }> {

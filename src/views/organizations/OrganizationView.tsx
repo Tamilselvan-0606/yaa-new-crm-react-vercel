@@ -47,6 +47,7 @@ import { useActiveOrgType } from '../../hooks/useActiveOrgType';
 import { organizationApi, subOrganizationApi, SubOrganizationApiItem } from '../../api';
 import { OrganizationApiItem } from '../../api/platform/organizationTypes';
 import { subscriptionPlanApi } from '../../api/platform/subscriptionPlanApi';
+import { masterApi } from '../../api/platform/masterApi';
 import { getStoredOrganizationId } from '../../api/config';
 import { extractApiFieldErrors } from '../../utils/formValidation';
 import {
@@ -62,7 +63,9 @@ import {
   liveMobileStartError,
   validPan,
   pincodeMatching,
+  strongPassword,
   cleanPincode,
+  formatPhoneNumber,
   pickFieldErrors,
   required,
   requiredWhen,
@@ -119,6 +122,18 @@ const ORGANIZATION_TYPE_OPTIONS = [
 // Sub-organizations must pick one suite, so "All" is not offered.
 const SUB_ORGANIZATION_TYPE_OPTIONS = ORGANIZATION_TYPE_OPTIONS.filter((o) => o !== 'All');
 
+// Shows '+919962515246' as '+91 9962515246'. The code is the longest country dial code the number starts with
+// (same matching the phone field uses in the edit form).
+const spacePhoneCode = (value?: string | null, dialCodes: string[] = []): string => {
+  const v = (value || '').trim().replace(/\s+/g, '');
+  if (!v.startsWith('+')) return value || '';
+  const digits = v.slice(1).replace(/\D/g, '');
+  const code = dialCodes
+    .filter((c) => c && digits.startsWith(c))
+    .sort((a, b) => b.length - a.length)[0];
+  return code && digits.length > code.length ? `+${code} ${digits.slice(code.length)}` : v;
+};
+
 export const parseOrganizationTypeNumber = (type: string | number | undefined): number => {
   if (typeof type === 'number') return type;
   if (!type) return 0;
@@ -140,7 +155,6 @@ const REGISTRATION_TYPE_OPTIONS = [
   'LLP',
   'Pvt Ltd',
   'Public Ltd',
-  'Other',
 ];
 
 // Subscription plan options are loaded dynamically from the API
@@ -268,7 +282,7 @@ const DEFAULT_SALE_SUB_ORGS: OrganizationItem[] = [];
 
 export const OrganizationView: React.FC = () => {
   const { currentUser, isSuperAdmin, showToast } = useAuth();
-  const { activeOrgType, setOrgType, isSaleManagement, isClientManagement } = useActiveOrgType();
+  const { activeOrgType, setOrgType, isSaleManagement, isClientManagement, isClientOnly, isSaleOnly, isAll } = useActiveOrgType();
 
   const userRole = (currentUser?.role || '').toString().toUpperCase();
   const isOrgSuperAdmin =
@@ -284,12 +298,14 @@ export const OrganizationView: React.FC = () => {
   const parentOrgIdParam = searchParams.get('parentOrgId');
   const parentOrgNameParam = searchParams.get('parentOrgName');
   const parentOrgCodeParam = searchParams.get('parentOrgCode');
+  const parentOrgTypeParam = searchParams.get('parentOrgType');
 
   // In-page parent organization context for Sub-Organizations mode
   const [parentOrgContext, setParentOrgContext] = useState<{
     id: string;
     name: string;
     code: string;
+    organizationType?: string;
     subscriptionPlan?: string;
   } | null>(() => {
     if (parentOrgIdParam) {
@@ -297,6 +313,7 @@ export const OrganizationView: React.FC = () => {
         id: parentOrgIdParam,
         name: parentOrgNameParam || 'Organization',
         code: parentOrgCodeParam || 'ORG',
+        organizationType: parentOrgTypeParam || undefined,
       };
     }
     return null;
@@ -305,15 +322,29 @@ export const OrganizationView: React.FC = () => {
   // Keep state in sync with URL search params
   useEffect(() => {
     if (parentOrgIdParam) {
-      setParentOrgContext({
+      setParentOrgContext((prev) => ({
         id: parentOrgIdParam,
         name: parentOrgNameParam || 'Organization',
         code: parentOrgCodeParam || 'ORG',
-      });
+        organizationType: parentOrgTypeParam || prev?.organizationType,
+      }));
+
+      // If parentOrgType is not in the URL, fetch the parent organization to know its suite capability
+      if (!parentOrgTypeParam) {
+        organizationApi
+          .getOrganizationById(parentOrgIdParam)
+          .then((res) => {
+            if (res?.data) {
+              const typeStr = formatOrganizationTypeName(res.data.organizationType);
+              setParentOrgContext((prev) => (prev ? { ...prev, organizationType: typeStr } : null));
+            }
+          })
+          .catch(() => {});
+      }
     } else {
       setParentOrgContext(null);
     }
-  }, [parentOrgIdParam, parentOrgNameParam, parentOrgCodeParam]);
+  }, [parentOrgIdParam, parentOrgNameParam, parentOrgCodeParam, parentOrgTypeParam]);
 
   const isSubOrgMode = isOrgSuperAdmin || !!parentOrgContext;
 
@@ -446,6 +477,17 @@ export const OrganizationView: React.FC = () => {
   const [apiModalError, setApiModalError] = useState<string | null>(null);
   const [editingOrg, setEditingOrg] = useState<OrganizationItem | null>(null);
   const [viewingOrg, setViewingOrg] = useState<OrganizationItem | null>(null);
+  const [dialCodes, setDialCodes] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    masterApi
+      .getCountries()
+      .then((list) => alive && setDialCodes(list.map((c) => (c.mobileCode || '').replace(/\D/g, '')).filter(Boolean)))
+      .catch(() => alive && setDialCodes([]));
+    return () => {
+      alive = false;
+    };
+  }, []);
   const [viewLoading, setViewLoading] = useState(false);
   const viewingOrgId = viewingOrg?.id;
   // Sub-organization rows (Org Admin, or a Platform Admin drilled into an organization) are not organization ids.
@@ -508,16 +550,19 @@ export const OrganizationView: React.FC = () => {
   const [isProcessingAction, setIsProcessingAction] = useState(false);
 
   const handleOpenSubOrgManager = (org: OrganizationItem) => {
+    const orgTypeStr = formatOrganizationTypeName(org.organizationType);
     setParentOrgContext({
       id: org.id,
       name: org.name,
       code: org.code,
+      organizationType: orgTypeStr,
       subscriptionPlan: org.subscriptionPlan,
     });
     setSearchParams({
       parentOrgId: org.id,
       parentOrgName: org.name,
       parentOrgCode: org.code,
+      parentOrgType: orgTypeStr,
     });
     // Reset filters and page
     setPendingSearch('');
@@ -622,6 +667,11 @@ export const OrganizationView: React.FC = () => {
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+        showToast('error', 'Invalid File', 'Only image files (PNG, JPG, WEBP) are allowed for the logo.');
+        e.target.value = '';
+        return;
+      }
       if (file.size > 2 * 1024 * 1024) {
         showToast('error', 'File Too Large', 'Please upload an image smaller than 2MB');
         return;
@@ -635,6 +685,24 @@ export const OrganizationView: React.FC = () => {
     }
   };
 
+  // Determine allowed sub-organization type options based on parent organization capabilities:
+  // If parent is Client Management -> only 'Client Management'
+  // If parent is Sales Management -> only 'Sales Management'
+  // If parent is All -> both ['Client Management', 'Sales Management']
+  const parentOrgTypeEffective = parentOrgContext?.organizationType;
+  const isParentClientOnly =
+    (parentOrgTypeEffective && parentOrgTypeEffective === 'Client Management') ||
+    (!parentOrgContext && isClientOnly);
+  const isParentSaleOnly =
+    (parentOrgTypeEffective && parentOrgTypeEffective === 'Sales Management') ||
+    (!parentOrgContext && isSaleOnly);
+
+  const allowedSubOrgTypeOptions = isParentClientOnly
+    ? ['Client Management']
+    : isParentSaleOnly
+    ? ['Sales Management']
+    : SUB_ORGANIZATION_TYPE_OPTIONS;
+
   const handleOpenAddModal = () => {
     setEditingOrg(null);
     setName('');
@@ -647,7 +715,15 @@ export const OrganizationView: React.FC = () => {
     setDistrictId('');
     setCityId('');
     setPincode('');
-    setOrganizationType(isOrgSuperAdmin ? (isSaleManagement ? 'Sales Management' : 'Client Management') : '');
+    if (isSubOrgMode) {
+      if (allowedSubOrgTypeOptions.length === 1) {
+        setOrganizationType(allowedSubOrgTypeOptions[0]);
+      } else {
+        setOrganizationType(isSaleManagement ? 'Sales Management' : 'Client Management');
+      }
+    } else {
+      setOrganizationType('');
+    }
     setIndustry('');
     setLocation('');
     setSubscriptionPlan('');
@@ -849,7 +925,7 @@ export const OrganizationView: React.FC = () => {
       ['phone', phone, requiredWhen(create, 'Contact Phone is required', [phoneNumber('Contact Phone')])],
       ['whatsapp', whatsapp, [phoneNumber('WhatsApp Number')]],
       ['email', email, requiredWhen(create, 'Official Email is required', [emailAddress])],
-      ['password', password, requiredWhen(create, 'Password is required')],
+      ['password', password, requiredWhen(create, 'Password is required', [strongPassword])],
       ['address', address, requiredWhen(create, 'Address is required')],
     ]);
     setFormErrors(errors);
@@ -1292,7 +1368,7 @@ export const OrganizationView: React.FC = () => {
                     type="file"
                     ref={fileInputRef}
                     onChange={handleLogoUpload}
-                    accept="image/*"
+                    accept="image/png,image/jpeg,image/webp"
                     className="hidden"
                   />
                   <div className={`w-11 h-11 rounded-full bg-slate-100 ${!logo ? (formErrors.logo ? 'border-2 border-red-500' : 'border border-dashed border-slate-300') : 'border-2 border-[#33077C]'} flex items-center justify-center overflow-hidden shrink-0 shadow-2xs`}>
@@ -1348,7 +1424,7 @@ export const OrganizationView: React.FC = () => {
                     setOrganizationType(val);
                     clearFieldError('organizationType');
                   }}
-                  options={isSubOrgMode ? SUB_ORGANIZATION_TYPE_OPTIONS : ORGANIZATION_TYPE_OPTIONS}
+                  options={isSubOrgMode ? allowedSubOrgTypeOptions : ORGANIZATION_TYPE_OPTIONS}
                   placeholder="Select company type"
                   activeColor="brand"
                   error={!!formErrors.organizationType}
@@ -1761,13 +1837,13 @@ export const OrganizationView: React.FC = () => {
                   {/* Contact Phone */}
                   <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
                     <span className="text-slate-400 font-medium shrink-0">Contact Phone</span>
-                    <span className="font-bold text-slate-800 text-right">{viewingOrg.phone || '-'}</span>
+                    <span className="font-bold text-slate-800 text-right">{formatPhoneNumber(viewingOrg.phone) || spacePhoneCode(viewingOrg.phone, dialCodes) || '-'}</span>
                   </div>
 
                   {/* WhatsApp Number */}
                   <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
                     <span className="text-slate-400 font-medium shrink-0">WhatsApp Number</span>
-                    <span className="font-bold text-slate-800 text-right">{viewingOrg.whatsapp || viewingOrg.phone || '-'}</span>
+                    <span className="font-bold text-slate-800 text-right">{formatPhoneNumber(viewingOrg.whatsapp || viewingOrg.phone) || spacePhoneCode(viewingOrg.whatsapp || viewingOrg.phone, dialCodes) || '-'}</span>
                   </div>
 
                   {/* Official Email */}

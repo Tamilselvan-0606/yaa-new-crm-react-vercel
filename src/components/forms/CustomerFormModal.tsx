@@ -24,8 +24,7 @@ import {
   OrganizationApiItem,
   getStoredOrganizationId,
 } from '../../api';
-import { useAppDispatch } from '../../hooks/redux';
-import { baseApi } from '../../api/baseApi';
+import { baseApi, baseClient } from '../../api/baseApi';
 import { RegisteredField } from '../common/FormField';
 import { PhoneField } from '../common/PhoneField';
 import { LocationFields, LocationMeta } from '../common/LocationFields';
@@ -68,7 +67,6 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
   onClose,
   initialCustomer,
 }) => {
-  const dispatch = useAppDispatch();
   // Prefilled records (e.g. converting a lead) have no id yet and must be created, not updated.
   const isEditing = Boolean(initialCustomer?.id);
   const { currentUser } = useAuth();
@@ -363,11 +361,45 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         const firstLinkedProd = initialCustomer.linkedProducts?.[0]?.productName || initialCustomer.linkedProducts?.[0]?.productId || '';
         setSelectedProductId(firstLinkedProd);
 
-        setDocuments(
-          initialCustomer.documents && initialCustomer.documents.length > 0
-            ? initialCustomer.documents
-            : []
-        );
+        const existingDocs: DocumentItem[] = [];
+        if (Array.isArray(initialCustomer.documents) && initialCustomer.documents.length > 0) {
+          existingDocs.push(...initialCustomer.documents);
+        }
+        if (Array.isArray((initialCustomer as any).ourDocuments)) {
+          (initialCustomer as any).ourDocuments.forEach((doc: any, idx: number) => {
+            if (!existingDocs.some((d) => d.url === doc.url)) {
+              existingDocs.push({
+                id: `existing_our_${idx}_${Date.now()}`,
+                title: doc.name || doc.title || 'Our Document',
+                fileType: (doc.name || doc.url || '').split('.').pop()?.toUpperCase() || 'PDF',
+                fileSize: '',
+                url: doc.url || '#',
+                uploadedBy: 'Company Staff',
+                uploadedAt: new Date().toISOString().split('T')[0],
+                category: 'Our Document',
+                type: 'shared_by_company',
+              });
+            }
+          });
+        }
+        if (Array.isArray((initialCustomer as any).clientDocuments)) {
+          (initialCustomer as any).clientDocuments.forEach((doc: any, idx: number) => {
+            if (!existingDocs.some((d) => d.url === doc.url)) {
+              existingDocs.push({
+                id: `existing_client_${idx}_${Date.now()}`,
+                title: doc.name || doc.title || 'Client Document',
+                fileType: (doc.name || doc.url || '').split('.').pop()?.toUpperCase() || 'PDF',
+                fileSize: '',
+                url: doc.url || '#',
+                uploadedBy: 'Client',
+                uploadedAt: new Date().toISOString().split('T')[0],
+                category: 'Client Document',
+                type: 'shared_by_client',
+              });
+            }
+          });
+        }
+        setDocuments(existingDocs);
       } else {
         reset({
           clientId: '',
@@ -414,10 +446,11 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
   ) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    Array.from(files).forEach((file: any) => {
+    Array.from(files).forEach((file: File) => {
       const ext = file.name.split('.').pop()?.toUpperCase() || 'FILE';
       const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
       const sizeStr = Number(sizeMB) < 1 ? `${Math.round(file.size / 1024)} KB` : `${sizeMB} MB`;
+
       const newDoc: DocumentItem = {
         id: 'doc_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
         title: file.name,
@@ -425,10 +458,22 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         fileType: ext,
         fileSize: sizeStr,
         url: '#',
+        file,
         uploadedBy: type === 'shared_by_company' ? 'Company Staff' : 'Client',
         uploadedAt: new Date().toISOString().split('T')[0],
         type,
       };
+
+      // Also read data URL for preview/fallback
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64Data = reader.result as string;
+        newDoc.dataUrl = base64Data;
+        newDoc.url = base64Data || '#';
+        setDocuments((prev) => [...prev]);
+      };
+      reader.readAsDataURL(file);
+
       setDocuments((prev) => [...prev, newDoc]);
     });
     toast.success(`Uploaded ${files.length} document(s)`);
@@ -437,6 +482,42 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
 
   const handleRemoveDoc = (id: string) => {
     setDocuments((prev) => prev.filter((d) => d.id !== id));
+  };
+
+  const handlePreviewDoc = (doc: DocumentItem) => {
+    if (doc.file instanceof File) {
+      const blobUrl = URL.createObjectURL(doc.file);
+      window.open(blobUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    const raw = doc.dataUrl || doc.url;
+    if (!raw || raw === '#') return;
+
+    if (raw.startsWith('http://') || raw.startsWith('https://')) {
+      window.open(raw, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    if (raw.startsWith('data:')) {
+      try {
+        const parts = raw.split(',');
+        const mime = parts[0].match(/:(.*?);/)?.[1] || 'application/octet-stream';
+        const byteString = atob(parts[1]);
+        const ab = new ArrayBuffer(byteString.length);
+        const ia = new Uint8Array(ab);
+        for (let i = 0; i < byteString.length; i++) {
+          ia[i] = byteString.charCodeAt(i);
+        }
+        const blob = new Blob([ab], { type: mime });
+        const blobUrl = URL.createObjectURL(blob);
+        window.open(blobUrl, '_blank', 'noopener,noreferrer');
+        return;
+      } catch (err) {
+        console.warn('Failed to convert base64 to Blob URL:', err);
+      }
+    }
+
+    window.open(raw, '_blank', 'noopener,noreferrer');
   };
 
   const productOptions = products.map((p) => ({
@@ -485,14 +566,17 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           ]
         : [];
 
+      const effectivePhone = data.phone?.trim() || undefined;
+      const effectiveEmail = data.email?.trim() || undefined;
+
       const payload: Partial<Customer> = {
         clientId: data.clientId,
         name: data.clientName,
         company: data.businessName,
         contactPerson: data.contactPerson,
-        phone: data.phone,
+        phone: effectivePhone || '',
         whatsapp: data.whatsapp || undefined,
-        email: data.email,
+        email: effectiveEmail || '',
         address: data.address,
         gstin: data.gstNumber,
         pan: data.panNumber,
@@ -508,14 +592,86 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         selectedProductId ||
         undefined;
 
+      // Helper to upload document to S3 via /media/upload or fallback to /uploads/base64
+      const uploadDocumentToS3 = async (doc: DocumentItem): Promise<{ url: string; name: string }> => {
+        const docName = doc.title || doc.name || 'document.pdf';
+        const rawData = doc.dataUrl || doc.url || '';
+
+        // If it's already an http/https S3 URL or external URL, keep as is
+        if (rawData.startsWith('http://') || rawData.startsWith('https://')) {
+          return { url: rawData, name: docName };
+        }
+
+        // 1. Primary: Use /media/upload (multipart/form-data) supporting all document formats (PDF, DOC, DOCX, XLS, XLSX, etc.)
+        if (doc.file instanceof File) {
+          try {
+            const formData = new FormData();
+            formData.append('file', doc.file);
+            formData.append('folder', 'documents');
+            if (doc.category) formData.append('category', doc.category);
+            formData.append('shareType', doc.type || 'shared_by_company');
+
+            const mediaRes = await baseClient.post('/media/upload', formData, {
+              headers: { 'Content-Type': 'multipart/form-data' },
+            });
+
+            const returnedMediaUrl =
+              mediaRes.data?.data?.url ||
+              (typeof mediaRes.data?.data === 'string' ? mediaRes.data.data : null) ||
+              mediaRes.data?.url;
+
+            if (returnedMediaUrl && typeof returnedMediaUrl === 'string') {
+              return { url: returnedMediaUrl, name: docName };
+            }
+          } catch (mediaErr) {
+            console.warn('/media/upload failed, trying fallback...', mediaErr);
+          }
+        }
+
+        // 2. Fallback for image data URLs: /uploads/base64 with folder 'attachments'
+        if (rawData.startsWith('data:image/')) {
+          try {
+            const uploadRes = await baseClient.post('/uploads/base64', {
+              image: rawData,
+              folder: 'attachments',
+              fileName: `doc_${Date.now()}_${docName.replace(/\s+/g, '_')}`,
+            });
+            const returnedUrl =
+              (typeof uploadRes.data?.data === 'string' ? uploadRes.data.data : null) ||
+              uploadRes.data?.data?.url ||
+              uploadRes.data?.data?.fileUrl ||
+              uploadRes.data?.data?.imageUrl ||
+              uploadRes.data?.data?.location ||
+              uploadRes.data?.data?.path ||
+              (typeof uploadRes.data === 'string' ? uploadRes.data : null) ||
+              uploadRes.data?.url ||
+              uploadRes.data?.fileUrl ||
+              uploadRes.data?.imageUrl ||
+              uploadRes.data?.location;
+
+            if (returnedUrl && typeof returnedUrl === 'string') {
+              return { url: returnedUrl, name: docName };
+            }
+          } catch (uploadErr) {
+            console.warn('Failed to upload document via base64, using raw URL:', uploadErr);
+          }
+        }
+
+        return { url: rawData, name: docName };
+      };
+
+      // Upload and map ourDocuments and clientDocuments
+      const ourDocumentsPayload = await Promise.all(ourDocuments.map(uploadDocumentToS3));
+      const clientDocumentsPayload = await Promise.all(clientDocuments.map(uploadDocumentToS3));
+
       if (isEditing) {
         await platformClientApi.updateClient(initialCustomer.id, {
           name: data.clientName || data.businessName,
           legalName: data.businessName || data.clientName,
           contactPerson: data.contactPerson || data.clientName,
-          phone: data.phone,
+          phone: effectivePhone,
           whatsapp: data.whatsapp || undefined,
-          email: data.email,
+          email: effectiveEmail,
           address: data.address,
           city: data.city || undefined,
           countryId: data.countryId || undefined,
@@ -528,6 +684,8 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           organizationType: 1,
           status: 'Active',
           subOrganizationSupport: true,
+          ourDocuments: ourDocumentsPayload,
+          clientDocuments: clientDocumentsPayload,
           organizationId: effectiveOrgId,
           subOrganizationId: (selectedSubOrgId && selectedSubOrgId !== '__PARENT_ORG__') ? selectedSubOrgId : undefined,
           branchId: selectedBranchId || undefined,
@@ -539,9 +697,9 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           name: data.clientName || data.businessName,
           legalName: data.businessName || `${data.clientName} Private Limited`,
           contactPerson: data.contactPerson || data.clientName,
-          phone: data.phone,
+          phone: effectivePhone,
           whatsapp: data.whatsapp || undefined,
-          email: data.email,
+          email: effectiveEmail,
           password: 'Password@123',
           gstNumber: data.gstNumber,
           panNumber: data.panNumber,
@@ -551,6 +709,8 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           stateId: data.stateId || undefined,
           districtId: data.districtId || undefined,
           pincode: data.pincode || undefined,
+          ourDocuments: ourDocumentsPayload,
+          clientDocuments: clientDocumentsPayload,
           organizationId: effectiveOrgId,
           subOrganizationId: (selectedSubOrgId && selectedSubOrgId !== '__PARENT_ORG__') ? selectedSubOrgId : undefined,
           branchId: selectedBranchId || undefined,
@@ -564,14 +724,6 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         toast.success('Client profile created successfully');
       }
 
-      dispatch(
-        baseApi.util.invalidateTags([
-          { type: 'CrmCustomer', id: 'LIST' },
-          { type: 'PlatformClient', id: 'LIST' },
-          { type: 'Lead', id: 'LIST' },
-          'PlatformDashboard',
-        ])
-      );
       onClose();
     } catch (e: any) {
       console.error('Client save failed:', e);
@@ -790,7 +942,6 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             render={({ field }) => (
               <PhoneField
                 label="Phone Number"
-                required
                 value={field.value || ''}
                 onChange={field.onChange}
                 error={errors.phone?.message}
@@ -815,7 +966,6 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
 
           <RegisteredField
             label="Email"
-            required
             type="email"
             registration={register("email")}
             error={errors.email?.message}
@@ -1042,21 +1192,18 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                         </div>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
-                        {doc.url && (
-                          <a
-                            href={doc.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-slate-400 hover:text-[#4309A2] hover:bg-purple-50 p-1.5 rounded-lg transition-colors"
-                            title="View Document"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                          </a>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => handlePreviewDoc(doc)}
+                          className="text-slate-400 hover:text-[#4309A2] hover:bg-purple-50 p-1.5 rounded-lg transition-colors cursor-pointer"
+                          title="View Document"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           type="button"
                           onClick={() => handleRemoveDoc(doc.id)}
-                          className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 p-1.5 rounded-lg transition-colors"
+                          className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 p-1.5 rounded-lg transition-colors cursor-pointer"
                           title="Remove Document"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -1140,21 +1287,18 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                         </div>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
-                        {doc.url && (
-                          <a
-                            href={doc.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 p-1.5 rounded-lg transition-colors"
-                            title="View Document"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                          </a>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => handlePreviewDoc(doc)}
+                          className="text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 p-1.5 rounded-lg transition-colors cursor-pointer"
+                          title="View Document"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           type="button"
                           onClick={() => handleRemoveDoc(doc.id)}
-                          className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 p-1.5 rounded-lg transition-colors"
+                          className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 p-1.5 rounded-lg transition-colors cursor-pointer"
                           title="Remove Document"
                         >
                           <Trash2 className="w-3.5 h-3.5" />

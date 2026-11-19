@@ -141,6 +141,7 @@ import {
   handleNumberOnlyKeyDown,
   handleNonNegativeKeyDown,
 } from "../utils/formUtils";
+import { ImageAttachmentBox } from "../utils/ImageAttachmentBox";
 import { normalizeIndianPhoneTo10Digits } from "../../../utils/validation";
 import { FormError } from "../../../components/common/FormError";
 import {
@@ -867,7 +868,14 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     fetchLiveProducts();
 
     await loadCustomers();
+  }, [fetchLiveProducts, loadCustomers]);
 
+  // Stocks and batches are live data and are only needed once a product dropdown opens or the form already holds
+  // items (edit / convert / duplicate), so they are NOT fetched just because the form opened.
+  const hasLoadedStockDataRef = useRef(false);
+  const ensureStockData = useCallback(async () => {
+    if (hasLoadedStockDataRef.current) return;
+    hasLoadedStockDataRef.current = true;
     try {
       const stockRes = await stockApi.getStocks({
         pagination_required: false,
@@ -895,7 +903,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     } catch (e) {
       console.warn("Batch load error in DeliveryChallanView:", e);
     }
-  }, [fetchLiveProducts, loadCustomers, setStocksList]);
+  }, [setStocksList]);
 
   // List view only needs customers; products/stocks/batches load when the form opens
   useEffect(() => {
@@ -1154,6 +1162,11 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   useEffect(() => {
     if (openProductDropdownRow === null || openProductDropdownRow === undefined)
       return;
+    // First open loads stocks + batches (ensureStockData); every later open just refreshes the stock quantities.
+    if (!hasLoadedStockDataRef.current) {
+      ensureStockData();
+      return;
+    }
     let cancelled = false;
     stockApi
       .getStocks({ pagination_required: false, page_size: 100 })
@@ -1169,7 +1182,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [openProductDropdownRow]);
+  }, [openProductDropdownRow, ensureStockData]);
 
   const matchingProducts = useMemo(() => {
     const q = productSearchQuery.toLowerCase().trim();
@@ -1232,7 +1245,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           productId: "",
           productName: "",
           sku: "",
-          quantity: 1,
+          quantity: 0,
           unit: "PCS",
           unitPrice: 0,
           discountPercent: 0,
@@ -1273,6 +1286,14 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   const activeTab = useMemo(() => {
     return tabs.find((t) => t.id === activeTabId) || tabs[0];
   }, [tabs, activeTabId]);
+
+  // An existing document (edit / convert / duplicate) already has items: load stock so quantities and validation work.
+  const activeTabHasItems = Boolean(
+    activeTab?.formData?.items?.some((i: any) => i.productId || i.productName),
+  );
+  useEffect(() => {
+    if (viewMode === "form" && activeTabHasItems) ensureStockData();
+  }, [viewMode, activeTabHasItems, ensureStockData]);
 
   // Errors belong to the active tab's form; never carry them across tabs / modes.
   useEffect(() => {
@@ -1496,7 +1517,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           productId: "",
           productName: "",
           sku: "",
-          quantity: 1,
+          quantity: 0,
           unit: "PCS",
           unitPrice: 0,
           discountPercent: 0,
@@ -2308,6 +2329,10 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       partyPhone: item.customerPhone,
       partyAddress: item.billingAddress,
       extraMeta: [
+        { label: "Challan ID", value: item.challanNo },
+        ...(item.deliveryChallanManualNo
+          ? [{ label: "Challan No", value: item.deliveryChallanManualNo }]
+          : []),
         ...(item.vehicleNo
           ? [{ label: "Vehicle No", value: item.vehicleNo }]
           : []),
@@ -2432,6 +2457,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         createdDt: createdDt ? createdDt.full : "—",
         convertedDt: convertedDt ? convertedDt.full : "—",
         challanNo: c.challanNo,
+        deliveryChallanManualNo: c.deliveryChallanManualNo || "—",
         referenceNo: c.referenceNo || "-",
         partyName: c.partyName,
         customerPhone: c.customerPhone || "-",
@@ -2460,7 +2486,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           align: "center",
           width: 22,
         },
-        { header: "Challan No.", key: "challanNo", align: "center", width: 18 },
+        { header: "Challan ID", key: "challanNo", align: "center", width: 18 },
+        { header: "Challan No.", key: "deliveryChallanManualNo", align: "center", width: 18 },
         { header: "Ref No.", key: "referenceNo", align: "center", width: 12 },
         { header: "Customer Name", key: "partyName", align: "left", width: 28 },
         { header: "Phone", key: "customerPhone", align: "left", width: 18 },
@@ -2508,6 +2535,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       const convertedDt = formatDateTime(convertedAt);
       return {
         challanNo: c.challanNo,
+        deliveryChallanManualNo: c.deliveryChallanManualNo || "—",
         createdDt: createdDt ? createdDt.full : "—",
         convertedDt: convertedDt ? convertedDt.full : "—",
         partyName: c.partyName,
@@ -2523,10 +2551,16 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       subtitle: `Filter: ${appliedPeriod} | Total Challans: ${rows.length}`,
       columns: [
         {
-          header: "Challan No.",
+          header: "Challan ID",
           key: "challanNo",
           align: "center",
-          width: "15%",
+          width: "12%",
+        },
+        {
+          header: "Challan No.",
+          key: "deliveryChallanManualNo",
+          align: "center",
+          width: "12%",
         },
         {
           header: "Created At",
@@ -2614,6 +2648,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       const matchesSearch =
         !q ||
         c.challanNo.toLowerCase().includes(q) ||
+        (c.deliveryChallanManualNo || "").toLowerCase().includes(q) ||
         c.partyName.toLowerCase().includes(q) ||
         (c.referenceNo && c.referenceNo.toLowerCase().includes(q)) ||
         (c.vehicleNo && c.vehicleNo.toLowerCase().includes(q)) ||
@@ -3984,35 +4019,11 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                 )}
 
                 {showImageSection && (
-                  <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-2 animate-in fade-in duration-100 text-xs">
-                    <label className="block text-xs font-bold text-slate-700">
-                      Attach Image
-                    </label>
-                    <div className="flex items-center gap-3">
-                      <label className="px-3 py-1.5 bg-white border border-slate-200 hover:border-[#33077C] rounded-lg font-semibold text-slate-700 cursor-pointer flex items-center gap-1.5 transition-colors">
-                        <ImageIcon className="w-3.5 h-3.5 text-[#33077C]" />
-                        <span>Choose Image</span>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={(e) => {
-                            if (e.target.files?.[0]) {
-                              setAttachedImageName(e.target.files[0].name);
-                              toast.success(
-                                `Image "${e.target.files[0].name}" attached!`,
-                              );
-                            }
-                          }}
-                        />
-                      </label>
-                      {attachedImageName && (
-                        <span className="text-slate-600 font-medium truncate max-w-xs">
-                          {attachedImageName}
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                  <ImageAttachmentBox
+                    attachedImageName={attachedImageName}
+                    onImageSelect={(fileName) => setAttachedImageName(fileName)}
+                    onImageClear={() => setAttachedImageName(null)}
+                  />
                 )}
 
                 {showDocumentSection && (
@@ -4433,9 +4444,14 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
               <CommonTableHead
                 columns={[
                   {
-                    label: "DELIVERY CHALLAN S.NO.",
+                    label: "DELIVERY CHALLAN ID",
                     align: "center",
                     minWidth: "140px",
+                  },
+                  {
+                    label: "DELIVERY CHALLAN NO.",
+                    align: "center",
+                    minWidth: "130px",
                   },
                   { label: "CUSTOMER NAME", align: "left", minWidth: "180px" },
                   {
@@ -4498,6 +4514,11 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                             className="justify-center"
                           />
                         </div>
+                      </td>
+
+                      {/* 1b. Delivery Challan No. (manual number) */}
+                      <td className="py-3.5 px-3 font-semibold text-slate-700 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                        {item.deliveryChallanManualNo || "—"}
                       </td>
 
                       {/* 2. PARTY */}
@@ -4909,6 +4930,11 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                 <p className="text-sm font-bold text-slate-900">
                   {previewChallan.challanNo}
                 </p>
+                {previewChallan.deliveryChallanManualNo && (
+                  <p className="text-xs font-semibold text-slate-600">
+                    Challan No: {previewChallan.deliveryChallanManualNo}
+                  </p>
+                )}
                 <p className="text-xs text-slate-500">
                   Date: {isoToDdmmyyyy(previewChallan.invoiceDate)}
                 </p>

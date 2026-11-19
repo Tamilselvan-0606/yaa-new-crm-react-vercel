@@ -1502,20 +1502,8 @@ export const SupplierView: React.FC = () => {
           }}
           className="space-y-4 p-2 sm:p-4 max-h-[75vh] overflow-y-auto animate-in fade-in duration-150 text-xs"
         >
-          {/* Row 1: Supplier Code | Supplier Name | Contact Person */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
-            <div>
-              <FormLabel>Supplier Code</FormLabel>
-              <input
-                type="text"
-                readOnly
-                disabled
-                {...register("supplierCode")}
-                placeholder="Auto-generated on save"
-                className={FORM_INPUT_DISABLED_CLS}
-              />
-              <FormError message={errors.supplierCode?.message} />
-            </div>
+          {/* Row 1: Supplier Name | Contact Person */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
             <div>
               <FormLabel required>Supplier / Company Name</FormLabel>
               <input

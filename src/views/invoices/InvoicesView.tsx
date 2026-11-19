@@ -41,6 +41,11 @@ import { useProformaInvoiceStore } from '../../store/useProformaInvoiceStore';
 import { CustomSelect } from '../../components/common/CustomSelect';
 import { Modal } from '../../components/common/Modal';
 import { RecordPaymentModal } from '../../components/forms/RecordPaymentModal';
+import {
+  sanitizeDocumentNumberInput,
+  isValidDocumentNumber,
+  DOCUMENT_NUMBER_ERROR_MESSAGE,
+} from '../../utils/validation';
 import { organizationBankApi } from '../../api/platform/organizationBankApi';
 import { renderPdfBlob } from '../../components/common/pdf/pdfLogo';
 import { InvoicePDFDocument } from '../../components/invoices/InvoicePDFDocument';
@@ -71,7 +76,9 @@ import {
   useGetDefaultSuperAdminDetailQuery,
   useGetSuperAdminDetailByIdQuery,
   getDocSuperAdminDetailId,
+  getApiErrorMessage,
 } from '../../api/platform/superAdminDetailsApi';
+import { formatPhoneNumber } from '../../utils/fieldValidators';
 
 interface InvoicesViewProps {
   isProforma?: boolean;
@@ -748,7 +755,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
       await fetchLiveInvoices();
     } catch (err: any) {
       console.error('Failed to convert proforma to invoice:', err);
-      const msg = err?.response?.data?.error?.message || err?.message || 'Failed to convert proforma to invoice';
+      const msg = getApiErrorMessage(err, 'Failed to convert proforma to invoice');
       showToast('error', 'Conversion Error', msg);
     } finally {
       setIsConvertingId(null);
@@ -764,7 +771,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
       showToast('success', 'Status Updated', `Proforma invoice status updated to ${newStatus}.`);
     } catch (err: any) {
       console.error('Failed to update proforma status:', err);
-      const msg = err?.response?.data?.error?.message || err?.message || 'Failed to update status';
+      const msg = getApiErrorMessage(err, 'Failed to update status');
       showToast('error', 'Status Update Failed', msg);
     }
   };
@@ -972,7 +979,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
       }
     } catch (err: any) {
       console.error('Failed to record payment:', err);
-      const msg = err?.response?.data?.error?.message || err?.message || 'Failed to record payment';
+      const msg = getApiErrorMessage(err, 'Failed to record payment');
       showToast('error', 'Payment Failed', msg);
     }
   };
@@ -1038,12 +1045,12 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
     const newItem: SavedInvoiceItem = {
       id: `it_${Date.now()}`,
       name: 'New Service Item',
-      qty: 1,
+      qty: 0,
       unitPrice: 500,
       taxPercent: 18,
       discount: 0,
-      subtotal: 500,
-      total: 590,
+      subtotal: 0,
+      total: 0,
     };
     const updatedItems = [...editingInvoice.items, newItem];
     const totals = recalculateTotals(updatedItems, editingInvoice.roundMode);
@@ -1077,6 +1084,30 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   const handleSaveEditInvoice = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!editingInvoice) return;
+    if (!isValidDocumentNumber(editingInvoice.invoiceNumber)) {
+      showToast(
+        'error',
+        isProforma ? 'Invalid Proforma Number' : 'Invalid Invoice Number',
+        DOCUMENT_NUMBER_ERROR_MESSAGE
+      );
+      return;
+    }
+    if (!editingInvoice.items || editingInvoice.items.length === 0) {
+      showToast('error', 'No Line Items', 'Please add at least one line item.');
+      return;
+    }
+    if (editingInvoice.items.some((it) => !it.name?.trim())) {
+      showToast('error', 'Missing Item Title', 'Please enter a title for every line item.');
+      return;
+    }
+    if (editingInvoice.items.some((it) => !(Number(it.qty) > 0))) {
+      showToast('error', 'Quantity Required', 'Please enter a quantity greater than 0 for every line item.');
+      return;
+    }
+    if (editingInvoice.items.some((it) => !(Number(it.unitPrice) > 0))) {
+      showToast('error', 'Price Amount Required', 'Please enter a price amount greater than 0 for every line item.');
+      return;
+    }
     const totals = recalculateTotals(editingInvoice.items, editingInvoice.roundMode || 'none');
     const updatedInvoice: SavedInvoice = {
       ...editingInvoice,
@@ -1107,7 +1138,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
         showToast('success', 'Proforma Invoice Updated', `Proforma invoice #${updatedInvoice.invoiceNumber} updated successfully!`);
       } catch (err: any) {
         console.error('Failed to update proforma invoice:', err);
-        const msg = err?.response?.data?.error?.message || err?.message || 'Failed to update proforma invoice';
+        const msg = getApiErrorMessage(err, 'Failed to update proforma invoice');
         showToast('error', 'Update Failed', msg);
       }
     } else {
@@ -1133,7 +1164,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
         showToast('success', 'Invoice Updated', `Invoice #${updatedInvoice.invoiceNumber} updated successfully!`);
       } catch (err: any) {
         console.error('Failed to update invoice:', err);
-        const msg = err?.response?.data?.error?.message || err?.message || 'Failed to update invoice';
+        const msg = getApiErrorMessage(err, 'Failed to update invoice');
         showToast('error', 'Update Failed', msg);
       }
     }
@@ -1457,7 +1488,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                     <span>Phone Number</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.company.phone || '-'}</span>
+                  <span className="text-slate-700 flex-1">{formatPhoneNumber(activeInvoice.company.phone) || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
@@ -1508,7 +1539,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                     <span>Phone Number</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.client.phone || '-'}</span>
+                  <span className="text-slate-700 flex-1">{formatPhoneNumber(activeInvoice.client.phone) || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
@@ -1625,12 +1656,6 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                                 {activeInvoice.totalDiscount > 0
                                   ? `-₹${activeInvoice.totalDiscount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
                                   : '₹0.00'}
-                              </td>
-                            </tr>
-                            <tr>
-                              <td className="py-1.5 text-left font-medium text-xs sm:text-sm text-slate-600">Amount (After Discount)</td>
-                              <td className="py-1.5 text-right font-semibold text-xs sm:text-sm text-slate-800 font-sans whitespace-nowrap">
-                                ₹{(activeInvoice.taxableAmount ?? Math.max(0, (activeInvoice.subtotal || 0) - (activeInvoice.totalDiscount || 0))).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
                             </tr>
                             <tr>
@@ -1778,7 +1803,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
             {isProforma && (activeInvoice.company.email || activeInvoice.company.phone) && (
               <div className="text-center pt-2">
                 <p className="text-[11px] sm:text-xs text-slate-400 italic">
-                  For any enquiry, reach out via email at {activeInvoice.company.email || '-'}, call on {activeInvoice.company.phone || '-'}
+                  For any enquiry, reach out via email at {activeInvoice.company.email || '-'}, call on {formatPhoneNumber(activeInvoice.company.phone) || '-'}
                 </p>
               </div>
             )}
@@ -1818,23 +1843,23 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
     if (isProforma) {
       try {
         await proformaInvoiceApi.deleteProformaInvoice(id);
-        setLiveProformas((prev) => prev.filter((item) => item.id !== id));
-        setProformaTotalRecords((prev) => Math.max(0, prev - 1));
         showToast('success', 'Proforma Invoice Deleted', `Proforma invoice #${number} deleted.`);
+        // Reload from the server so the rows and the total stay correct (the shared pager moves off an empty page)
+        await fetchLiveInvoices();
       } catch (err: any) {
         console.error('Failed to delete proforma invoice:', err);
-        const msg = err?.response?.data?.error?.message || err?.message || 'Failed to delete proforma invoice';
+        const msg = getApiErrorMessage(err, 'Failed to delete proforma invoice');
         showToast('error', 'Delete Failed', msg);
       }
     } else {
       try {
         await invoiceApi.deleteInvoice(id);
-        setLiveInvoices((prev) => prev.filter((item) => item.id !== id));
-        setInvoicesTotalRecords((prev) => Math.max(0, prev - 1));
         showToast('success', 'Invoice Deleted', `Invoice #${number} deleted successfully.`);
+        // Reload from the server so the rows and the total stay correct (the shared pager moves off an empty page)
+        await fetchLiveInvoices();
       } catch (err: any) {
         console.error('Failed to delete invoice:', err);
-        const msg = err?.response?.data?.error?.message || err?.message || 'Failed to delete invoice';
+        const msg = getApiErrorMessage(err, 'Failed to delete invoice');
         showToast('error', 'Delete Failed', msg);
       }
     }
@@ -1930,8 +1955,9 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
           <table className="w-full text-left border-collapse border border-slate-200">
             <thead>
               <tr className="bg-[#33077C] text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">{isProforma ? 'PROFORMA #' : 'INVOICE #'}</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CLIENT / CUSTOMER</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">{isProforma ? 'PROFORMA ID' : 'INVOICE ID'}</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">{isProforma ? 'PROFORMA NUMBER' : 'INVOICE NUMBER'}</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">{isPlatformAdmin ? 'ORGANIZATION' : 'CLIENT / CUSTOMER'}</th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">{isProforma ? 'PROFORMA DATE' : 'INVOICE DATE'}</th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">CREATED DATE</th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">DUE DATE</th>
@@ -1946,7 +1972,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
             <tbody className="text-sm">
               {isLoading ? (
                 <tr>
-                  <td colSpan={isProforma ? 8 : 9} className="py-16 text-center text-slate-400 border border-slate-200">
+                  <td colSpan={isProforma ? 9 : 10} className="py-16 text-center text-slate-400 border border-slate-200">
                     <Loader2 className="w-9 h-9 mx-auto mb-2 animate-spin text-[#33077C]" />
                     <p className="font-bold text-slate-700 text-sm">
                       {isProforma ? 'Loading proforma invoices...' : 'Loading invoices...'}
@@ -1956,7 +1982,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 </tr>
               ) : pagedInvoices.length === 0 ? (
                 <tr>
-                  <td colSpan={isProforma ? 8 : 9} className="py-16 text-center text-slate-400 border border-slate-200">
+                  <td colSpan={isProforma ? 9 : 10} className="py-16 text-center text-slate-400 border border-slate-200">
                     <Sparkles className="w-9 h-9 mx-auto mb-2 opacity-30 text-orange-400" />
                     <p className="font-bold text-slate-700 text-sm">No {isProforma ? 'proforma invoices' : 'invoices'} found.</p>
                     <p className="text-xs text-slate-400 mt-0.5">
@@ -1975,6 +2001,9 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                       >
                         {inv.invoiceNumber}
                       </span>
+                    </td>
+                    <td className="py-4 px-5 border border-slate-200 align-middle text-left">
+                      <span className="font-semibold text-slate-800 text-sm">{inv.manualNumber || '-'}</span>
                     </td>
                     <td className="py-4 px-5 border border-slate-200 align-middle text-left">
                       <div>
@@ -2896,7 +2925,12 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                     <input
                       type="text"
                       value={editingInvoice.invoiceNumber}
-                      onChange={(e) => setEditingInvoice({ ...editingInvoice, invoiceNumber: e.target.value })}
+                      onChange={(e) =>
+                        setEditingInvoice({
+                          ...editingInvoice,
+                          invoiceNumber: sanitizeDocumentNumberInput(e.target.value),
+                        })
+                      }
                       className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
                     />
                   </div>

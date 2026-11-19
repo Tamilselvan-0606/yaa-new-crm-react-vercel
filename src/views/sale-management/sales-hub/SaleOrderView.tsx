@@ -127,6 +127,7 @@ import {
   handleNumberOnlyKeyDown,
   handleNonNegativeKeyDown,
 } from "../utils/formUtils";
+import { ImageAttachmentBox } from "../utils/ImageAttachmentBox";
 import { normalizeIndianPhoneTo10Digits } from "../../../utils/validation";
 import { FormError } from "../../../components/common/FormError";
 import {
@@ -850,7 +851,14 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     fetchLiveProducts();
 
     await loadCustomers();
+  }, [fetchLiveProducts, loadCustomers]);
 
+  // Stocks and batches are live data and are only needed once a product dropdown opens or the form already holds
+  // items (edit / convert / duplicate), so they are NOT fetched just because the form opened.
+  const hasLoadedStockDataRef = useRef(false);
+  const ensureStockData = useCallback(async () => {
+    if (hasLoadedStockDataRef.current) return;
+    hasLoadedStockDataRef.current = true;
     try {
       const stockRes = await stockApi.getStocks({
         pagination_required: false,
@@ -878,7 +886,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     } catch (e) {
       console.warn("Batch load error in SaleOrderView:", e);
     }
-  }, [fetchLiveProducts, loadCustomers, setStocksList]);
+  }, [setStocksList]);
 
   // List view only needs customers; products/stocks/batches load when the form opens
   useEffect(() => {
@@ -1123,6 +1131,11 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   useEffect(() => {
     if (openProductDropdownRow === null || openProductDropdownRow === undefined)
       return;
+    // First open loads stocks + batches (ensureStockData); every later open just refreshes the stock quantities.
+    if (!hasLoadedStockDataRef.current) {
+      ensureStockData();
+      return;
+    }
     let cancelled = false;
     stockApi
       .getStocks({ pagination_required: false, page_size: 100 })
@@ -1138,7 +1151,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [openProductDropdownRow]);
+  }, [openProductDropdownRow, ensureStockData]);
 
   const matchingProducts = useMemo(() => {
     const q = productSearchQuery.toLowerCase().trim();
@@ -1201,7 +1214,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           productId: "",
           productName: "",
           sku: "",
-          quantity: 1,
+          quantity: 0,
           unit: "PCS",
           unitPrice: 0,
           discountPercent: 0,
@@ -1239,6 +1252,14 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   const activeTab = useMemo(() => {
     return tabs.find((t) => t.id === activeTabId) || tabs[0];
   }, [tabs, activeTabId]);
+
+  // An existing document (edit / convert / duplicate) already has items: load stock so quantities and validation work.
+  const activeTabHasItems = Boolean(
+    activeTab?.formData?.items?.some((i: any) => i.productId || i.productName),
+  );
+  useEffect(() => {
+    if (viewMode === "form" && activeTabHasItems) ensureStockData();
+  }, [viewMode, activeTabHasItems, ensureStockData]);
 
   // Errors belong to the active tab's form; never carry them across tabs / modes.
   useEffect(() => {
@@ -1461,7 +1482,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           productId: "",
           productName: "",
           sku: "",
-          quantity: 1,
+          quantity: 0,
           unit: "PCS",
           unitPrice: 0,
           discountPercent: 0,
@@ -2352,6 +2373,10 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       partyPhone: order.customerPhone,
       partyAddress: order.billingAddress,
       extraMeta: [
+        { label: "Order ID", value: order.orderNo },
+        ...(order.salesOrderManualNo
+          ? [{ label: "Order No", value: order.salesOrderManualNo }]
+          : []),
         { label: "Payment Type", value: order.paymentType || "Credit" },
         {
           label: "State of Supply",
@@ -2479,8 +2504,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             <div>
               <div class="doc-title">SALE ORDER</div>
               <div style="font-size: 12px; color: #64748b; text-align: right; margin-top: 4px;">
-                Order #: <strong>${order.orderNo}</strong> (Ref: ${order.referenceNo || "1"})
+                Order ID: <strong>${order.orderNo}</strong> (Ref: ${order.referenceNo || "1"})
               </div>
+              ${order.salesOrderManualNo ? `<div style="font-size: 12px; color: #64748b; text-align: right; margin-top: 2px;">Order No: <strong>${order.salesOrderManualNo}</strong></div>` : ""}
               <div style="text-align: right; margin-top: 4px;">
                 <span class="badge">${order.status.toUpperCase()}</span>
               </div>
@@ -2740,6 +2766,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       const matchesSearch =
         !q ||
         o.orderNo.toLowerCase().includes(q) ||
+        (o.salesOrderManualNo || "").toLowerCase().includes(q) ||
         o.partyName.toLowerCase().includes(q) ||
         (o.referenceNo && o.referenceNo.toLowerCase().includes(q)) ||
         (o.customerPhone && o.customerPhone.toLowerCase().includes(q));
@@ -4001,35 +4028,11 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                 )}
 
                 {showImageSection && (
-                  <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-2 animate-in fade-in duration-100 text-xs">
-                    <label className="block text-xs font-bold text-slate-700">
-                      Attach Image
-                    </label>
-                    <div className="flex items-center gap-3">
-                      <label className="px-3 py-1.5 bg-white border border-slate-200 hover:border-[#33077C] rounded-lg font-semibold text-slate-700 cursor-pointer flex items-center gap-1.5 transition-colors">
-                        <ImageIcon className="w-3.5 h-3.5 text-[#33077C]" />
-                        <span>Choose Image</span>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={(e) => {
-                            if (e.target.files?.[0]) {
-                              setAttachedImageName(e.target.files[0].name);
-                              toast.success(
-                                `Image "${e.target.files[0].name}" attached!`,
-                              );
-                            }
-                          }}
-                        />
-                      </label>
-                      {attachedImageName && (
-                        <span className="text-slate-600 font-medium truncate max-w-xs">
-                          {attachedImageName}
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                  <ImageAttachmentBox
+                    attachedImageName={attachedImageName}
+                    onImageSelect={(fileName) => setAttachedImageName(fileName)}
+                    onImageClear={() => setAttachedImageName(null)}
+                  />
                 )}
 
                 {showDocumentSection && (
@@ -4223,6 +4226,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         createdDateTime: createdDt?.full || "—",
         convertedDateTime: convertedDt?.full || "—",
         orderNo: o.orderNo,
+        salesOrderManualNo: o.salesOrderManualNo || "—",
         partyName: o.partyName,
         customerPhone: o.customerPhone || "-",
         amount: Number(o.amount || 0),
@@ -4249,7 +4253,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           align: "center",
           width: 22,
         },
-        { header: "Order No.", key: "orderNo", align: "center", width: 18 },
+        { header: "Order ID", key: "orderNo", align: "center", width: 18 },
+        { header: "Order No.", key: "salesOrderManualNo", align: "center", width: 18 },
         { header: "Customer Name", key: "partyName", align: "left", width: 28 },
         { header: "Phone", key: "customerPhone", align: "left", width: 18 },
         {
@@ -4296,6 +4301,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       const convertedDt = formatDateTime(convertedAt);
       return {
         orderNo: o.orderNo,
+        salesOrderManualNo: o.salesOrderManualNo || "—",
         createdDateTime: createdDt?.full || "—",
         convertedDateTime: convertedDt?.full || "—",
         partyName: o.partyName,
@@ -4310,7 +4316,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       title: "SALES ORDER REGISTER",
       subtitle: `Filter: ${appliedPeriod} | Total Orders: ${rows.length}`,
       columns: [
-        { header: "Order No.", key: "orderNo", align: "center", width: "16%" },
+        { header: "Order ID", key: "orderNo", align: "center", width: "12%" },
+        { header: "Order No.", key: "salesOrderManualNo", align: "center", width: "12%" },
         {
           header: "Created Date & Time",
           key: "createdDateTime",
@@ -4641,9 +4648,14 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               <CommonTableHead
                 columns={[
                   {
-                    label: "SALE ORDER S.NO.",
+                    label: "SALE ORDER ID",
                     align: "center",
                     minWidth: "140px",
+                  },
+                  {
+                    label: "SALE ORDER NO.",
+                    align: "center",
+                    minWidth: "130px",
                   },
                   { label: "CUSTOMER NAME", align: "left", minWidth: "180px" },
                   {
@@ -4669,7 +4681,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                 {paginatedOrders.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={9}
+                      colSpan={10}
                       className="py-12 text-center text-slate-400"
                     >
                       <div className="flex flex-col items-center justify-center gap-2">
@@ -4723,6 +4735,11 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                               className="justify-center"
                             />
                           </div>
+                        </td>
+
+                        {/* 1b. Sale Order No. (manual number) */}
+                        <td className="py-3.5 px-3 font-semibold text-slate-700 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                          {item.salesOrderManualNo || "—"}
                         </td>
 
                         {/* 2. PARTY */}
@@ -5030,6 +5047,11 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                 <p className="text-sm font-bold text-slate-900">
                   {previewOrder.orderNo}
                 </p>
+                {previewOrder.salesOrderManualNo && (
+                  <p className="text-xs font-semibold text-slate-600">
+                    Order No: {previewOrder.salesOrderManualNo}
+                  </p>
+                )}
                 <p className="text-xs text-slate-500">
                   Order Date: {isoToDdmmyyyy(previewOrder.orderDate)}
                 </p>

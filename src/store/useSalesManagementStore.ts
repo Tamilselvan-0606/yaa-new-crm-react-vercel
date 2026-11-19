@@ -89,6 +89,8 @@ export interface SaleTransaction {
   lineDiscountTotal?: number;
   taxableAmount?: number;
   unroundedTotal?: number;
+  /** Total value of (non-rejected) sales returns against this invoice. */
+  totalReturned?: number;
   roundOff?: number;
   roundMode?: 'auto' | 'up' | 'down' | 'none';
   grandTotal: number;

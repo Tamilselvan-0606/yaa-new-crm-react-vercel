@@ -51,7 +51,6 @@ const LEAD_SOURCE_OPTIONS = [
   'Facebook',
   'WhatsApp',
   'Direct',
-  'Other',
 ];
 
 // 'Converted to Client' is set by creating the client from the lead, not by hand.
@@ -235,9 +234,9 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
       state: (initialLead as any).stateName || initialLead.state || '',
       country: (initialLead as any).countryName || (initialLead as any).country || '',
       district: (initialLead as any).districtName || (initialLead as any).district || '',
-      countryId: '',
-      stateId: '',
-      districtId: '',
+      countryId: initialLead.countryId || (initialLead as any).country_id || '',
+      stateId: initialLead.stateId || (initialLead as any).state_id || '',
+      districtId: initialLead.districtId || (initialLead as any).district_id || '',
       pincode: initialLead.pincode || '',
       leadSource: initialLead.leadSource || initialLead.source || 'Website',
       interestedProducts: prodInterest ? [prodInterest] : [],

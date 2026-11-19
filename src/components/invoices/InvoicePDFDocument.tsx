@@ -14,6 +14,7 @@ import { PDF_FONT, PDF_FONT_BOLD } from '../common/pdf/pdfFonts';
 import { SavedInvoice } from '../../store/useInvoiceStore';
 import { formatDate } from '../../views/sale-management/utils/dateUtils';
 import { numberToWordsIndian } from '../../utils/printUtils';
+import { formatPhoneNumber } from '../../utils/fieldValidators';
 
 const styles = StyleSheet.create({
   page: {
@@ -49,7 +50,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   headerMetaLabel: {
-    width: 140,
+    width: 170, // wide enough for "Proforma Invoice Serial Number" on one line
     color: '#64748B', // slate-500
     fontSize: 10,
     fontFamily: PDF_FONT,
@@ -428,11 +429,20 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
           <View style={styles.headerMetaLeft}>
             <View style={styles.headerMetaItem}>
               <Text style={styles.headerMetaLabel}>
-                {isProforma ? 'Proforma Invoice Number' : 'Invoice Number'}
+                {isProforma ? 'Proforma Invoice Serial Number' : 'Invoice Serial Number'}
               </Text>
               <Text style={styles.headerMetaColon}>:</Text>
               <Text style={styles.headerMetaValue}>{activeInvoice.invoiceNumber}</Text>
             </View>
+            {activeInvoice.manualNumber ? (
+              <View style={styles.headerMetaItem}>
+                <Text style={styles.headerMetaLabel}>
+                  {isProforma ? 'Proforma Invoice Number' : 'Invoice Number'}
+                </Text>
+                <Text style={styles.headerMetaColon}>:</Text>
+                <Text style={styles.headerMetaValue}>{activeInvoice.manualNumber}</Text>
+              </View>
+            ) : null}
             <View style={styles.headerMetaItem}>
               <Text style={styles.headerMetaLabel}>
                 {isProforma ? 'Proforma Invoice Date' : 'Invoice Date'}
@@ -497,7 +507,7 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Phone Number</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{activeInvoice.company.phone || '-'}</Text>
+              <Text style={styles.billingValue}>{formatPhoneNumber(activeInvoice.company.phone) || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Email</Text>
@@ -532,7 +542,7 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Phone Number</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{activeInvoice.client.phone || '-'}</Text>
+              <Text style={styles.billingValue}>{formatPhoneNumber(activeInvoice.client.phone) || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Email</Text>
@@ -623,12 +633,6 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
               </Text>
             </View>
 
-            <View style={styles.summaryItem}>
-              <Text style={styles.summaryLabel}>Amount (After Discount)</Text>
-              <Text style={styles.summaryValue}>
-                ₹{(activeInvoice.taxableAmount ?? Math.max(0, (activeInvoice.subtotal || 0) - (activeInvoice.totalDiscount || 0))).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </Text>
-            </View>
 
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>GST Total</Text>
@@ -721,7 +725,7 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
           {isProforma && (activeInvoice.company.email || activeInvoice.company.phone) && (
             <View style={{ paddingTop: 4, alignItems: 'center' }}>
               <Text style={{ fontSize: 8, fontFamily: PDF_FONT_BOLD, color: '#64748B', textAlign: 'center' }}>
-                For any enquiry, reach out via email at {activeInvoice.company.email || '-'}, call on {activeInvoice.company.phone || '-'}
+                For any enquiry, reach out via email at {activeInvoice.company.email || '-'}, call on {formatPhoneNumber(activeInvoice.company.phone) || '-'}
               </Text>
             </View>
           )}

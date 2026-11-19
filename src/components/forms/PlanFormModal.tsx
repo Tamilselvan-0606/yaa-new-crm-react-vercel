@@ -43,7 +43,6 @@ const BILLING_CYCLE_OPTIONS = [
   'Quarterly',
   'Annually',
   'One-Time',
-  'Custom',
 ];
 
 const PLAN_TYPE_OPTIONS = [

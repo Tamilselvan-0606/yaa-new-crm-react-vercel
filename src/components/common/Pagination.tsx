@@ -30,6 +30,14 @@ export const Pagination: React.FC<PaginationProps> = ({
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(currentPage, totalPages);
 
+  // The current page no longer exists (e.g. the last row of the last page was deleted): tell the screen to move to the
+  // last page that does. Without this the pager only *showed* the lower page while the table kept asking for the old one.
+  // Only when records exist, so a list that is still loading (total 0) is never reset to page 1.
+  useEffect(() => {
+    if (total > 0 && currentPage > totalPages) onPageChange(totalPages);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [total, currentPage, totalPages]);
+
   const from = total === 0 ? 0 : (safePage - 1) * pageSize + 1;
   const to = Math.min(safePage * pageSize, total);
 

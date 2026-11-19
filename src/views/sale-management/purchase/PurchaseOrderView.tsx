@@ -93,6 +93,7 @@ import {
   handleNonNegativeKeyDown,
 } from "../utils/formUtils";
 import { SaleActionDropdown } from "../utils";
+import { sanitizeHsnCodeInput } from "../../../utils/validation";
 import { Button } from "../../../components/common/Button";
 import { Modal } from "../../../components/common/Modal";
 import { DeleteConfirmationModal } from "../../../components/common/DeleteConfirmationModal";
@@ -255,7 +256,12 @@ const validatePurchaseForm = (
       ["purchaseDate", checkRequiredDate(form.purchaseDate, "purchase date")],
       [
         "dueDate",
-        checkDateNotBefore(form.dueDate, form.purchaseDate, "due date", "purchase date"),
+        checkDateNotBefore(
+          form.dueDate,
+          form.purchaseDate,
+          "due date",
+          "purchase date",
+        ),
       ],
     ]),
   );
@@ -308,7 +314,12 @@ const validatePurchaseForm = (
         },
         { withGst: form.withGst, gstType: form.gstType },
       ).lineTotal;
-      const totalErr = checkTotalConsistency(expected, it.total, "line total", 0.02);
+      const totalErr = checkTotalConsistency(
+        expected,
+        it.total,
+        "line total",
+        0.02,
+      );
       if (totalErr) errors[`items.${i}.total`] = totalErr;
     }
   });
@@ -317,8 +328,14 @@ const validatePurchaseForm = (
   Object.assign(
     errors,
     collectErrors([
-      ["shipping", checkMoney(form.shipping, "shipping charge", { allowZero: true })],
-      ["otherCharges", checkMoney(form.otherCharges, "other charges", { allowZero: true })],
+      [
+        "shipping",
+        checkMoney(form.shipping, "shipping charge", { allowZero: true }),
+      ],
+      [
+        "otherCharges",
+        checkMoney(form.otherCharges, "other charges", { allowZero: true }),
+      ],
     ]),
   );
 
@@ -339,8 +356,17 @@ const validatePurchaseForm = (
       lineTolerance,
     );
     const gstErr = checkGstSplit(
-      { cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, total: totals.tax },
-      !form.withGst ? "exempt" : form.gstType === "intra_state" ? "intra" : "inter",
+      {
+        cgst: totals.cgst,
+        sgst: totals.sgst,
+        igst: totals.igst,
+        total: totals.tax,
+      },
+      !form.withGst
+        ? "exempt"
+        : form.gstType === "intra_state"
+          ? "intra"
+          : "inter",
     );
     const discountErr =
       totals.discount < 0 || totals.discount > totals.subtotal + 0.005
@@ -348,9 +374,7 @@ const validatePurchaseForm = (
         : null;
     Object.assign(
       errors,
-      collectErrors([
-        ["totals", gstErr || discountErr || grandErr],
-      ]),
+      collectErrors([["totals", gstErr || discountErr || grandErr]]),
     );
   }
 
@@ -365,7 +389,10 @@ const validatePurchaseForm = (
   if (!paidErr && paid > 0) {
     const modeErr = checkRequiredSelection(form.paymentMethod, "payment mode");
     if (modeErr) errors.paymentMethod = modeErr;
-    const dateErr = checkRequiredDate(ctx.paymentDate || form.purchaseDate, "payment date");
+    const dateErr = checkRequiredDate(
+      ctx.paymentDate || form.purchaseDate,
+      "payment date",
+    );
     if (dateErr) errors.paymentDate = dateErr;
   }
 
@@ -424,7 +451,10 @@ const validateQuickProduct = (f: {
 }): FieldErrors =>
   collectErrors([
     ["productName", checkRequiredText(f.productName, "product name")],
-    ["purchasePrice", checkMoney(f.purchasePrice, "purchase price", { allowZero: true })],
+    [
+      "purchasePrice",
+      checkMoney(f.purchasePrice, "purchase price", { allowZero: true }),
+    ],
     ["salePrice", checkMoney(f.salePrice, "sale price", { allowZero: true })],
   ]);
 
@@ -449,7 +479,11 @@ const validateStatusChange = (
   if (newStatus === "Approved" && current !== "Pending") {
     return "Only pending purchase orders can be approved.";
   }
-  if (newStatus === "Ordered" && current !== "Pending" && current !== "Approved") {
+  if (
+    newStatus === "Ordered" &&
+    current !== "Pending" &&
+    current !== "Approved"
+  ) {
     return "Only pending or approved purchase orders can be marked as ordered.";
   }
   if (newStatus === "Received") {
@@ -457,7 +491,8 @@ const validateStatusChange = (
       return "This purchase order has no items to receive.";
     }
     const supplierErr = checkRequiredSelection(po.supplierId, "supplier");
-    if (supplierErr) return "This purchase order has no supplier. Please edit it and choose a supplier first.";
+    if (supplierErr)
+      return "This purchase order has no supplier. Please edit it and choose a supplier first.";
     for (let i = 0; i < po.items.length; i++) {
       const it = po.items[i];
       const name = it.productName || `item ${i + 1}`;
@@ -514,7 +549,8 @@ const PAYMENT_TERM_OPTIONS = PAYMENT_TERM_DAYS.map((d) => `Net ${d} Days`);
 const toBillPaymentTerms = (value?: string | null): string => {
   const raw = String(value || "").trim();
   const match = raw.match(/(\d+)\s*day/i);
-  if (match && PAYMENT_TERM_DAYS.includes(Number(match[1]))) return `Net ${Number(match[1])} Days`;
+  if (match && PAYMENT_TERM_DAYS.includes(Number(match[1])))
+    return `Net ${Number(match[1])} Days`;
   return raw;
 };
 
@@ -561,7 +597,9 @@ export const PurchaseOrderView: React.FC = () => {
   const [isApiConnected, setIsApiConnected] = useState(false);
   const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
   const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
-  const [apiSummary, setApiSummary] = useState<NonNullable<import("../../../api/work/purchaseOrderTypes").PurchaseOrderListResponse["summary"]> | null>(null);
+  const [apiSummary, setApiSummary] = useState<NonNullable<
+    import("../../../api/work/purchaseOrderTypes").PurchaseOrderListResponse["summary"]
+  > | null>(null);
   const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [availableProducts, setAvailableProducts] = useState<ApiProduct[]>([]);
@@ -640,7 +678,9 @@ export const PurchaseOrderView: React.FC = () => {
 
   // Split payment (Single / Split mode in the Billing Summary). In an existing bill the rows are ADDITIONAL payments.
   const [isSplitMode, setIsSplitMode] = useState(false);
-  const [splitRows, setSplitRows] = useState<SplitPaymentRow[]>(() => [newSplitRow(makeSplitRowId())]);
+  const [splitRows, setSplitRows] = useState<SplitPaymentRow[]>(() => [
+    newSplitRow(makeSplitRowId()),
+  ]);
   const [splitShowErrors, setSplitShowErrors] = useState(false);
 
   // Quick Add Product Modal state
@@ -735,7 +775,7 @@ export const PurchaseOrderView: React.FC = () => {
                 productId: "",
                 productName: "",
                 batch: "",
-                quantity: 1,
+                quantity: 0,
                 freeQuantity: 0,
                 unit: "NONE",
                 packingUnit: "",
@@ -857,27 +897,21 @@ export const PurchaseOrderView: React.FC = () => {
 
     try {
       setIsLoadingRequests(true);
-      const [suppRes, stockBatchRes, prRes, prodRes] = await Promise.allSettled(
-        [
-          supplierApi.getSuppliers({
-            page_size: 100,
-            pagination_required: false,
-          }),
-          stockApi.getStockBatches({
-            page_size: 100,
-            pagination_required: false,
-          }),
-          commercePurchaseRequestApi.getPurchaseRequests({
-            page_size: 100,
-            pagination_required: false,
-          }),
-          productApi.getProducts({
-            activeOnly: true,
-            page_size: 100,
-            pagination_required: false,
-          }),
-        ],
-      );
+      const [suppRes, prRes, prodRes] = await Promise.allSettled([
+        supplierApi.getSuppliers({
+          page_size: 100,
+          pagination_required: false,
+        }),
+        commercePurchaseRequestApi.getPurchaseRequests({
+          page_size: 100,
+          pagination_required: false,
+        }),
+        productApi.getProducts({
+          activeOnly: true,
+          page_size: 100,
+          pagination_required: false,
+        }),
+      ]);
 
       if (
         suppRes.status === "fulfilled" &&
@@ -885,13 +919,6 @@ export const PurchaseOrderView: React.FC = () => {
         Array.isArray(suppRes.value.data)
       ) {
         setAvailableSuppliers(suppRes.value.data);
-      }
-      if (
-        stockBatchRes.status === "fulfilled" &&
-        stockBatchRes.value?.data &&
-        Array.isArray(stockBatchRes.value.data)
-      ) {
-        setAvailableBatches(stockBatchRes.value.data);
       }
       if (
         prRes.status === "fulfilled" &&
@@ -914,12 +941,39 @@ export const PurchaseOrderView: React.FC = () => {
     }
   }, []);
 
+  // Stock batches are live (never cached) and only needed once a line item has a product (batch dropdown / details),
+  // so they are fetched lazily the first time that happens instead of on every form open.
+  const hasLoadedBatchesRef = useRef(false);
+  const loadBatchesOnce = useCallback(async () => {
+    if (hasLoadedBatchesRef.current) return;
+    hasLoadedBatchesRef.current = true;
+    try {
+      const res = await stockApi.getStockBatches({
+        page_size: 100,
+        pagination_required: false,
+      });
+      if (res?.data && Array.isArray(res.data)) {
+        setAvailableBatches(res.data);
+      }
+    } catch (err) {
+      hasLoadedBatchesRef.current = false;
+      console.warn("Error loading stock batches in Purchase Bills:", err);
+    }
+  }, []);
+
   // Trigger form master data ONLY when the form modal is active
   useEffect(() => {
     if (isFormModalOpen) {
       loadFormMasterData();
     }
   }, [isFormModalOpen, loadFormMasterData]);
+
+  const formHasProductLine = formData.items.some((it) => !!it.productId);
+  useEffect(() => {
+    if (isFormModalOpen && formHasProductLine) {
+      loadBatchesOnce();
+    }
+  }, [isFormModalOpen, formHasProductLine, loadBatchesOnce]);
 
   // On-demand product search: calls products API when user is searching or opening product selector
   const handleProductSearch = useCallback(async (query = "") => {
@@ -1212,7 +1266,8 @@ export const PurchaseOrderView: React.FC = () => {
         shipping: 0,
         otherCharges: 0,
         paymentMethod: "Bank Transfer",
-        paymentTerms: toBillPaymentTerms(matchedSupplier?.paymentTerms) || "Net 30 Days",
+        paymentTerms:
+          toBillPaymentTerms(matchedSupplier?.paymentTerms) || "Net 30 Days",
         paidAmount: 0,
         purchaseStatus: "Pending",
         roundMode: "none",
@@ -1280,11 +1335,15 @@ export const PurchaseOrderView: React.FC = () => {
         search?: string;
         status?: string;
         page?: number;
-      }
+      },
     ) => {
       const targetPage = overrides?.page ?? currentPage;
-      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
-      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedPurchaseStatus;
+      const targetSearch =
+        overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetStatus =
+        overrides?.status !== undefined
+          ? overrides.status
+          : appliedPurchaseStatus;
       const fetchKey = `${targetPage}_${pageSize}_${targetSearch.trim()}_${targetStatus}`;
       if (isFetchingRef.current) return;
       if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
@@ -1294,8 +1353,7 @@ export const PurchaseOrderView: React.FC = () => {
       setIsApiLoading(true);
 
       try {
-        const statusParam =
-          targetStatus !== "All" ? targetStatus : undefined;
+        const statusParam = targetStatus !== "All" ? targetStatus : undefined;
 
         const response = await workPurchaseOrderApi.getPurchaseOrders({
           page: targetPage,
@@ -1344,12 +1402,7 @@ export const PurchaseOrderView: React.FC = () => {
         setIsApiLoading(false);
       }
     },
-    [
-      currentPage,
-      pageSize,
-      appliedSearch,
-      appliedPurchaseStatus,
-    ],
+    [currentPage, pageSize, appliedSearch, appliedPurchaseStatus],
   );
 
   // Initial and reactive fetch on filter change
@@ -1440,9 +1493,10 @@ export const PurchaseOrderView: React.FC = () => {
   const summary = useMemo(() => {
     if (apiSummary) {
       const returnDeduction = Number(apiSummary.totalPurchaseReturnAmount || 0);
-      const effectiveTotalAmount = returnDeduction > 0
-        ? Math.max(0, Number(apiSummary.totalAmount) - returnDeduction)
-        : Number(apiSummary.totalAmount);
+      const effectiveTotalAmount =
+        returnDeduction > 0
+          ? Math.max(0, Number(apiSummary.totalAmount) - returnDeduction)
+          : Number(apiSummary.totalAmount);
       return {
         ...apiSummary,
         totalAmount: effectiveTotalAmount,
@@ -1463,7 +1517,7 @@ export const PurchaseOrderView: React.FC = () => {
       productId: "",
       productName: "",
       batch: "",
-      quantity: 1,
+      quantity: 0,
       freeQuantity: 0,
       unit: "NONE",
       expDate: "",
@@ -1529,7 +1583,9 @@ export const PurchaseOrderView: React.FC = () => {
         const res = await workPurchaseOrderApi.getPurchaseOrderById(po.id);
         if (res?.data) {
           const fresh = mapApiPurchaseOrderToUi(res.data);
-          setSelectedPurchase((prev) => (prev && prev.id === po.id ? { ...prev, ...fresh } : prev));
+          setSelectedPurchase((prev) =>
+            prev && prev.id === po.id ? { ...prev, ...fresh } : prev,
+          );
         }
       }
     } catch (err) {
@@ -1753,6 +1809,13 @@ export const PurchaseOrderView: React.FC = () => {
       partyGstin: (matchedSup as any)?.gstNumber,
       extraMeta: [
         {
+          label: "Purchase ID",
+          value: targetPo.purchaseNo || targetPo.poNo || "PO-DRAFT",
+        },
+        ...(targetPo.purchaseBillManualNo
+          ? [{ label: "Purchase No", value: targetPo.purchaseBillManualNo }]
+          : []),
+        {
           label: "Payment Terms",
           value: targetPo.paymentTerms || "—",
         },
@@ -1796,7 +1859,7 @@ export const PurchaseOrderView: React.FC = () => {
         unit: it.unit,
         quantity: it.quantity,
         unitPrice: it.purchasePrice,
-        taxPercent: isGstActive ? (it.taxPercent || 0) : 0,
+        taxPercent: isGstActive ? it.taxPercent || 0 : 0,
         total: it.total,
       })),
       subtotal: targetPo.subtotal || targetPo.subTotal,
@@ -1861,7 +1924,8 @@ export const PurchaseOrderView: React.FC = () => {
       page,
       limit: size,
       search: appliedSearch.trim() || undefined,
-      status: appliedPurchaseStatus !== "All" ? appliedPurchaseStatus : undefined,
+      status:
+        appliedPurchaseStatus !== "All" ? appliedPurchaseStatus : undefined,
       pagination_required: true,
     });
     return {
@@ -1883,6 +1947,7 @@ export const PurchaseOrderView: React.FC = () => {
       if (q) {
         const matchesSearch =
           p.purchaseNo.toLowerCase().includes(q) ||
+          (p.purchaseBillManualNo || "").toLowerCase().includes(q) ||
           (p.purchaseInvoiceNo || "").toLowerCase().includes(q) ||
           p.supplierName.toLowerCase().includes(q) ||
           p.items.some((it) => it.productName.toLowerCase().includes(q));
@@ -1903,76 +1968,77 @@ export const PurchaseOrderView: React.FC = () => {
     });
   };
 
-  const handlePrintTableReport = () => runReport({
-    label: "purchase orders",
-    load: loadPurchaseOrderReportRows,
-    onRows: (rows) => {
-    const printRows = rows.map((p) => ({
-      purchaseNo: p.purchaseNo,
-      purchaseDate: p.purchaseDate,
-      supplierName: p.supplierName,
-      purchaseStatus: p.purchaseStatus,
-      paymentStatus: p.paymentStatus,
-      grandTotal: p.grandTotal,
-      paidAmount: p.paidAmount,
-      balance: p.balance,
-    }));
+  const handlePrintTableReport = () =>
+    runReport({
+      label: "purchase orders",
+      load: loadPurchaseOrderReportRows,
+      onRows: (rows) => {
+        const printRows = rows.map((p) => ({
+          purchaseNo: p.purchaseNo,
+          purchaseBillManualNo: p.purchaseBillManualNo || "—",
+          purchaseDate: p.purchaseDate,
+          supplierName: p.supplierName,
+          purchaseStatus: p.purchaseStatus,
+          paymentStatus: p.paymentStatus,
+          grandTotal: p.grandTotal,
+          paidAmount: p.paidAmount,
+          balance: p.balance,
+        }));
 
-    printTableReport({
-      title: "Purchase Orders & Bills Report",
-      subtitle: `Total Orders: ${totalRecordsCount} | Filters: Status [${appliedPurchaseStatus}], Payment [${appliedPaymentStatus}], Supplier [${appliedSupplier}]`,
-      columns: [
-        { header: "PO / Bill #", key: "purchaseNo", width: "15%" },
-        { header: "Date", key: "purchaseDate", width: "12%" },
-        { header: "Supplier Name", key: "supplierName", width: "25%" },
-        {
-          header: "Order Status",
-          key: "purchaseStatus",
-          align: "center",
-          width: "12%",
-        },
-        {
-          header: "Payment Status",
-          key: "paymentStatus",
-          align: "center",
-          width: "12%",
-        },
-        {
-          header: "Total (₹)",
-          key: "grandTotal",
-          align: "right",
-          type: "currency",
-          width: "12%",
-        },
-        {
-          header: "Balance (₹)",
-          key: "balance",
-          align: "right",
-          type: "currency",
-          width: "12%",
-        },
-      ],
-      data: printRows,
-      metrics: [
-        { label: "Total Purchases", value: summary.totalAmount },
-        { label: "Pending Payments", value: summary.pendingPayments },
-        { label: "Fully Paid Count", value: summary.paidCount },
-        { label: "Total Orders", value: totalRecordsCount },
-      ],
-      summaryRow: {
-        purchaseNo: "Total",
-        grandTotal: rows.reduce(
-          (acc, p) => acc + (p.grandTotal || 0),
-          0,
-        ),
-        balance: rows.reduce(
-          (acc, p) => acc + (p.balance || 0),
-          0,
-        ),
+        printTableReport({
+          title: "Purchase Orders & Bills Report",
+          subtitle: `Total Orders: ${totalRecordsCount} | Filters: Status [${appliedPurchaseStatus}], Payment [${appliedPaymentStatus}], Supplier [${appliedSupplier}]`,
+          columns: [
+            { header: "Purchase ID", key: "purchaseNo", width: "12%" },
+            {
+              header: "Purchase No.",
+              key: "purchaseBillManualNo",
+              width: "11%",
+            },
+            { header: "Date", key: "purchaseDate", width: "12%" },
+            { header: "Supplier Name", key: "supplierName", width: "25%" },
+            {
+              header: "Order Status",
+              key: "purchaseStatus",
+              align: "center",
+              width: "12%",
+            },
+            {
+              header: "Payment Status",
+              key: "paymentStatus",
+              align: "center",
+              width: "12%",
+            },
+            {
+              header: "Total (₹)",
+              key: "grandTotal",
+              align: "right",
+              type: "currency",
+              width: "12%",
+            },
+            {
+              header: "Balance (₹)",
+              key: "balance",
+              align: "right",
+              type: "currency",
+              width: "12%",
+            },
+          ],
+          data: printRows,
+          metrics: [
+            { label: "Total Purchases", value: summary.totalAmount },
+            { label: "Pending Payments", value: summary.pendingPayments },
+            { label: "Fully Paid Count", value: summary.paidCount },
+            { label: "Total Orders", value: totalRecordsCount },
+          ],
+          summaryRow: {
+            purchaseNo: "Total",
+            grandTotal: rows.reduce((acc, p) => acc + (p.grandTotal || 0), 0),
+            balance: rows.reduce((acc, p) => acc + (p.balance || 0), 0),
+          },
+        });
       },
     });
-    },
-  });
 
   const handleSupplierChange = (supId: string) => {
     formErr.clearError("supplierId");
@@ -2233,7 +2299,6 @@ export const PurchaseOrderView: React.FC = () => {
         });
       });
 
-
       // 6. Ensure currentBatch is present if non-empty
       if (
         currentBatch &&
@@ -2376,7 +2441,9 @@ export const PurchaseOrderView: React.FC = () => {
       salePrice: "salePrice",
       freeQuantity: "freeQuantity",
     };
-    formErr.clearError(`items.${index}.${errKeyByField[field as string] || field}`);
+    formErr.clearError(
+      `items.${index}.${errKeyByField[field as string] || field}`,
+    );
     formErr.clearError(`items.${index}.total`);
     formErr.clearError(`items.${index}.discountAmount`);
     formErr.clearError("totals");
@@ -2423,7 +2490,7 @@ export const PurchaseOrderView: React.FC = () => {
       productId: "",
       productName: "",
       batch: "",
-      quantity: 1,
+      quantity: 0,
       freeQuantity: 0,
       unit: "NONE",
       packingUnit: "",
@@ -2504,9 +2571,19 @@ export const PurchaseOrderView: React.FC = () => {
   }, [calculatedTotals.grandTotal, formData.paidAmount, isSplitMode]);
 
   // Split payment: what was already paid on this bill, the live totals and the validation
-  const splitAlreadyPaid = editingPurchase ? Number(editingPurchase.paidAmount || 0) : 0;
-  const splitSummary = summarizeSplit(calculatedTotals.grandTotal, splitAlreadyPaid, splitRows);
-  const splitValidation = validateSplit(calculatedTotals.grandTotal, splitAlreadyPaid, splitRows);
+  const splitAlreadyPaid = editingPurchase
+    ? Number(editingPurchase.paidAmount || 0)
+    : 0;
+  const splitSummary = summarizeSplit(
+    calculatedTotals.grandTotal,
+    splitAlreadyPaid,
+    splitRows,
+  );
+  const splitValidation = validateSplit(
+    calculatedTotals.grandTotal,
+    splitAlreadyPaid,
+    splitRows,
+  );
 
   // Every time the form opens (or another bill is edited) it starts in Single mode with one empty entry
   useEffect(() => {
@@ -2524,7 +2601,10 @@ export const PurchaseOrderView: React.FC = () => {
         : {
             ...prev,
             paidAmount: splitSummary.totalPaid,
-            paymentMethod: splitSummary.newPayments > 0 ? prev.paymentMethod || "Cash" : prev.paymentMethod,
+            paymentMethod:
+              splitSummary.newPayments > 0
+                ? prev.paymentMethod || "Cash"
+                : prev.paymentMethod,
           },
     );
   }, [isSplitMode, splitSummary.totalPaid, splitSummary.newPayments]);
@@ -2533,8 +2613,19 @@ export const PurchaseOrderView: React.FC = () => {
     if (split === isSplitMode) return;
     if (split) {
       // carry over what was typed in the single field as the first entry
-      const carried = Math.max(0, Number(formData.paidAmount || 0) - splitAlreadyPaid);
-      setSplitRows([{ ...newSplitRow(makeSplitRowId(), (formData.paymentMethod as any) === "UPI" ? "UPI" : "Cash"), amount: carried > 0 ? String(carried) : "" }]);
+      const carried = Math.max(
+        0,
+        Number(formData.paidAmount || 0) - splitAlreadyPaid,
+      );
+      setSplitRows([
+        {
+          ...newSplitRow(
+            makeSplitRowId(),
+            (formData.paymentMethod as any) === "UPI" ? "UPI" : "Cash",
+          ),
+          amount: carried > 0 ? String(carried) : "",
+        },
+      ]);
       setSplitShowErrors(false);
     }
     setIsSplitMode(split);
@@ -2562,9 +2653,16 @@ export const PurchaseOrderView: React.FC = () => {
     }
     let cancelled = false;
     workPaymentOutApi
-      .getPaymentsOut({ search: billNo, limit: 100, pagination_required: false })
+      .getPaymentsOut({
+        search: billNo,
+        limit: 100,
+        pagination_required: false,
+      })
       .then((res) => {
-        if (!cancelled) setBillPayments(Array.isArray(res?.data) ? res.data.map(mapApiPaymentOutToUi) : []);
+        if (!cancelled)
+          setBillPayments(
+            Array.isArray(res?.data) ? res.data.map(mapApiPaymentOutToUi) : [],
+          );
       })
       .catch(() => {
         if (!cancelled) setBillPayments([]);
@@ -2572,7 +2670,11 @@ export const PurchaseOrderView: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [editingPurchase?.id, editingPurchase?.purchaseNo, editingPurchase?.paidAmount]);
+  }, [
+    editingPurchase?.id,
+    editingPurchase?.purchaseNo,
+    editingPurchase?.paidAmount,
+  ]);
 
   // Payment History records for current editing purchase bill
   const matchingPaymentHistory: PurchasePaymentHistoryItem[] = useMemo(() => {
@@ -2835,7 +2937,9 @@ export const PurchaseOrderView: React.FC = () => {
           : {}),
         items: rows.length > 0 ? rows : prev.items,
       }));
-      toast.success(`Draft restored with ${rows.length} item${rows.length === 1 ? "" : "s"}.`);
+      toast.success(
+        `Draft restored with ${rows.length} item${rows.length === 1 ? "" : "s"}.`,
+      );
     } finally {
       setIsResumingDraft(false);
     }
@@ -2927,7 +3031,12 @@ export const PurchaseOrderView: React.FC = () => {
     const rows = activeSplitRows(splitRows);
     let saved = 0;
     if (!UUID_REGEX.test(po.supplierId)) {
-      return { total: rows.length, saved, failed: "The supplier of this bill is not valid for recording payments." };
+      return {
+        total: rows.length,
+        saved,
+        failed:
+          "The supplier of this bill is not valid for recording payments.",
+      };
     }
     for (const row of rows) {
       const fields = splitRowToPaymentFields(row, po.purchaseNo);
@@ -2953,7 +3062,11 @@ export const PurchaseOrderView: React.FC = () => {
             { type: "Supplier", id: "LIST" },
           ]),
         );
-        return { total: rows.length, saved, failed: getApiErrorMessage(e, "A payment could not be saved.") };
+        return {
+          total: rows.length,
+          saved,
+          failed: getApiErrorMessage(e, "A payment could not be saved."),
+        };
       }
     }
     dispatch(
@@ -2968,7 +3081,10 @@ export const PurchaseOrderView: React.FC = () => {
     return { total: rows.length, saved };
   };
 
-  const splitOutcomeMessage = (poNo: string, o: { total: number; saved: number; failed?: string }) =>
+  const splitOutcomeMessage = (
+    poNo: string,
+    o: { total: number; saved: number; failed?: string },
+  ) =>
     `Purchase bill ${poNo} was saved, but only ${o.saved} of ${o.total} payments were recorded. ${o.failed} Record the remaining payments from the bill (Record Payment). Nothing was retried.`;
 
   const performSavePurchase = async (_status: PurchaseStatus = "Pending") => {
@@ -2993,7 +3109,8 @@ export const PurchaseOrderView: React.FC = () => {
       finalBalance <= 0 ? "Paid" : finalPaid > 0 ? "Partial" : "Unpaid";
 
     setIsSubmitting(true);
-    let splitOutcome: { total: number; saved: number; failed?: string } | null = null;
+    let splitOutcome: { total: number; saved: number; failed?: string } | null =
+      null;
 
     try {
       if (editingPurchase) {
@@ -3044,7 +3161,9 @@ export const PurchaseOrderView: React.FC = () => {
             otherCharges: formData.otherCharges,
           };
         } else {
-          throw new Error("The server did not return the saved purchase order. Please try again.");
+          throw new Error(
+            "The server did not return the saved purchase order. Please try again.",
+          );
         }
 
         // Auto-generate Payment Out voucher if new payment was recorded during edit
@@ -3087,7 +3206,6 @@ export const PurchaseOrderView: React.FC = () => {
               );
             }
           }
-
         }
 
         if (isSplitMode) splitOutcome = await recordSplitPayments(updatedPo);
@@ -3125,7 +3243,9 @@ export const PurchaseOrderView: React.FC = () => {
         if (apiRes && apiRes.data) {
           createdPo = mapApiPurchaseOrderToUi(apiRes.data);
         } else {
-          throw new Error("The server did not return the saved purchase order. Please try again.");
+          throw new Error(
+            "The server did not return the saved purchase order. Please try again.",
+          );
         }
 
         createdPo = {
@@ -3156,7 +3276,6 @@ export const PurchaseOrderView: React.FC = () => {
 
         // Record payment voucher in Work Payment Out API & local store if initial payment was specified
         if (!isSplitMode && finalPaid > 0) {
-
           if (UUID_REGEX.test(createdPo.supplierId)) {
             try {
               const pRes = await workPaymentOutApi.createPaymentOut(
@@ -3181,7 +3300,6 @@ export const PurchaseOrderView: React.FC = () => {
               );
             }
           }
-
         }
 
         if (isSplitMode) splitOutcome = await recordSplitPayments(createdPo);
@@ -3606,7 +3724,6 @@ export const PurchaseOrderView: React.FC = () => {
         }
       }
 
-
       // The bill's paid amount, balance and status are re-read from the API below.
       toast.success(
         `Payment of ₹${recordAmount.toLocaleString("en-IN")} recorded for ${selectedPurchase.purchaseNo}`,
@@ -3639,6 +3756,7 @@ export const PurchaseOrderView: React.FC = () => {
       if (q) {
         const matchesSearch =
           p.purchaseNo.toLowerCase().includes(q) ||
+          (p.purchaseBillManualNo || "").toLowerCase().includes(q) ||
           (p.purchaseInvoiceNo || "").toLowerCase().includes(q) ||
           p.supplierName.toLowerCase().includes(q) ||
           p.items.some((it) => it.productName.toLowerCase().includes(q));
@@ -3710,109 +3828,133 @@ export const PurchaseOrderView: React.FC = () => {
   ]);
 
   // Export Purchases to Excel
-  const handleExportExcel = () => runReport({
-    label: "purchase orders",
-    load: loadPurchaseOrderReportRows,
-    onRows: (rows) => {
-    const excelRows = rows.map((p, idx) => ({
-      sNo: idx + 1,
-      purchaseNo: p.purchaseNo,
-      purchaseInvoiceNo: p.purchaseInvoiceNo || "-",
-      purchaseDate: p.purchaseDate,
-      supplierName: p.supplierName,
-      supplierCode: p.supplierCode || "-",
-      subtotal: Number(p.subtotal || 0),
-      tax: Number(p.tax || 0),
-      grandTotal: Number(p.grandTotal || 0),
-      paidAmount: Number(p.paidAmount || 0),
-      balance: Number(p.balance || 0),
-      paymentStatus: p.paymentStatus,
-      purchaseStatus: p.purchaseStatus,
-    }));
+  const handleExportExcel = () =>
+    runReport({
+      label: "purchase orders",
+      load: loadPurchaseOrderReportRows,
+      onRows: (rows) => {
+        const excelRows = rows.map((p, idx) => ({
+          sNo: idx + 1,
+          purchaseNo: p.purchaseNo,
+          purchaseBillManualNo: p.purchaseBillManualNo || "—",
+          purchaseInvoiceNo: p.purchaseInvoiceNo || "-",
+          purchaseDate: p.purchaseDate,
+          supplierName: p.supplierName,
+          supplierCode: p.supplierCode || "-",
+          subtotal: Number(p.subtotal || 0),
+          tax: Number(p.tax || 0),
+          grandTotal: Number(p.grandTotal || 0),
+          paidAmount: Number(p.paidAmount || 0),
+          balance: Number(p.balance || 0),
+          paymentStatus: p.paymentStatus,
+          purchaseStatus: p.purchaseStatus,
+        }));
 
-    const totalGrand = excelRows.reduce((acc, row) => acc + row.grandTotal, 0);
-    const totalPaid = excelRows.reduce((acc, row) => acc + row.paidAmount, 0);
-    const totalBal = excelRows.reduce((acc, row) => acc + row.balance, 0);
+        const totalGrand = excelRows.reduce(
+          (acc, row) => acc + row.grandTotal,
+          0,
+        );
+        const totalPaid = excelRows.reduce(
+          (acc, row) => acc + row.paidAmount,
+          0,
+        );
+        const totalBal = excelRows.reduce((acc, row) => acc + row.balance, 0);
 
-    exportTableToExcel({
-      filename: `Purchase_Bills_Report_${new Date().toISOString().split("T")[0]}`,
-      sheetName: "Purchase Bills",
-      title: "YAA CREATIONS CRM - PURCHASE ORDERS & BILLS DIRECTORY",
-      subtitle: `Total Purchase Orders: ${rows.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
-      columns: [
-        { header: "#", key: "sNo", align: "center", width: 8 },
-        { header: "PO #", key: "purchaseNo", align: "center", width: 16 },
-        {
-          header: "Supplier Bill #",
-          key: "purchaseInvoiceNo",
-          align: "center",
-          width: 16,
-        },
-        { header: "Date", key: "purchaseDate", align: "center", width: 14 },
-        {
-          header: "Supplier Name",
-          key: "supplierName",
-          align: "left",
-          width: 24,
-        },
-        {
-          header: "Subtotal (₹)",
-          key: "subtotal",
-          align: "right",
-          type: "currency",
-          width: 16,
-        },
-        {
-          header: "Tax (₹)",
-          key: "tax",
-          align: "right",
-          type: "currency",
-          width: 14,
-        },
-        {
-          header: "Grand Total (₹)",
-          key: "grandTotal",
-          align: "right",
-          type: "currency",
-          width: 18,
-        },
-        {
-          header: "Paid (₹)",
-          key: "paidAmount",
-          align: "right",
-          type: "currency",
-          width: 16,
-        },
-        {
-          header: "Balance (₹)",
-          key: "balance",
-          align: "right",
-          type: "currency",
-          width: 16,
-        },
-        {
-          header: "Payment Status",
-          key: "paymentStatus",
-          align: "center",
-          width: 16,
-        },
-        { header: "Status", key: "purchaseStatus", align: "center", width: 14 },
-      ],
-      data: excelRows,
-      summaryRow: {
-        sNo: "TOTAL",
-        purchaseNo: `${rows.length} Bills`,
-        grandTotal: totalGrand,
-        paidAmount: totalPaid,
-        balance: totalBal,
+        exportTableToExcel({
+          filename: `Purchase_Bills_Report_${new Date().toISOString().split("T")[0]}`,
+          sheetName: "Purchase Bills",
+          title: "YAA CREATIONS CRM - PURCHASE ORDERS & BILLS DIRECTORY",
+          subtitle: `Total Purchase Orders: ${rows.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
+          columns: [
+            { header: "#", key: "sNo", align: "center", width: 8 },
+            {
+              header: "Purchase ID",
+              key: "purchaseNo",
+              align: "center",
+              width: 16,
+            },
+            {
+              header: "Purchase No.",
+              key: "purchaseBillManualNo",
+              align: "center",
+              width: 16,
+            },
+            {
+              header: "Supplier Bill #",
+              key: "purchaseInvoiceNo",
+              align: "center",
+              width: 16,
+            },
+            { header: "Date", key: "purchaseDate", align: "center", width: 14 },
+            {
+              header: "Supplier Name",
+              key: "supplierName",
+              align: "left",
+              width: 24,
+            },
+            {
+              header: "Subtotal (₹)",
+              key: "subtotal",
+              align: "right",
+              type: "currency",
+              width: 16,
+            },
+            {
+              header: "Tax (₹)",
+              key: "tax",
+              align: "right",
+              type: "currency",
+              width: 14,
+            },
+            {
+              header: "Grand Total (₹)",
+              key: "grandTotal",
+              align: "right",
+              type: "currency",
+              width: 18,
+            },
+            {
+              header: "Paid (₹)",
+              key: "paidAmount",
+              align: "right",
+              type: "currency",
+              width: 16,
+            },
+            {
+              header: "Balance (₹)",
+              key: "balance",
+              align: "right",
+              type: "currency",
+              width: 16,
+            },
+            {
+              header: "Payment Status",
+              key: "paymentStatus",
+              align: "center",
+              width: 16,
+            },
+            {
+              header: "Status",
+              key: "purchaseStatus",
+              align: "center",
+              width: 14,
+            },
+          ],
+          data: excelRows,
+          summaryRow: {
+            sNo: "TOTAL",
+            purchaseNo: `${rows.length} Bills`,
+            grandTotal: totalGrand,
+            paidAmount: totalPaid,
+            balance: totalBal,
+          },
+        });
+
+        toast.success(
+          `Purchase Bills Excel report downloaded (${rows.length} records)!`,
+        );
       },
     });
-
-    toast.success(
-      `Purchase Bills Excel report downloaded (${rows.length} records)!`,
-    );
-    },
-  });
 
   return (
     <>
@@ -3932,22 +4074,22 @@ export const PurchaseOrderView: React.FC = () => {
                         )}
                       </div>
                       <div {...fieldAttr("purchaseRequest")}>
-                      <CustomSelect
-                        value={selectedRequestId}
-                        onChange={(val) => {
-                          formErr.clearError("purchaseRequest");
-                          handleSelectPurchaseRequest(val);
-                        }}
-                        options={eligiblePurchaseRequests.map((r) => ({
-                          value: r.id,
-                          label: `${r.requestNo} — ${r.supplierName || r.requestedBy || "Requisition"} (${r.items?.length || 0} items) • [${r.status}]`,
-                        }))}
-                        placeholder={
-                          isLoadingRequests
-                            ? "Loading requests..."
-                            : "Select Approved Purchase Request..."
-                        }
-                      />
+                        <CustomSelect
+                          value={selectedRequestId}
+                          onChange={(val) => {
+                            formErr.clearError("purchaseRequest");
+                            handleSelectPurchaseRequest(val);
+                          }}
+                          options={eligiblePurchaseRequests.map((r) => ({
+                            value: r.id,
+                            label: `${r.requestNo} — ${r.supplierName || r.requestedBy || "Requisition"} (${r.items?.length || 0} items) • [${r.status}]`,
+                          }))}
+                          placeholder={
+                            isLoadingRequests
+                              ? "Loading requests..."
+                              : "Select Approved Purchase Request..."
+                          }
+                        />
                       </div>
                       <FormError message={formErr.errors.purchaseRequest} />
                       <p className="text-[11px] text-slate-500 mt-1 font-medium">
@@ -4024,27 +4166,27 @@ export const PurchaseOrderView: React.FC = () => {
                 <div>
                   <FormLabel required>Select Supplier</FormLabel>
                   <div {...fieldAttr("supplierId")}>
-                  <SupplierSearchableSelect
-                    value={formData.supplierId}
-                    onChange={(val, sup) => {
-                      handleSupplierChange(val);
-                      if (sup?.supplierCode) {
-                        setFormData((prev) => ({
-                          ...prev,
-                          supplierName: sup.name,
-                        }));
+                    <SupplierSearchableSelect
+                      value={formData.supplierId}
+                      onChange={(val, sup) => {
+                        handleSupplierChange(val);
+                        if (sup?.supplierCode) {
+                          setFormData((prev) => ({
+                            ...prev,
+                            supplierName: sup.name,
+                          }));
+                        }
+                      }}
+                      selectedSupplier={
+                        formData.supplierId
+                          ? {
+                              id: formData.supplierId,
+                              name: formData.supplierName,
+                            }
+                          : null
                       }
-                    }}
-                    selectedSupplier={
-                      formData.supplierId
-                        ? {
-                            id: formData.supplierId,
-                            name: formData.supplierName,
-                          }
-                        : null
-                    }
-                    placeholder="Select or search supplier..."
-                  />
+                      placeholder="Select or search supplier..."
+                    />
                   </div>
                   <FormError message={formErr.errors.supplierId} />
                 </div>
@@ -4053,7 +4195,11 @@ export const PurchaseOrderView: React.FC = () => {
                   <FormLabel>Purchase Order / Bill No</FormLabel>
                   <input
                     type="text"
-                    value={editingPurchase ? formData.purchaseNo : (formData.purchaseNo || computedPreviewNo)}
+                    value={
+                      editingPurchase
+                        ? formData.purchaseNo
+                        : formData.purchaseNo || computedPreviewNo
+                    }
                     readOnly
                     placeholder="Auto-generated on save"
                     className="w-full h-11 px-4 bg-purple-50/70 border border-purple-200/90 rounded-xl text-xs sm:text-[13px] font-extrabold text-[#33077C] font-mono outline-none cursor-default"
@@ -4082,14 +4228,16 @@ export const PurchaseOrderView: React.FC = () => {
                   <FormLabel required>Purchase Date</FormLabel>
                   <DateInput
                     value={formData.purchaseDate}
-                    onChange={(v) => ((e) => {
-                      formErr.clearError("purchaseDate");
-                      formErr.clearError("dueDate");
-                      setFormData((prev) => ({
-                        ...prev,
-                        purchaseDate: e.target.value,
-                      }));
-                    })({ target: { value: v } } as any)}
+                    onChange={(v) =>
+                      ((e) => {
+                        formErr.clearError("purchaseDate");
+                        formErr.clearError("dueDate");
+                        setFormData((prev) => ({
+                          ...prev,
+                          purchaseDate: e.target.value,
+                        }));
+                      })({ target: { value: v } } as any)
+                    }
                     {...fieldAttr("purchaseDate")}
                   />
                   <FormError message={formErr.errors.purchaseDate} />
@@ -4099,13 +4247,15 @@ export const PurchaseOrderView: React.FC = () => {
                   <FormLabel>Due Date</FormLabel>
                   <DateInput
                     value={formData.dueDate}
-                    onChange={(v) => ((e) => {
-                      formErr.clearError("dueDate");
-                      setFormData((prev) => ({
-                        ...prev,
-                        dueDate: e.target.value,
-                      }));
-                    })({ target: { value: v } } as any)}
+                    onChange={(v) =>
+                      ((e) => {
+                        formErr.clearError("dueDate");
+                        setFormData((prev) => ({
+                          ...prev,
+                          dueDate: e.target.value,
+                        }));
+                      })({ target: { value: v } } as any)
+                    }
                     {...fieldAttr("dueDate")}
                   />
                   <FormError message={formErr.errors.dueDate} />
@@ -4114,7 +4264,9 @@ export const PurchaseOrderView: React.FC = () => {
                 <div>
                   <FormLabel>Payment Terms</FormLabel>
                   <select
-                    value={toBillPaymentTerms(formData.paymentTerms) || "Net 30 Days"}
+                    value={
+                      toBillPaymentTerms(formData.paymentTerms) || "Net 30 Days"
+                    }
                     onChange={(e) =>
                       setFormData((prev) => ({
                         ...prev,
@@ -4130,8 +4282,15 @@ export const PurchaseOrderView: React.FC = () => {
                     ))}
                     {/* Keep an existing value that is not one of the standard terms selectable */}
                     {toBillPaymentTerms(formData.paymentTerms) &&
-                      !PAYMENT_TERM_OPTIONS.includes(toBillPaymentTerms(formData.paymentTerms)) && (
-                        <option value={toBillPaymentTerms(formData.paymentTerms) || "Net 30 Days"}>
+                      !PAYMENT_TERM_OPTIONS.includes(
+                        toBillPaymentTerms(formData.paymentTerms),
+                      ) && (
+                        <option
+                          value={
+                            toBillPaymentTerms(formData.paymentTerms) ||
+                            "Net 30 Days"
+                          }
+                        >
                           {toBillPaymentTerms(formData.paymentTerms)}
                         </option>
                       )}
@@ -4377,34 +4536,39 @@ export const PurchaseOrderView: React.FC = () => {
                               {/* 2. Product Name Selection */}
                               <td className="py-3 px-2 border-r border-slate-200 align-top">
                                 <div {...fieldAttr(`items.${idx}.product`)}>
-                                <SearchableSelect
-                                  value={it.productId}
-                                  onChange={(val) =>
-                                    handleItemProductChange(idx, val)
-                                  }
-                                  onOpen={() => {
-                                    if (availableProducts.length === 0) {
-                                      handleProductSearch("");
+                                  <SearchableSelect
+                                    value={it.productId}
+                                    onChange={(val) =>
+                                      handleItemProductChange(idx, val)
                                     }
-                                  }}
-                                  onSearch={handleProductSearch}
-                                  isLoading={isSearchingProducts}
-                                  options={productOptions}
-                                  placeholder="Select Product..."
-                                  searchPlaceholder="Search product..."
-                                  countLabel={{ singular: "product", plural: "products" }}
-                                  emptyText={
-                                    isSearchingProducts
-                                      ? "Searching products..."
-                                      : "No products found"
-                                  }
-                                  allowClear
-                                  triggerClassName="!h-10 !rounded-[4px] !border !border-slate-300 hover:!border-slate-400 focus:!border-[#33077C] !bg-white shadow-2xs text-xs font-semibold"
-                                  size="sm"
-                                />
+                                    onOpen={() => {
+                                      if (availableProducts.length === 0) {
+                                        handleProductSearch("");
+                                      }
+                                    }}
+                                    onSearch={handleProductSearch}
+                                    isLoading={isSearchingProducts}
+                                    options={productOptions}
+                                    placeholder="Select Product..."
+                                    searchPlaceholder="Search product..."
+                                    countLabel={{
+                                      singular: "product",
+                                      plural: "products",
+                                    }}
+                                    emptyText={
+                                      isSearchingProducts
+                                        ? "Searching products..."
+                                        : "No products found"
+                                    }
+                                    allowClear
+                                    triggerClassName="!h-10 !rounded-[4px] !border !border-slate-300 hover:!border-slate-400 focus:!border-[#33077C] !bg-white shadow-2xs text-xs font-semibold"
+                                    size="sm"
+                                  />
                                 </div>
                                 <FormError
-                                  message={formErr.errors[`items.${idx}.product`]}
+                                  message={
+                                    formErr.errors[`items.${idx}.product`]
+                                  }
                                 />
                               </td>
 
@@ -4503,7 +4667,9 @@ export const PurchaseOrderView: React.FC = () => {
                                   className="w-full h-10 px-2 text-center bg-white hover:border-slate-400 focus:bg-white border border-slate-300 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/10 rounded-[4px] text-xs font-bold text-slate-800 outline-none shadow-2xs transition-all"
                                 />
                                 <FormError
-                                  message={formErr.errors[`items.${idx}.quantity`]}
+                                  message={
+                                    formErr.errors[`items.${idx}.quantity`]
+                                  }
                                 />
                               </td>
 
@@ -4582,12 +4748,14 @@ export const PurchaseOrderView: React.FC = () => {
                               <td className="py-3 px-2 border-r border-slate-200 align-top">
                                 <DateInput
                                   value={it.expDate || ""}
-                                  onChange={(v) => ((e) =>
-                                    handleItemFieldChange(
-                                      idx,
-                                      "expDate" as any,
-                                      e.target.value,
-                                    ))({ target: { value: v } } as any)}
+                                  onChange={(v) =>
+                                    ((e) =>
+                                      handleItemFieldChange(
+                                        idx,
+                                        "expDate" as any,
+                                        e.target.value,
+                                      ))({ target: { value: v } } as any)
+                                  }
                                   heightClass="h-10"
                                 />
                               </td>
@@ -4638,7 +4806,9 @@ export const PurchaseOrderView: React.FC = () => {
                                       : `Incl: ₹${unitPriceWithTax.toFixed(2)}`}
                                   </div>
                                   <FormError
-                                    message={formErr.errors[`items.${idx}.price`]}
+                                    message={
+                                      formErr.errors[`items.${idx}.price`]
+                                    }
                                   />
                                 </div>
                               </td>
@@ -4666,7 +4836,9 @@ export const PurchaseOrderView: React.FC = () => {
                                   className="w-full h-10 px-2.5 text-right bg-white hover:border-slate-400 focus:bg-white border border-slate-300 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/10 rounded-[4px] text-xs font-bold text-slate-800 outline-none shadow-2xs transition-all"
                                 />
                                 <FormError
-                                  message={formErr.errors[`items.${idx}.salePrice`]}
+                                  message={
+                                    formErr.errors[`items.${idx}.salePrice`]
+                                  }
                                 />
                               </td>
 
@@ -4693,7 +4865,9 @@ export const PurchaseOrderView: React.FC = () => {
                                 />
                                 <FormError
                                   message={
-                                    formErr.errors[`items.${idx}.discountPercent`]
+                                    formErr.errors[
+                                      `items.${idx}.discountPercent`
+                                    ]
                                   }
                                 />
                               </td>
@@ -4720,7 +4894,9 @@ export const PurchaseOrderView: React.FC = () => {
                                 />
                                 <FormError
                                   message={
-                                    formErr.errors[`items.${idx}.discountAmount`]
+                                    formErr.errors[
+                                      `items.${idx}.discountAmount`
+                                    ]
                                   }
                                 />
                               </td>
@@ -4745,9 +4921,18 @@ export const PurchaseOrderView: React.FC = () => {
                                           label: `${t.rate}%`,
                                         })),
                                         // A rate from an older slab (12%, 28% ...) stays selectable on existing documents.
-                                        ...(TAX_RATE_OPTIONS.some((t) => t.rate === Number(it.taxPercent || 0))
+                                        ...(TAX_RATE_OPTIONS.some(
+                                          (t) =>
+                                            t.rate ===
+                                            Number(it.taxPercent || 0),
+                                        )
                                           ? []
-                                          : [{ value: String(it.taxPercent), label: `${it.taxPercent}% (old slab)` }]),
+                                          : [
+                                              {
+                                                value: String(it.taxPercent),
+                                                label: `${it.taxPercent}% (old slab)`,
+                                              },
+                                            ]),
                                       ]}
                                       placeholder="0%"
                                       triggerClassName="!h-10 !rounded-[4px] !border !border-slate-300 hover:!border-slate-400 focus:!border-[#33077C] !bg-white shadow-2xs text-xs font-semibold justify-center"
@@ -4755,7 +4940,9 @@ export const PurchaseOrderView: React.FC = () => {
                                     />
                                     <FormError
                                       message={
-                                        formErr.errors[`items.${idx}.taxPercent`]
+                                        formErr.errors[
+                                          `items.${idx}.taxPercent`
+                                        ]
                                       }
                                     />
                                   </td>
@@ -4821,7 +5008,6 @@ export const PurchaseOrderView: React.FC = () => {
                     >
                       Add Item
                     </Button>
-                    
                   </div>
 
                   <div className="pt-6 mt-2">
@@ -5201,8 +5387,14 @@ export const PurchaseOrderView: React.FC = () => {
                       {/* 5. Paid to Supplier & Balance Payable */}
                       <div className="pt-2 border-t border-slate-100 space-y-3">
                         <div className="flex items-center justify-between gap-2 text-xs">
-                          <span className="font-semibold text-emerald-700">Paid to Supplier</span>
-                          <div className="inline-flex rounded-lg border border-slate-200 overflow-hidden" role="group" aria-label="Payment mode">
+                          <span className="font-semibold text-emerald-700">
+                            Paid to Supplier
+                          </span>
+                          <div
+                            className="inline-flex rounded-lg border border-slate-200 overflow-hidden"
+                            role="group"
+                            aria-label="Payment mode"
+                          >
                             <button
                               type="button"
                               onClick={() => switchPaymentMode(false)}
@@ -5233,89 +5425,88 @@ export const PurchaseOrderView: React.FC = () => {
                           />
                         ) : (
                           <>
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-semibold text-emerald-700">
-                            Paid to Supplier:
-                          </span>
-                          <div className="relative">
-                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-emerald-600 font-bold text-xs">
-                              ₹
-                            </span>
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              {...fieldAttr("paidAmount")}
-                              onInput={() => {
-                                formErr.clearError("paidAmount");
-                                formErr.clearError("paymentMethod");
-                                formErr.clearError("paymentDate");
-                              }}
-                              value={
-                                formData.paidAmount === 0
-                                  ? ""
-                                  : formData.paidAmount
-                              }
-                              placeholder="0"
-                              onKeyDown={(e) => {
-                                if (
-                                  e.key === "-" ||
-                                  e.key === "e" ||
-                                  e.key === "E" ||
-                                  e.key === "+"
-                                ) {
-                                  e.preventDefault();
-                                }
-                              }}
-                              onChange={(e) => {
-                                const raw = e.target.value.replace(
-                                  /[^0-9.]/g,
-                                  "",
-                                );
-                                if (raw === "") {
-                                  setFormData((prev) => ({
-                                    ...prev,
-                                    paidAmount: 0,
-                                  }));
-                                  return;
-                                }
-                                const parts = raw.split(".");
-                                const clean =
-                                  parts.length > 2
-                                    ? `${parts[0]}.${parts.slice(1).join("")}`
-                                    : raw;
-                                let newAmount = parseFloat(clean);
-                                if (isNaN(newAmount) || newAmount < 0) {
-                                  newAmount = 0;
-                                }
-                                setFormData((prev) => ({
-                                  ...prev,
-                                  paidAmount: newAmount,
-                                  paymentMethod:
-                                    newAmount > 0
-                                      ? prev.paymentMethod || "Cash"
-                                      : prev.paymentMethod,
-                                }));
-                              }}
-                              className="w-32 h-8.5 text-right pl-6 pr-2.5 bg-white border-2 border-emerald-600 focus:border-emerald-700 focus:ring-2 focus:ring-emerald-500/20 rounded-[6px] font-bold text-emerald-700 text-xs outline-none shadow-2xs transition-all"
-                            />
-                          </div>
-                        </div>
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-semibold text-emerald-700">
+                                Paid to Supplier:
+                              </span>
+                              <div className="relative">
+                                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-emerald-600 font-bold text-xs">
+                                  ₹
+                                </span>
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  {...fieldAttr("paidAmount")}
+                                  onInput={() => {
+                                    formErr.clearError("paidAmount");
+                                    formErr.clearError("paymentMethod");
+                                    formErr.clearError("paymentDate");
+                                  }}
+                                  value={
+                                    formData.paidAmount === 0
+                                      ? ""
+                                      : formData.paidAmount
+                                  }
+                                  placeholder="0"
+                                  onKeyDown={(e) => {
+                                    if (
+                                      e.key === "-" ||
+                                      e.key === "e" ||
+                                      e.key === "E" ||
+                                      e.key === "+"
+                                    ) {
+                                      e.preventDefault();
+                                    }
+                                  }}
+                                  onChange={(e) => {
+                                    const raw = e.target.value.replace(
+                                      /[^0-9.]/g,
+                                      "",
+                                    );
+                                    if (raw === "") {
+                                      setFormData((prev) => ({
+                                        ...prev,
+                                        paidAmount: 0,
+                                      }));
+                                      return;
+                                    }
+                                    const parts = raw.split(".");
+                                    const clean =
+                                      parts.length > 2
+                                        ? `${parts[0]}.${parts.slice(1).join("")}`
+                                        : raw;
+                                    let newAmount = parseFloat(clean);
+                                    if (isNaN(newAmount) || newAmount < 0) {
+                                      newAmount = 0;
+                                    }
+                                    setFormData((prev) => ({
+                                      ...prev,
+                                      paidAmount: newAmount,
+                                      paymentMethod:
+                                        newAmount > 0
+                                          ? prev.paymentMethod || "Cash"
+                                          : prev.paymentMethod,
+                                    }));
+                                  }}
+                                  className="w-32 h-8.5 text-right pl-6 pr-2.5 bg-white border-2 border-emerald-600 focus:border-emerald-700 focus:ring-2 focus:ring-emerald-500/20 rounded-[6px] font-bold text-emerald-700 text-xs outline-none shadow-2xs transition-all"
+                                />
+                              </div>
+                            </div>
 
-                        <div className="text-right">
-                          <FormError
-                            message={formErr.errors.paidAmount}
-                            className="justify-end"
-                          />
-                          <FormError
-                            message={formErr.errors.paymentMethod}
-                            className="justify-end"
-                          />
-                          <FormError
-                            message={formErr.errors.paymentDate}
-                            className="justify-end"
-                          />
-                        </div>
-
+                            <div className="text-right">
+                              <FormError
+                                message={formErr.errors.paidAmount}
+                                className="justify-end"
+                              />
+                              <FormError
+                                message={formErr.errors.paymentMethod}
+                                className="justify-end"
+                              />
+                              <FormError
+                                message={formErr.errors.paymentDate}
+                                className="justify-end"
+                              />
+                            </div>
                           </>
                         )}
 
@@ -5350,7 +5541,8 @@ export const PurchaseOrderView: React.FC = () => {
               <div className="pt-6 flex flex-col sm:flex-row justify-between items-stretch sm:items-end gap-4 border-t border-slate-100">
                 {isSplitMode && (
                   <div className="text-[11px] text-slate-500 max-w-xs">
-                    Split payment: enter each payment in the Billing Summary. Each one is saved as its own payment when you save the bill.
+                    Split payment: enter each payment in the Billing Summary.
+                    Each one is saved as its own payment when you save the bill.
                   </div>
                 )}
 
@@ -5547,13 +5739,15 @@ export const PurchaseOrderView: React.FC = () => {
                       </label>
                       <DateInput
                         value={formPaymentDetails.date}
-                        onChange={(v) => ((e) => {
-                          formPayErr.clearError("date");
-                          setFormPaymentDetails((prev) => ({
-                            ...prev,
-                            date: e.target.value,
-                          }));
-                        })({ target: { value: v } } as any)}
+                        onChange={(v) =>
+                          ((e) => {
+                            formPayErr.clearError("date");
+                            setFormPaymentDetails((prev) => ({
+                              ...prev,
+                              date: e.target.value,
+                            }));
+                          })({ target: { value: v } } as any)
+                        }
                         {...fieldAttr("date")}
                       />
                       <FormError message={formPayErr.errors.date} />
@@ -5565,28 +5759,28 @@ export const PurchaseOrderView: React.FC = () => {
                         Payment Type <span className="text-rose-500">*</span>
                       </label>
                       <div {...fieldAttr("paymentType")}>
-                      <CustomSelect
-                        value={formPaymentDetails.paymentType || "Cash"}
-                        onChange={(val) => {
-                          formPayErr.clearError("paymentType");
-                          setFormPaymentDetails((prev) => ({
-                            ...prev,
-                            paymentType: val as any,
-                          }));
-                        }}
-                        options={[
-                          { value: "Cash", label: "Cash" },
-                          {
-                            value: "Bank Transfer",
-                            label: "Bank Transfer / NEFT / RTGS",
-                          },
-                          { value: "UPI", label: "UPI / GPay / PhonePe" },
-                          { value: "Card", label: "Debit / Corporate Card" },
-                          { value: "Credit", label: "Supplier Credit" },
-                          { value: "Other", label: "Other" },
-                        ]}
-                        placeholder="Select Payment Mode"
-                      />
+                        <CustomSelect
+                          value={formPaymentDetails.paymentType || "Cash"}
+                          onChange={(val) => {
+                            formPayErr.clearError("paymentType");
+                            setFormPaymentDetails((prev) => ({
+                              ...prev,
+                              paymentType: val as any,
+                            }));
+                          }}
+                          options={[
+                            { value: "Cash", label: "Cash" },
+                            {
+                              value: "Bank Transfer",
+                              label: "Bank Transfer / NEFT / RTGS",
+                            },
+                            { value: "UPI", label: "UPI / GPay / PhonePe" },
+                            { value: "Card", label: "Debit / Corporate Card" },
+                            { value: "Credit", label: "Supplier Credit" },
+                            { value: "Other", label: "Other" },
+                          ]}
+                          placeholder="Select Payment Mode"
+                        />
                       </div>
                       <FormError message={formPayErr.errors.paymentType} />
                     </div>
@@ -5648,60 +5842,66 @@ export const PurchaseOrderView: React.FC = () => {
                       variant="primary"
                       size="md"
                       icon={<Check className="w-4 h-4 stroke-[2.5]" />}
-                      onClick={() => paymentGuard.runOnce(async () => {
-                        // Validate amount (vs outstanding balance), date and payment type first.
-                        const currentPaid = Number(formData.paidAmount) || 0;
-                        const limit = editingPurchase
-                          ? Math.max(0, calculatedTotals.grandTotal - currentPaid)
-                          : calculatedTotals.grandTotal;
-                        const payErrs = validateFormPayment(
-                          {
-                            amountPaid: formPaymentDetails.amountPaid,
-                            date: formPaymentDetails.date,
-                            paymentType: formPaymentDetails.paymentType || "Cash",
-                          },
-                          limit,
-                          "Payment amount",
-                        );
-                        if (!formPayErr.validateAll(payErrs)) {
-                          return;
-                        }
-                        const enteredAmount =
-                          Number(formPaymentDetails.amountPaid) || 0;
+                      onClick={() =>
+                        paymentGuard.runOnce(async () => {
+                          // Validate amount (vs outstanding balance), date and payment type first.
+                          const currentPaid = Number(formData.paidAmount) || 0;
+                          const limit = editingPurchase
+                            ? Math.max(
+                                0,
+                                calculatedTotals.grandTotal - currentPaid,
+                              )
+                            : calculatedTotals.grandTotal;
+                          const payErrs = validateFormPayment(
+                            {
+                              amountPaid: formPaymentDetails.amountPaid,
+                              date: formPaymentDetails.date,
+                              paymentType:
+                                formPaymentDetails.paymentType || "Cash",
+                            },
+                            limit,
+                            "Payment amount",
+                          );
+                          if (!formPayErr.validateAll(payErrs)) {
+                            return;
+                          }
+                          const enteredAmount =
+                            Number(formPaymentDetails.amountPaid) || 0;
 
-                        if (editingPurchase) {
-                          const newTotalPaid = Math.min(
-                            calculatedTotals.grandTotal,
-                            currentPaid + enteredAmount,
-                          );
+                          if (editingPurchase) {
+                            const newTotalPaid = Math.min(
+                              calculatedTotals.grandTotal,
+                              currentPaid + enteredAmount,
+                            );
 
-                          setFormData((prev) => ({
-                            ...prev,
-                            paidAmount: newTotalPaid,
-                            paymentMethod:
-                              formPaymentDetails.paymentType ||
-                              prev.paymentMethod,
-                          }));
-                          setIsFormPaymentModalOpen(false);
-                          toast.success(
-                            `Payment of ₹${enteredAmount.toLocaleString("en-IN")} applied! Click Update Purchase Bill to save.`,
-                          );
-                        } else {
-                          setFormData((prev) => ({
-                            ...prev,
-                            paidAmount: enteredAmount,
-                            paymentMethod:
-                              formPaymentDetails.paymentType || "Cash",
-                          }));
-                          setIsFormPaymentModalOpen(false);
-                          toast.success(
-                            `Payment amount of ₹${enteredAmount.toLocaleString("en-IN")} (${formPaymentDetails.paymentType || "Cash"}) updated!`,
-                          );
-                        }
-                        formErr.clearError("paidAmount");
-                        formErr.clearError("paymentMethod");
-                        formErr.clearError("paymentDate");
-                      })}
+                            setFormData((prev) => ({
+                              ...prev,
+                              paidAmount: newTotalPaid,
+                              paymentMethod:
+                                formPaymentDetails.paymentType ||
+                                prev.paymentMethod,
+                            }));
+                            setIsFormPaymentModalOpen(false);
+                            toast.success(
+                              `Payment of ₹${enteredAmount.toLocaleString("en-IN")} applied! Click Update Purchase Bill to save.`,
+                            );
+                          } else {
+                            setFormData((prev) => ({
+                              ...prev,
+                              paidAmount: enteredAmount,
+                              paymentMethod:
+                                formPaymentDetails.paymentType || "Cash",
+                            }));
+                            setIsFormPaymentModalOpen(false);
+                            toast.success(
+                              `Payment amount of ₹${enteredAmount.toLocaleString("en-IN")} (${formPaymentDetails.paymentType || "Cash"}) updated!`,
+                            );
+                          }
+                          formErr.clearError("paidAmount");
+                          formErr.clearError("paymentMethod");
+                          formErr.clearError("paymentDate");
+                        })
+                      }
                       className="w-full sm:w-auto justify-center"
                     >
                       Apply Payment
@@ -5807,12 +6007,14 @@ export const PurchaseOrderView: React.FC = () => {
                       <FormLabel>HSN / SAC Code</FormLabel>
                       <input
                         type="text"
+                        inputMode="numeric"
                         placeholder="e.g. 8471"
                         value={quickProductForm.hsnCode}
                         onChange={(e) =>
                           setQuickProductForm((prev) => ({
                             ...prev,
                             hsnCode: e.target.value,
+                            hsnCode: sanitizeHsnCodeInput(e.target.value),
                           }))
                         }
                         className={FORM_INPUT_CLS}
@@ -5845,7 +6047,9 @@ export const PurchaseOrderView: React.FC = () => {
                           }}
                           className={FORM_INPUT_CLS}
                         />
-                        <FormError message={quickProdErr.errors.purchasePrice} />
+                        <FormError
+                          message={quickProdErr.errors.purchasePrice}
+                        />
                         <span className="text-[10px] text-slate-500 mt-0.5 block">
                           Supplier cost price
                         </span>
@@ -6008,9 +6212,16 @@ export const PurchaseOrderView: React.FC = () => {
                 </div>
                 <div className="text-xs text-slate-500 mt-0.5">
                   {summary.totalCount} orders total
-                  {Boolean((summary as any).totalPurchaseReturnAmount && (summary as any).totalPurchaseReturnAmount > 0) && (
+                  {Boolean(
+                    (summary as any).totalPurchaseReturnAmount &&
+                    (summary as any).totalPurchaseReturnAmount > 0,
+                  ) && (
                     <span className="text-rose-600 font-semibold ml-1.5">
-                      (Returns: -₹{Number((summary as any).totalPurchaseReturnAmount).toLocaleString("en-IN")})
+                      (Returns: -₹
+                      {Number(
+                        (summary as any).totalPurchaseReturnAmount,
+                      ).toLocaleString("en-IN")}
+                      )
                     </span>
                   )}
                 </div>
@@ -6222,9 +6433,14 @@ export const PurchaseOrderView: React.FC = () => {
                 <CommonTableHead
                   columns={[
                     {
-                      label: "PURCHASE NO & DATE",
+                      label: "PURCHASE ID & DATE",
                       align: "center",
                       minWidth: "160px",
+                    },
+                    {
+                      label: "PURCHASE NO.",
+                      align: "center",
+                      minWidth: "130px",
                     },
                     { label: "SUPPLIER", align: "left", minWidth: "180px" },
                     { label: "ITEMS", align: "left", minWidth: "150px" },
@@ -6244,7 +6460,7 @@ export const PurchaseOrderView: React.FC = () => {
                   {isApiLoading && paginatedPurchases.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={9}
+                        colSpan={10}
                         className="py-16 text-center text-slate-400 border border-slate-200 font-medium"
                       >
                         <Loader2 className="w-8 h-8 mx-auto mb-2 text-[#33077C] animate-spin" />
@@ -6259,7 +6475,7 @@ export const PurchaseOrderView: React.FC = () => {
                   ) : paginatedPurchases.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={9}
+                        colSpan={10}
                         className="py-16 text-center text-slate-400 border border-slate-200 font-medium"
                       >
                         <ShoppingBag className="w-10 h-10 mx-auto mb-2 text-slate-300 stroke-[1.5]" />
@@ -6308,6 +6524,11 @@ export const PurchaseOrderView: React.FC = () => {
                             </div>
                           </td>
 
+                          {/* 1b. Purchase No. (manual) */}
+                          <td className="py-3.5 px-3 font-semibold text-slate-700 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                            {po.purchaseBillManualNo || "—"}
+                          </td>
+
                           {/* 2. Supplier */}
                           <td className="py-4 px-5 border border-slate-200">
                             <div className="font-bold text-slate-900 leading-snug">
@@ -6344,7 +6565,8 @@ export const PurchaseOrderView: React.FC = () => {
                             </span>
                             {po.totalReturned && po.totalReturned > 0 ? (
                               <span className="text-[10px] text-rose-600 block font-semibold leading-tight mt-0.5">
-                                Return: -₹{po.totalReturned.toLocaleString("en-IN")}
+                                Return: -₹
+                                {po.totalReturned.toLocaleString("en-IN")}
                               </span>
                             ) : null}
                           </td>
@@ -6521,12 +6743,20 @@ export const PurchaseOrderView: React.FC = () => {
                                     onClick: () => handleOpenHistory(po),
                                   },
                                   !(
-                                    (po.purchaseStatus as string) === "Returned" ||
-                                    (po.purchaseStatus as string) === "Converted" ||
-                                    (po.purchaseStatus as string)?.toLowerCase() === "returned" ||
-                                    (po.purchaseStatus as string)?.toLowerCase() === "converted" ||
-                                    (po.status as string)?.toLowerCase() === "returned" ||
-                                    (po.status as string)?.toLowerCase() === "converted" ||
+                                    (po.purchaseStatus as string) ===
+                                      "Returned" ||
+                                    (po.purchaseStatus as string) ===
+                                      "Converted" ||
+                                    (
+                                      po.purchaseStatus as string
+                                    )?.toLowerCase() === "returned" ||
+                                    (
+                                      po.purchaseStatus as string
+                                    )?.toLowerCase() === "converted" ||
+                                    (po.status as string)?.toLowerCase() ===
+                                      "returned" ||
+                                    (po.status as string)?.toLowerCase() ===
+                                      "converted" ||
                                     false
                                   ) && {
                                     label: "Convert to Return",
@@ -6819,7 +7049,8 @@ export const PurchaseOrderView: React.FC = () => {
                       </div>
                     )}
 
-                    {selectedPurchase.totalReturned && selectedPurchase.totalReturned > 0 ? (
+                    {selectedPurchase.totalReturned &&
+                    selectedPurchase.totalReturned > 0 ? (
                       <>
                         <div className="border-t border-slate-200 pt-1 flex justify-between text-xs text-slate-500 font-medium">
                           <span>Original Bill Amount:</span>
@@ -6839,18 +7070,24 @@ export const PurchaseOrderView: React.FC = () => {
                           <span>Purchase Return Deduction:</span>
                           <span>
                             -₹
-                            {selectedPurchase.totalReturned.toLocaleString("en-IN", {
-                              minimumFractionDigits: 2,
-                            })}
+                            {selectedPurchase.totalReturned.toLocaleString(
+                              "en-IN",
+                              {
+                                minimumFractionDigits: 2,
+                              },
+                            )}
                           </span>
                         </div>
                         <div className="border-t border-dashed border-purple-300 pt-1 flex justify-between font-bold text-sm text-purple-900">
                           <span>Net Bill Amount:</span>
                           <span>
                             ₹
-                            {selectedPurchase.grandTotal.toLocaleString("en-IN", {
-                              minimumFractionDigits: 2,
-                            })}
+                            {selectedPurchase.grandTotal.toLocaleString(
+                              "en-IN",
+                              {
+                                minimumFractionDigits: 2,
+                              },
+                            )}
                           </span>
                         </div>
                       </>
@@ -6876,15 +7113,18 @@ export const PurchaseOrderView: React.FC = () => {
                     </div>
                     {Boolean(
                       selectedPurchase.supplierCredit &&
-                        selectedPurchase.supplierCredit > 0,
+                      selectedPurchase.supplierCredit > 0,
                     ) && (
                       <div className="flex justify-between items-center text-xs text-purple-800 bg-purple-100/70 p-2 rounded-lg border border-purple-200 font-semibold">
                         <span>Supplier Credit (Refund Pending):</span>
                         <span className="font-bold">
                           ₹
-                          {selectedPurchase.supplierCredit?.toLocaleString("en-IN", {
-                            minimumFractionDigits: 2,
-                          })}
+                          {selectedPurchase.supplierCredit?.toLocaleString(
+                            "en-IN",
+                            {
+                              minimumFractionDigits: 2,
+                            },
+                          )}
                         </span>
                       </div>
                     )}
@@ -7001,7 +7241,10 @@ export const PurchaseOrderView: React.FC = () => {
                       {...fieldAttr("amount")}
                       onInput={(e) => {
                         const typed = parseFloat(
-                          (e.target as HTMLInputElement).value.replace(/[^0-9.]/g, ""),
+                          (e.target as HTMLInputElement).value.replace(
+                            /[^0-9.]/g,
+                            "",
+                          ),
                         );
                         const due = Number(selectedPurchase?.balance) || 0;
                         if (!(typed > due)) recordPayErr.clearError("amount");
@@ -7121,41 +7364,121 @@ export const PurchaseOrderView: React.FC = () => {
                 title={historyPurchase.purchaseNo}
                 subtitle={
                   <>
-                    Supplier: <span className="font-semibold text-slate-800">{historyPurchase.supplierName}</span>
-                    {historyPurchase.purchaseInvoiceNo ? ` • Inv Ref: ${historyPurchase.purchaseInvoiceNo}` : ""}
+                    Supplier:{" "}
+                    <span className="font-semibold text-slate-800">
+                      {historyPurchase.supplierName}
+                    </span>
+                    {historyPurchase.purchaseInvoiceNo
+                      ? ` • Inv Ref: ${historyPurchase.purchaseInvoiceNo}`
+                      : ""}
                   </>
                 }
-                amount={{ label: "Total Amount", value: `₹${Number(historyPurchase.grandTotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` }}
+                amount={{
+                  label: "Total Amount",
+                  value: `₹${Number(historyPurchase.grandTotal || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+                }}
                 badges={[
-                  { label: historyPurchase.paymentStatus, tone: historyPurchase.paymentStatus === "Paid" ? "success" : historyPurchase.paymentStatus === "Partial" ? "warning" : "danger" },
-                  { label: historyPurchase.purchaseStatus, tone: historyPurchase.purchaseStatus === "Completed" || historyPurchase.purchaseStatus === "Received" ? "success" : historyPurchase.purchaseStatus === "Approved" ? "info" : historyPurchase.purchaseStatus === "Ordered" ? "primary" : historyPurchase.purchaseStatus === "Cancelled" ? "danger" : "warning" },
+                  {
+                    label: historyPurchase.paymentStatus,
+                    tone:
+                      historyPurchase.paymentStatus === "Paid"
+                        ? "success"
+                        : historyPurchase.paymentStatus === "Partial"
+                          ? "warning"
+                          : "danger",
+                  },
+                  {
+                    label: historyPurchase.purchaseStatus,
+                    tone:
+                      historyPurchase.purchaseStatus === "Completed" ||
+                      historyPurchase.purchaseStatus === "Received"
+                        ? "success"
+                        : historyPurchase.purchaseStatus === "Approved"
+                          ? "info"
+                          : historyPurchase.purchaseStatus === "Ordered"
+                            ? "primary"
+                            : historyPurchase.purchaseStatus === "Cancelled"
+                              ? "danger"
+                              : "warning",
+                  },
                 ]}
                 facts={[
-                  { label: "Order Date", value: historyPurchase.purchaseDate ? formatDate(historyPurchase.purchaseDate) : "" },
-                  { label: "Due Date", value: historyPurchase.dueDate ? formatDate(historyPurchase.dueDate) : "" },
-                  { label: "Items", value: `${historyPurchase.items?.length || 0} product(s)` },
-                  { label: "Payment Terms", value: historyPurchase.paymentTerms },
-                  { label: "Payment Mode", value: historyPurchase.paymentMethod },
-                  { label: "Balance Payable", value: `₹${Number(historyPurchase.balance || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+                  {
+                    label: "Order Date",
+                    value: historyPurchase.purchaseDate
+                      ? formatDate(historyPurchase.purchaseDate)
+                      : "",
+                  },
+                  {
+                    label: "Due Date",
+                    value: historyPurchase.dueDate
+                      ? formatDate(historyPurchase.dueDate)
+                      : "",
+                  },
+                  {
+                    label: "Items",
+                    value: `${historyPurchase.items?.length || 0} product(s)`,
+                  },
+                  {
+                    label: "Payment Terms",
+                    value: historyPurchase.paymentTerms,
+                  },
+                  {
+                    label: "Payment Mode",
+                    value: historyPurchase.paymentMethod,
+                  },
+                  {
+                    label: "Balance Payable",
+                    value: `₹${Number(historyPurchase.balance || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+                  },
                 ]}
                 events={[
                   {
                     title: "Purchase Order Created",
-                    at: (historyPurchase as any).createdAt || historyPurchase.purchaseDate,
+                    at:
+                      (historyPurchase as any).createdAt ||
+                      historyPurchase.purchaseDate,
                     tone: "primary",
                     description: `Order raised for ${historyPurchase.supplierName}.`,
                     details: [
-                      { label: "Order Date", value: historyPurchase.purchaseDate ? formatDate(historyPurchase.purchaseDate) : "" },
-                      { label: "Due Date", value: historyPurchase.dueDate ? formatDate(historyPurchase.dueDate) : "" },
-                      { label: "Line Items", value: String(historyPurchase.items?.length || 0) },
+                      {
+                        label: "Order Date",
+                        value: historyPurchase.purchaseDate
+                          ? formatDate(historyPurchase.purchaseDate)
+                          : "",
+                      },
+                      {
+                        label: "Due Date",
+                        value: historyPurchase.dueDate
+                          ? formatDate(historyPurchase.dueDate)
+                          : "",
+                      },
+                      {
+                        label: "Line Items",
+                        value: String(historyPurchase.items?.length || 0),
+                      },
                     ],
                   },
                   {
                     title: `Status: ${historyPurchase.purchaseStatus}`,
-                    at: historyPurchase.purchaseStatus === "Pending" ? undefined : (historyPurchase as any).updatedAt,
-                    tone: historyPurchase.purchaseStatus === "Completed" || historyPurchase.purchaseStatus === "Received" ? "success" : historyPurchase.purchaseStatus === "Approved" ? "info" : historyPurchase.purchaseStatus === "Ordered" ? "primary" : historyPurchase.purchaseStatus === "Cancelled" ? "danger" : "warning",
+                    at:
+                      historyPurchase.purchaseStatus === "Pending"
+                        ? undefined
+                        : (historyPurchase as any).updatedAt,
+                    tone:
+                      historyPurchase.purchaseStatus === "Completed" ||
+                      historyPurchase.purchaseStatus === "Received"
+                        ? "success"
+                        : historyPurchase.purchaseStatus === "Approved"
+                          ? "info"
+                          : historyPurchase.purchaseStatus === "Ordered"
+                            ? "primary"
+                            : historyPurchase.purchaseStatus === "Cancelled"
+                              ? "danger"
+                              : "warning",
                     description:
-                      historyPurchase.purchaseStatus === "Received" || historyPurchase.purchaseStatus === "Completed"
+                      historyPurchase.purchaseStatus === "Received" ||
+                      historyPurchase.purchaseStatus === "Completed"
                         ? "Goods delivered and stocked into warehouse inventory."
                         : historyPurchase.purchaseStatus === "Ordered"
                           ? "Dispatched to supplier; awaiting shipment arrival."
@@ -7167,24 +7490,47 @@ export const PurchaseOrderView: React.FC = () => {
                   },
                   {
                     title: `Payment Settlement: ${historyPurchase.paymentStatus}`,
-                    tone: historyPurchase.balance <= 0 ? "success" : historyPurchase.paidAmount > 0 ? "warning" : "danger",
-                    description: "Supplier payment progress against the bill amount.",
+                    tone:
+                      historyPurchase.balance <= 0
+                        ? "success"
+                        : historyPurchase.paidAmount > 0
+                          ? "warning"
+                          : "danger",
+                    description:
+                      "Supplier payment progress against the bill amount.",
                     details: [
-                      { label: "Paid", value: `₹${Number(historyPurchase.paidAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
-                      { label: "Balance", value: `₹${Number(historyPurchase.balance || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+                      {
+                        label: "Paid",
+                        value: `₹${Number(historyPurchase.paidAmount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+                      },
+                      {
+                        label: "Balance",
+                        value: `₹${Number(historyPurchase.balance || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+                      },
                       { label: "Terms", value: historyPurchase.paymentTerms },
                       { label: "Mode", value: historyPurchase.paymentMethod },
                     ],
                   },
-                  ...(Number((historyPurchase as any).totalReturned || (historyPurchase as any).totalPurchaseReturnAmount || 0) > 0
+                  ...(Number(
+                    (historyPurchase as any).totalReturned ||
+                      (historyPurchase as any).totalPurchaseReturnAmount ||
+                      0,
+                  ) > 0
                     ? [
                         {
                           title: "Purchase Return Adjusted",
                           tone: "warning" as const,
-                          description: "A purchase return reduced the payable amount on this bill.",
+                          description:
+                            "A purchase return reduced the payable amount on this bill.",
                           details: [
-                            { label: "Returned", value: `₹${Number((historyPurchase as any).totalReturned || (historyPurchase as any).totalPurchaseReturnAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
-                            { label: "Supplier Credit", value: `₹${Number((historyPurchase as any).supplierCredit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+                            {
+                              label: "Returned",
+                              value: `₹${Number((historyPurchase as any).totalReturned || (historyPurchase as any).totalPurchaseReturnAmount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+                            },
+                            {
+                              label: "Supplier Credit",
+                              value: `₹${Number((historyPurchase as any).supplierCredit || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+                            },
                           ],
                         },
                       ]

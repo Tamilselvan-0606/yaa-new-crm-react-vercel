@@ -21,6 +21,12 @@ import {
   FORM_SELECT_CLS,
 } from "../utils/formUtils";
 import {
+  PRODUCT_ITEM_IMAGE_ACCEPT,
+  PRODUCT_ITEM_IMAGE_EXTENSIONS,
+  PRODUCT_ITEM_IMAGE_MIME_TYPES,
+  validateImageFile,
+} from "../utils/imageUpload";
+import {
   productApi,
   CreateProductPayload,
   mapApiProductToProductItem,
@@ -29,6 +35,7 @@ import { categoryApi, ApiCategory } from "../../../api/commerce/categoryApi";
 import { subcategoryApi } from "../../../api/commerce/subcategoryApi";
 import { unitApi, ApiUnit, resolveBaseUnitId } from "../../../api/commerce/unitApi";
 import { toast } from "../../../utils/toast";
+import { sanitizeHsnCodeInput } from "../../../utils/validation";
 import { BATCH_PREFIX, cleanBatchNo } from "../utils/textUtils";
 import { BatchPrefixInput } from "../utils/BatchPrefixInput";
 import { FormError } from "../../../components/common/FormError";
@@ -676,16 +683,20 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
   // Image Upload handler
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
 
-    if (!file.type.startsWith("image/")) {
-      setImageFileError("Only image files (.png, .jpg, .jpeg, .webp) are allowed.");
-      e.target.value = "";
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      setImageFileError("Image size must be less than 5MB.");
-      e.target.value = "";
+    const validation = validateImageFile(file, {
+      allowedMimeTypes: PRODUCT_ITEM_IMAGE_MIME_TYPES,
+      allowedExtensions: PRODUCT_ITEM_IMAGE_EXTENSIONS,
+      maxSizeBytes: 5 * 1024 * 1024,
+      invalidTypeMessage:
+        "Only image files (.png, .jpg, .jpeg, .webp) are allowed.",
+      tooLargeMessage: "Image size must be less than 5MB.",
+    });
+    if (!validation.valid) {
+      setImageFileError(validation.error);
+      toast.error(validation.error);
       return;
     }
     setImageFileError(null);
@@ -701,7 +712,10 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
     };
     reader.onerror = () => {
       setIsUploadingImage(false);
-      setImageFileError("Could not read the image file. Please choose another image.");
+      const errMsg =
+        "Could not read the image file. Please choose another image.";
+      setImageFileError(errMsg);
+      toast.error(errMsg);
     };
     reader.readAsDataURL(file);
   };
@@ -803,7 +817,6 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
         (d.mfgDate || d.expDate) && !cleanBatchNo(d.batchNo) ? checkRequiredText("", "batch number") : null,
       ],
       ["expDate", checkDateNotBefore(d.expDate, d.mfgDate, "expiry date", "manufacturing date")],
-      ["itemImage", imageFileError],
     ];
     if (d.hasWholesale) {
       checks.push(
@@ -824,7 +837,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
     formData.category, formData.subcategory, formData.unit, formData.salePrice, formData.discountValue, formData.discountType,
     formData.wholesalePrice, formData.minWholesaleQty, formData.hasWholesale,
     formData.purchasePrice, formData.minStockAlert, formData.batchNo, formData.mfgDate,
-    formData.expDate, imageFileError,
+    formData.expDate,
   ]);
 
   // RHF fields invalid: also reveal the controlled-field errors in the same submit
@@ -1103,10 +1116,11 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                 <div className="relative">
                   <input
                     type="text"
+                    inputMode="numeric"
                     placeholder="Enter Item HSN"
                     value={formData.hsnCode || ""}
                     onChange={(e) => {
-                      setValue("hsnCode", e.target.value);
+                      setValue("hsnCode", sanitizeHsnCodeInput(e.target.value));
                     }}
                     className={`${FORM_INPUT_CLS} font-mono`}
                   />
@@ -1138,7 +1152,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                 <input
                   type="file"
                   ref={fileInputRef}
-                  accept="image/png,image/jpeg,image/jpg,image/webp"
+                  accept={PRODUCT_ITEM_IMAGE_ACCEPT}
                   onChange={handleImageUpload}
                   className="hidden"
                 />
@@ -1165,6 +1179,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                       type="button"
                       onClick={() => {
                         setItemImageState("");
+                        setImageFileError(null);
                         setValue("itemImage", "");
                         if (fileInputRef.current)
                           fileInputRef.current.value = "";
@@ -1185,7 +1200,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                     <span>Add Item Image</span>
                   </button>
                 )}
-                <FormError message={fe.errors.itemImage} showIcon />
+                <FormError message={imageFileError || fe.errors.itemImage} showIcon />
                 <span className="hidden" {...fieldAttr("itemImage")} />
               </div>
             </div>

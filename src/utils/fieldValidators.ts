@@ -84,6 +84,13 @@ export const minLength =
   (min: number, message: string): Validator =>
   (v) => (isEmpty(v) || v.trim().length >= min ? null : message);
 
+/** Strong password: 8+ characters with an uppercase letter, a lowercase letter, a number and a special character. */
+export const strongPassword: Validator = (v) =>
+  isEmpty(v) ||
+  (v.length >= 8 && /[a-z]/.test(v) && /[A-Z]/.test(v) && /\d/.test(v) && /[^A-Za-z0-9\s]/.test(v) && !/\s/.test(v))
+    ? null
+    : 'Password must be at least 8 characters and include an uppercase letter, a lowercase letter, a number and a special character';
+
 /** Indian mobile number: starts with 6-9 and is exactly 10 digits (formatting characters are ignored). */
 export const indianMobile =
   (label: string): Validator =>
@@ -119,6 +126,54 @@ export const indianPhoneAnyFormat =
   (message: string): Validator =>
   (v) => (isEmpty(v) || isValidIndianPhone(v) ? null : message);
 
+/**
+ * Formats phone number to always have a clean space between the international dial code and the national number.
+ * E.g., "+656574123698879" -> "+65 6574123698879", "+919962515246" -> "+91 9962515246".
+ */
+export const formatPhoneNumber = (value?: string | null): string => {
+  if (!value) return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  // If it already has a space after the dial code (e.g. "+91 9876543210"), keep clean single-spaced
+  if (/^\+\d+\s+/.test(trimmed)) {
+    return trimmed.replace(/\s+/g, ' ');
+  }
+  // If it starts with '+', parse dial code (1 to 4 digits) and separate with a space
+  if (trimmed.startsWith('+')) {
+    const raw = trimmed.slice(1).replace(/\D/g, '');
+    if (!raw) return trimmed;
+
+    // Common 1, 2, 3 digit prefixes:
+    // +1 (US/Canada), +7 (Russia/Kazakhstan)
+    // +20..+29, +30..+39, +40..+49, +51..+58, +60..+66, +81..+86, +90..+98
+    const twoDigitPrefixes = [
+      '20', '27', '28', '30', '31', '32', '33', '34', '36', '39',
+      '40', '41', '43', '44', '45', '46', '47', '48', '49',
+      '51', '52', '53', '54', '55', '56', '57', '58',
+      '60', '61', '62', '63', '64', '65', '66',
+      '81', '82', '84', '86',
+      '90', '91', '92', '93', '94', '95', '98'
+    ];
+
+    if (raw.startsWith('1') || raw.startsWith('7')) {
+      if (raw.length > 1) return `+${raw[0]} ${raw.slice(1)}`;
+      return `+${raw}`;
+    }
+
+    const two = raw.slice(0, 2);
+    if (twoDigitPrefixes.includes(two)) {
+      if (raw.length > 2) return `+${two} ${raw.slice(2)}`;
+      return `+${raw}`;
+    }
+
+    if (raw.length > 3) {
+      return `+${raw.slice(0, 3)} ${raw.slice(3)}`;
+    }
+    return trimmed;
+  }
+  return trimmed;
+};
+
 const GST_FORMAT_MESSAGE = 'Enter a valid GST number (e.g. 33AAAAA0000A1Z5)';
 const PAN_FORMAT_MESSAGE = 'Enter a valid PAN number (e.g. AAAAA0000A)';
 
@@ -133,20 +188,13 @@ export const validPan: Validator = (v) =>
  * (e.g. "^(\d{6})$" for India), otherwise the Indian 6-digit rule.
  */
 export const pincodeMatching =
-  (regex?: string | null, format?: string | null): Validator =>
-  (v) => {
-    if (isEmpty(v)) return null;
-    if (!regex) return validPincode(v);
-    try {
-      return new RegExp(regex).test(v.trim()) ? null : `Enter a valid pincode${format ? ` (format: ${format})` : ''}`;
-    } catch {
-      return validPincode(v);
-    }
-  };
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  (_regex?: string | null, _format?: string | null): Validator =>
+  (v) => validPincode(v);
 
-/** Typing filter for a pincode: digits only (max 6) unless the country's rule allows letters. */
-export const cleanPincode = (raw: string, regex?: string | null): string =>
-  regex && /[A-Za-z]/.test(regex) ? raw.replace(/[^A-Za-z0-9 -]/g, '').toUpperCase().slice(0, 10) : raw.replace(/\D/g, '').slice(0, regex ? 10 : 6);
+/** Typing filter for a pincode: digits only, max 6 (no spaces, letters or extra digits). */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export const cleanPincode = (raw: string, _regex?: string | null): string => raw.replace(/\D/g, '').slice(0, 6);
 
 /** Optional non-negative number (amounts such as a discount). */
 export const nonNegativeAmount =
@@ -155,7 +203,7 @@ export const nonNegativeAmount =
 
 /** Indian PIN code: 6 digits, not starting with 0. */
 export const validPincode: Validator = (v) =>
-  isEmpty(v) || /^[1-9]\d{5}$/.test(v.trim()) ? null : 'Enter a valid 6-digit pincode';
+  isEmpty(v) || /^[1-9]\d{5}$/.test(v.trim()) ? null : 'Please enter a valid 6-digit pincode.';
 
 // No leading dot, no consecutive dots, no dot/hyphen at the domain start, TLD of 2+ letters.
 const EMAIL_PATTERN = /^(?!\.)(?!.*\.\.)[A-Za-z0-9_'+\-.]*?[A-Za-z0-9_+-]@(?![.-])([A-Za-z0-9-]+\.)+[A-Za-z]{2,}$/;

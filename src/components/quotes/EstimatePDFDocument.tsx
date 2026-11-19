@@ -13,6 +13,7 @@ import {
 import { PDF_FONT, PDF_FONT_BOLD } from '../common/pdf/pdfFonts';
 import { Quotation } from '../../views/quotes/QuotesView';
 import { formatDate } from '../../views/sale-management/utils/dateUtils';
+import { formatPhoneNumber } from '../../utils/fieldValidators';
 
 const styles = StyleSheet.create({
   page: {
@@ -371,10 +372,17 @@ export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
           {/* Left: Metadata */}
           <View style={styles.headerMetaLeft}>
             <View style={styles.headerMetaItem}>
-              <Text style={styles.headerMetaLabel}>{documentTitle} Number</Text>
+              <Text style={styles.headerMetaLabel}>{documentTitle} Serial Number</Text>
               <Text style={styles.headerMetaColon}>:</Text>
               <Text style={styles.headerMetaValue}>{quotation.estimateNumber}</Text>
             </View>
+            {quotation.quotationManualNumber ? (
+              <View style={styles.headerMetaItem}>
+                <Text style={styles.headerMetaLabel}>{documentTitle} Number</Text>
+                <Text style={styles.headerMetaColon}>:</Text>
+                <Text style={styles.headerMetaValue}>{quotation.quotationManualNumber}</Text>
+              </View>
+            ) : null}
             <View style={styles.headerMetaItem}>
               <Text style={styles.headerMetaLabel}>{documentTitle} Date</Text>
               <Text style={styles.headerMetaColon}>:</Text>
@@ -430,7 +438,7 @@ export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Phone Number</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{company.phone || '-'}</Text>
+              <Text style={styles.billingValue}>{formatPhoneNumber(company.phone) || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Email</Text>
@@ -465,7 +473,7 @@ export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Phone Number</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{quotation.customerPhone || '-'}</Text>
+              <Text style={styles.billingValue}>{formatPhoneNumber(quotation.customerPhone) || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Email</Text>
@@ -547,12 +555,6 @@ export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
               </Text>
             </View>
 
-            <View style={styles.summaryItem}>
-              <Text style={styles.summaryLabel}>Amount (After Discount)</Text>
-              <Text style={styles.summaryValue}>
-                ₹{taxableAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </Text>
-            </View>
 
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>GST Total (18%)</Text>

@@ -125,6 +125,7 @@ import { store } from "../../../store/store";
 import {
   isValidIndianPhone,
   normalizeIndianPhoneTo10Digits,
+  sanitizeHsnCodeInput,
 } from "../../../utils/validation";
 import {
   commerceSaleOrderApi,
@@ -179,6 +180,7 @@ import {
 } from "../../../utils/formValidation";
 import { useBatchStock } from "../../../hooks/useBatchStock";
 import { FormError } from "../../../components/common/FormError";
+import { ImageAttachmentBox } from "../utils/ImageAttachmentBox";
 
 const PRODUCT_PICK_MSG = "Please choose the product from the list.";
 
@@ -994,23 +996,29 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       });
   }, [viewMode, listNeedsCustomerLookup]);
 
-  // Stocks & stock batches are only needed by the form (product dropdown), so load them once when the form opens
-  const hasLoadedStockDataRef = useRef(false);
-  useEffect(() => {
-    if (viewMode !== "form" || hasLoadedStockDataRef.current) return;
-    hasLoadedStockDataRef.current = true;
-
+  // Stocks and batches are live (never cached) and only needed by the item rows, so they are NOT loaded when the form
+  // opens. They load on the first product dropdown open, or once the form holds a line item (edit / convert / duplicate).
+  const stockDataLoadedRef = useRef(false);
+  const batchDataLoadedRef = useRef(false);
+  const ensureStocks = useCallback(() => {
+    if (stockDataLoadedRef.current) return;
+    stockDataLoadedRef.current = true;
     stockApi
       .getStocks({ pagination_required: false, page_size: 100 })
       .then((res) => {
         const rawStocks = unpackProducts(res);
         if (rawStocks.length > 0) {
-          const mapped = rawStocks.map(mapApiStockToInventoryStockItem);
-          setLiveStocks(mapped);
+          setLiveStocks(rawStocks.map(mapApiStockToInventoryStockItem));
         }
       })
-      .catch((err) => console.warn("Stock load:", err));
-
+      .catch((err) => {
+        stockDataLoadedRef.current = false;
+        console.warn("Stock load error:", err);
+      });
+  }, []);
+  const ensureBatches = useCallback(() => {
+    if (batchDataLoadedRef.current) return;
+    batchDataLoadedRef.current = true;
     stockApi
       .getStockBatches({ pagination_required: false, page_size: 100 })
       .then((res) => {
@@ -1019,8 +1027,11 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           setLiveBatches(rawBatches);
         }
       })
-      .catch((err) => console.warn("Stock batches load:", err));
-  }, [viewMode]);
+      .catch((err) => {
+        batchDataLoadedRef.current = false;
+        console.warn("Stock batches load error:", err);
+      });
+  }, []);
 
   // Load products when entering form mode if not already loaded
   useEffect(() => {
@@ -1210,6 +1221,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   useEffect(() => {
     if (openProductDropdownRow === null || openProductDropdownRow === undefined)
       return;
+    stockDataLoadedRef.current = true; // this open fetches fresh stock itself
+    ensureBatches();
     let cancelled = false;
     stockApi
       .getStocks({ pagination_required: false, page_size: 100 })
@@ -1225,7 +1238,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [openProductDropdownRow]);
+  }, [openProductDropdownRow, ensureBatches]);
 
   const matchingProducts = useMemo(() => {
     const q = productSearchQuery.toLowerCase().trim();
@@ -1273,7 +1286,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         id: `row_${Date.now()}_1`,
         productId: "",
         productName: "",
-        quantity: 1,
+        quantity: 0,
         unit: "NONE",
         unitPrice: 0,
         discountPercent: 0,
@@ -1310,6 +1323,16 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 
   // Initial Form Data
   const [formData, setFormData] = useState(() => createDefaultFormData(1));
+
+  // Existing document opened with line items: its quantities / batches must display, so load stock data now.
+  const formHasLineItems = (formData.items || []).some(
+    (it: any) => it && (it.productId || it.productName),
+  );
+  useEffect(() => {
+    if (viewMode !== "form" || !formHasLineItems) return;
+    ensureStocks();
+    ensureBatches();
+  }, [viewMode, formHasLineItems, ensureStocks, ensureBatches]);
 
   // Multi-tab support for proforma invoices
   const [activeTabId, setActiveTabId] = useState("tab_1");
@@ -1642,7 +1665,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       id: `row_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       productId: "",
       productName: "",
-      quantity: 1,
+      quantity: 0,
       unit: "NONE",
       unitPrice: 0,
       discountPercent: 0,
@@ -2962,6 +2985,10 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       partyPhone: proforma.customerPhone,
       partyAddress: proforma.billingAddress,
       extraMeta: [
+        { label: "Proforma ID", value: proforma.proformaNo },
+        ...(proforma.proformaInvoiceManualNo
+          ? [{ label: "Proforma No", value: proforma.proformaInvoiceManualNo }]
+          : []),
         {
           label: "State of Supply",
           value: proforma.stateOfSupply || "Tamil Nadu",
@@ -3107,6 +3134,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       const matchesSearch =
         !q ||
         p.proformaNo.toLowerCase().includes(q) ||
+        (p.proformaInvoiceManualNo || "").toLowerCase().includes(q) ||
         p.partyName.toLowerCase().includes(q) ||
         (p.customerPhone && p.customerPhone.toLowerCase().includes(q)) ||
         (p.customerCompany && p.customerCompany.toLowerCase().includes(q)) ||
@@ -4122,9 +4150,10 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                         <td className="p-1.5 border-r border-slate-200">
                           <input
                             type="text"
+                            inputMode="numeric"
                             value={row.hsnCode || ""}
                             onChange={(e) =>
-                              handleRowChange(idx, "hsnCode", e.target.value)
+                              handleRowChange(idx, "hsnCode", sanitizeHsnCodeInput(e.target.value))
                             }
                             placeholder="HSN / SAC"
                             className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-mono font-medium text-slate-700 outline-none transition-colors"
@@ -4636,33 +4665,11 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                 )}
 
                 {showImageSection && (
-                  <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-2 animate-in fade-in duration-100 text-xs">
-                    <FormLabel>Attach Image</FormLabel>
-                    <div className="flex items-center gap-3">
-                      <label className="px-3 py-1.5 bg-white border border-slate-200 hover:border-[#33077C] rounded-lg font-semibold text-slate-700 cursor-pointer flex items-center gap-1.5 transition-colors">
-                        <ImageIcon className="w-3.5 h-3.5 text-[#33077C]" />
-                        <span>Choose Image</span>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={(e) => {
-                            if (e.target.files?.[0]) {
-                              setAttachedImageName(e.target.files[0].name);
-                              toast.success(
-                                `Image "${e.target.files[0].name}" attached!`,
-                              );
-                            }
-                          }}
-                        />
-                      </label>
-                      {attachedImageName && (
-                        <span className="text-slate-600 font-medium truncate max-w-xs">
-                          {attachedImageName}
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                  <ImageAttachmentBox
+                    attachedImageName={attachedImageName}
+                    onImageSelect={(fileName) => setAttachedImageName(fileName)}
+                    onImageClear={() => setAttachedImageName(null)}
+                  />
                 )}
 
                 {showDocumentSection && (
@@ -4918,6 +4925,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       const convertedDt = formatDateTime(convertedAt);
       return {
         proformaNo: p.proformaNo,
+        proformaInvoiceManualNo: p.proformaInvoiceManualNo || "—",
         partyName: p.partyName,
         createdDateTime: createdDt
           ? createdDt.full
@@ -4937,8 +4945,14 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       subtitle: `Filter: ${appliedPeriod} | Total Proformas: ${rows.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
       columns: [
         {
-          header: "Proforma S.No.",
+          header: "Proforma ID",
           key: "proformaNo",
+          align: "center",
+          width: 18,
+        },
+        {
+          header: "Proforma No.",
+          key: "proformaInvoiceManualNo",
           align: "center",
           width: 18,
         },
@@ -5000,6 +5014,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       const convertedDt = formatDateTime(convertedAt);
       return {
         proformaNo: p.proformaNo,
+        proformaInvoiceManualNo: p.proformaInvoiceManualNo || "—",
         partyName: p.partyName,
         createdDateTime: createdDt
           ? createdDt.full
@@ -5017,10 +5032,16 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       subtitle: `Filter: ${appliedPeriod} | Total Records: ${rows.length}`,
       columns: [
         {
-          header: "Proforma No.",
+          header: "Proforma ID",
           key: "proformaNo",
           align: "center",
-          width: "15%",
+          width: "11%",
+        },
+        {
+          header: "Proforma No.",
+          key: "proformaInvoiceManualNo",
+          align: "center",
+          width: "11%",
         },
         {
           header: "Customer Name",
@@ -5324,9 +5345,14 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
               <CommonTableHead
                 columns={[
                   {
-                    label: "PROFORMA S.NO.",
+                    label: "PROFORMA ID",
                     align: "center",
                     minWidth: "140px",
+                  },
+                  {
+                    label: "PROFORMA NO.",
+                    align: "center",
+                    minWidth: "130px",
                   },
                   { label: "CUSTOMER NAME", align: "left", minWidth: "180px" },
                   {
@@ -5407,6 +5433,11 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                             className="justify-center"
                           />
                         </div>
+                      </td>
+
+                      {/* 1b. Proforma No. (manual number) */}
+                      <td className="py-3.5 px-3 font-semibold text-slate-700 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                        {item.proformaInvoiceManualNo || "—"}
                       </td>
 
                       {/* 2. Party Name */}
@@ -5734,6 +5765,11 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                 <p className="text-sm font-bold text-slate-900">
                   {previewProforma.proformaNo}
                 </p>
+                {previewProforma.proformaInvoiceManualNo && (
+                  <p className="text-xs font-semibold text-slate-600">
+                    Proforma No: {previewProforma.proformaInvoiceManualNo}
+                  </p>
+                )}
                 <p className="text-xs text-slate-500">
                   Date: {isoToDdmmyyyy(previewProforma.date)}
                 </p>

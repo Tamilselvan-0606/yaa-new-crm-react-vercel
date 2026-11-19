@@ -78,7 +78,7 @@ export const mapApiPaymentToSalePaymentRecord = (p: ApiInvoicePaymentItem): Sale
     invoiceNo: p.invoiceNo || '',
     paymentDate: dateStr.includes('T') ? dateStr.split('T')[0] : dateStr,
     paymentTime: dateStr.includes('T') ? dateStr.split('T')[1]?.slice(0, 5) : undefined,
-    method: p.paymentType || 'Bank Transfer',
+    method: p.paymentType || ('' as any),
     referenceNo: p.referenceNo || undefined,
     amount,
     status: p.status === 'Completed' ? 'Paid' : 'Partial',
@@ -180,6 +180,10 @@ export const mapApiInvoiceToSaleTransaction = (apiInv: ApiSalesInvoice): SaleTra
     igst,
     ...readDocumentExtras(apiInv),
     roundOff,
+    ...(() => {
+      const r = Number((apiInv as any).totalSalesReturnAmount ?? (apiInv as any).totalReturned ?? (apiInv as any).returnedAmount);
+      return Number.isFinite(r) ? { totalReturned: r } : {};
+    })(),
     overallDiscount: Number(apiInv.overallDiscount ?? 0),
     totalDiscount,
     totalTax,
@@ -188,10 +192,12 @@ export const mapApiInvoiceToSaleTransaction = (apiInv: ApiSalesInvoice): SaleTra
     grandTotal,
     paidAmount,
     balance,
-    paymentMethod: (apiInv.paymentMethod as any) || 'Bank Transfer',
+    // API value only; when the invoice has no method of its own, show the method(s) of its recorded payments.
+    paymentMethod: ((apiInv.paymentMethod as any) ||
+      Array.from(new Set(paymentRecords.map((p) => p.method).filter(Boolean))).join(', ')) as any,
     paymentSplits: splits,
     paymentRecords,
-    paymentTerms: apiInv.paymentTerms || 'Net 15 Days',
+    paymentTerms: apiInv.paymentTerms || '',
     paymentStatus: normalizedPayStatus,
     saleStatus: normalizedSaleStatus,
     createdBy: apiInv.createdBy || '',

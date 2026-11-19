@@ -1,5 +1,6 @@
 import React from 'react';
 import { Mail, MessageCircle, Phone } from 'lucide-react';
+import { formatPhoneNumber } from '../../utils/fieldValidators';
 
 interface ContactCopyButtonsProps {
   /** Row id, used to build the "copied" key (`${id}-phone`, `${id}-wa`, `${id}-email`). */
@@ -77,11 +78,12 @@ export const ContactCopyButtons: React.FC<ContactCopyButtonsProps> = ({
         }
         const copyKey = `${id}-${key}`;
         const copied = copiedKey === copyKey;
+        const displayValue = key === 'phone' || key === 'wa' ? formatPhoneNumber(value) : value;
         return (
           <div key={key} className="relative group">
             <button
               type="button"
-              onClick={(e) => onCopy(e, value, copyKey, label)}
+              onClick={(e) => onCopy(e, displayValue, copyKey, label)}
               title={title}
               className={`flex items-center justify-center ${style.base} ${style.tones[key]}`}
             >
@@ -92,7 +94,7 @@ export const ContactCopyButtons: React.FC<ContactCopyButtonsProps> = ({
                 copied ? 'opacity-100 bg-emerald-600 scale-100' : 'opacity-0 group-hover:opacity-100 bg-slate-900'
               }`}
             >
-              {copied ? 'Copied!' : value}
+              {copied ? 'Copied!' : displayValue}
             </div>
           </div>
         );

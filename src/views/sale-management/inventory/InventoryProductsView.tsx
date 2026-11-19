@@ -52,6 +52,7 @@ import { Button } from "../../../components/common/Button";
 import { Pagination } from "../../../components/common/Pagination";
 import { exportTableToExcel } from "../../../utils/excelExport";
 import { toast } from "../../../utils/toast";
+import { sanitizeHsnCodeInput } from "../../../utils/validation";
 import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import { useStatusConfirm } from "../utils/useStatusConfirm";
@@ -88,6 +89,7 @@ import {
   FORM_TEXTAREA_CLS,
   handleNonNegativeKeyDown,
 } from "../utils/formUtils";
+import { IMAGE_FILE_ACCEPT, validateImageFile } from "../utils/imageUpload";
 import { AddCategoryModal } from "./AddCategoryModal";
 import { AddSubcategoryModal } from "./AddSubcategoryModal";
 import { FormError } from "../../../components/common/FormError";
@@ -1917,33 +1919,13 @@ export const InventoryProductsView: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const allowedExtensions = [
-      ".png",
-      ".jpg",
-      ".jpeg",
-      ".webp",
-      ".gif",
-      ".bmp",
-      ".svg",
-      ".avif",
-    ];
-    const fileName = (file.name || "").toLowerCase();
-    const hasValidExtension = allowedExtensions.some((ext) =>
-      fileName.endsWith(ext),
-    );
-    const isImageMime = Boolean(file.type && file.type.startsWith("image/"));
-
-    if (!isImageMime && !hasValidExtension) {
-      setImageFileError(
-        "Only image formats (.png, .jpg, .jpeg, .webp, .gif, .bmp, .svg) are allowed.",
-      );
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      setImageFileError("Image size must be less than 10MB.");
+    const validation = validateImageFile(file, {
+      maxSizeBytes: 10 * 1024 * 1024,
+      tooLargeMessage: "Image size must be less than 10MB.",
+    });
+    if (!validation.valid) {
+      setImageFileError(validation.error);
+      toast.error(validation.error);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
@@ -1963,10 +1945,11 @@ export const InventoryProductsView: React.FC = () => {
       toast.success("Image selected successfully");
     } catch (err: any) {
       console.error("Image upload processing failed:", err);
-      setImageFileError(
+      const errMsg =
         err?.message ||
-          "Failed to process image. Please choose a valid image file.",
-      );
+        "Failed to process image. Please choose a valid image file.";
+      setImageFileError(errMsg);
+      toast.error(errMsg);
     } finally {
       setIsUploadingImage(false);
       if (fileInputRef.current) {
@@ -2100,7 +2083,6 @@ export const InventoryProductsView: React.FC = () => {
           "manufacturing date",
         ),
       ],
-      ["itemImage", imageFileError],
     ];
     if (data.hasWholesale) {
       checks.push(
@@ -2197,7 +2179,6 @@ export const InventoryProductsView: React.FC = () => {
     formData.minStockAlert,
     formData.mfgDate,
     formData.expDate,
-    imageFileError,
   ]);
 
   // Start clean whenever the item modal closes (opening already resets the form)
@@ -4142,10 +4123,11 @@ export const InventoryProductsView: React.FC = () => {
                   <div className="relative">
                     <input
                       type="text"
+                      inputMode="numeric"
                       placeholder="Enter Item HSN"
                       value={formData.hsnCode}
                       onChange={(e) =>
-                        setFormData({ ...formData, hsnCode: e.target.value })
+                        setFormData({ ...formData, hsnCode: sanitizeHsnCodeInput(e.target.value) })
                       }
                       className={FORM_INPUT_CLS}
                     />
@@ -4228,7 +4210,7 @@ export const InventoryProductsView: React.FC = () => {
                   <input
                     type="file"
                     ref={fileInputRef}
-                    accept="image/png,image/jpeg,image/jpg,image/webp,image/gif,image/bmp,image/svg+xml,.png,.jpg,.jpeg,.webp,.gif,.bmp,.svg,.avif"
+                    accept={IMAGE_FILE_ACCEPT}
                     onClick={(e) => {
                       (e.currentTarget as HTMLInputElement).value = "";
                     }}
@@ -4286,7 +4268,7 @@ export const InventoryProductsView: React.FC = () => {
                       <span>Add Item Image</span>
                     </button>
                   )}
-                  <FormError message={errors.itemImage?.message} showIcon />
+                  <FormError message={imageFileError || errors.itemImage?.message} showIcon />
                 </div>
               </div>
 

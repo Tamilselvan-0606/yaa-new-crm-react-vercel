@@ -38,6 +38,16 @@ export interface PlatformLeadItem {
   planInterest?: string | null;
   industry?: string | null;
   location?: string | null;
+  address?: string | null;
+  city?: string | null;
+  countryId?: string | null;
+  stateId?: string | null;
+  districtId?: string | null;
+  pincode?: string | null;
+  countryName?: string | null;
+  stateName?: string | null;
+  districtName?: string | null;
+  cityName?: string | null;
   designation?: string | null;
   assignedTo?: string | null;
   followUpDate?: string | null;

@@ -373,7 +373,7 @@ export const ProductSchema = z.object({
   salesPrice: z.number().nonnegative("Sales price cannot be negative"),
   mrp: z.number().nonnegative("MRP cannot be negative").optional(),
   taxPercent: z.number().min(0, "Tax cannot be negative").max(100, "Tax cannot exceed 100%").optional(),
-  hsnCode: z.string().trim().optional(),
+  hsnCode: z.string().trim().regex(/^\d*$/, "HSN / SAC code must contain digits only.").optional(),
   minStockLevel: z.number().nonnegative("Minimum stock level cannot be negative").optional(),
   openingStock: z.number().nonnegative("Opening stock cannot be negative").optional(),
   description: z.string().trim().optional(),

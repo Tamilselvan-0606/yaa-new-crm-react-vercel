@@ -123,10 +123,4 @@ export const {
 export const getDocSuperAdminDetailId = (doc?: any): string =>
   doc?.superAdminDetailId || doc?.superAdminDetailsId || doc?.companyDetailId || doc?.sellerDetailId || '';
 
-export const getApiErrorMessage = (e: any, fallback: string): string =>
-  e?.data?.error?.message ||
-  e?.data?.message ||
-  e?.response?.data?.error?.message ||
-  e?.response?.data?.message ||
-  e?.message ||
-  fallback;
+export { getApiErrorMessage } from '../../utils/apiErrorMessage';

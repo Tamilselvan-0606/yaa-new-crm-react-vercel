@@ -22,6 +22,7 @@ import {
   CheckCircle2,
   Clock,
   FileText,
+  FileCheck,
   Download,
   FolderUp,
   FolderDown,
@@ -43,7 +44,8 @@ import { SearchBar } from "../../components/common/SearchBar";
 import { FilterDropdown } from "../../components/common/FilterDropdown";
 import { Pagination } from "../../components/common/Pagination";
 import { ConfirmationModal } from "../../utils/confirmationModal";
-import { customerApi } from "../../api/commerce/customerApi";
+import { toast } from "../../utils/toast";
+import { formatPhoneNumber } from "../../utils/fieldValidators";
 import {
   useGetPlatformLeadsQuery,
   useUpdatePlatformLeadStatusMutation,
@@ -61,6 +63,7 @@ import {
 } from "../../api/platform/clientApi";
 import { Customer, Lead } from "../../types";
 import { getStoredOrganizationId } from "../../api/config";
+import { baseClient } from "../../api/baseApi";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useRowActionMenu } from "../../hooks/useRowActionMenu";
 import { ContactCopyButtons } from "../../components/common/ContactCopyButtons";
@@ -134,6 +137,11 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       cancelled = true;
     };
   }, [selectedClientId]);
+
+  const handleOpenDocument = (docUrl: string) => {
+    if (!docUrl || docUrl === "#") return;
+    window.open(docUrl, "_blank", "noopener,noreferrer");
+  };
 
   const selectedLeadId = selectedLeadDetail?.id;
 
@@ -313,24 +321,22 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
   const handleUpdateClientStatus = async (id: string, newStatus: string) => {
     try {
       await updatePlatformClientStatus({ id, status: newStatus }).unwrap();
-    } catch {
-      try {
-        await customerApi.patchCustomer(id, { status: newStatus as any });
-      } catch {
-        // Fallback
-      }
+      toast.success('Status updated successfully');
+    } catch (err: any) {
+      toast.error('Failed to update client status', {
+        description: err?.data?.message || err?.message || 'Operation failed',
+      });
     }
   };
 
   const handleDeleteClient = async (id: string) => {
     try {
       await deletePlatformClient(id).unwrap();
-    } catch {
-      try {
-        await customerApi.deleteCustomer(id);
-      } catch {
-        // Fallback
-      }
+      toast.success('Client deleted successfully');
+    } catch (err: any) {
+      toast.error('Failed to delete client', {
+        description: err?.data?.message || err?.message || 'Operation failed',
+      });
     }
   };
 
@@ -483,7 +489,32 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       subOrganizationsCount: pc.subOrganizationsCount,
       membersCount: pc.membersCount,
       linkedProducts: rawProds,
-      documents: [],
+      ourDocuments: (pc as any).ourDocuments || [],
+      clientDocuments: (pc as any).clientDocuments || [],
+      documents: [
+        ...(((pc as any).ourDocuments || []) as any[]).map((d, i) => ({
+          id: `our_doc_${pc.id}_${i}`,
+          title: d.name || d.title || 'Our Document',
+          fileType: (d.name || d.url || '').split('.').pop()?.toUpperCase() || 'PDF',
+          fileSize: '',
+          url: d.url,
+          uploadedBy: 'Company Staff',
+          uploadedAt: '',
+          category: 'Our Document',
+          type: 'shared_by_company' as const,
+        })),
+        ...(((pc as any).clientDocuments || []) as any[]).map((d, i) => ({
+          id: `client_doc_${pc.id}_${i}`,
+          title: d.name || d.title || 'Client Document',
+          fileType: (d.name || d.url || '').split('.').pop()?.toUpperCase() || 'PDF',
+          fileSize: '',
+          url: d.url,
+          uploadedBy: 'Client',
+          uploadedAt: '',
+          category: 'Client Document',
+          type: 'shared_by_client' as const,
+        })),
+      ],
       organizationId: (pc as any).organizationId || "",
       subOrganizationId: (pc as any).subOrganizationId || "",
       subOrganizationName: (pc as any).subOrganizationName || (pc as any).subOrganization?.name || "",
@@ -550,13 +581,16 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       whatsapp: pl.whatsapp || pl.phone,
       email: pl.email,
       alternatePhone: "",
-      address: pl.location || "",
-      city: (pl as any).city || pl.location || "",
-      country: (pl as any).countryName || (pl as any).country || "",
-      state: (pl as any).stateName || (pl as any).state || "",
-      district: (pl as any).districtName || (pl as any).district || "",
-      pincode: (pl as any).pincode || "",
-      location: (pl as any).city || pl.location || "",
+      address: pl.address || pl.location || "",
+      city: pl.city || (pl as any).cityName || pl.location || "",
+      country: pl.countryName || (pl as any).country || "",
+      state: pl.stateName || (pl as any).state || "",
+      district: pl.districtName || (pl as any).district || "",
+      countryId: pl.countryId || "",
+      stateId: pl.stateId || "",
+      districtId: pl.districtId || "",
+      pincode: pl.pincode || "",
+      location: pl.address || pl.city || pl.location || "",
       leadSource: pl.source || "Website",
       source: pl.source || "Website",
       interestedProducts: pl.planInterest ? [pl.planInterest] : ["YaaConnect"],
@@ -766,11 +800,10 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
           <button
             type="button"
             onClick={() => setViewMode("leads")}
-            className={`px-4 py-2.5 rounded-xl text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center gap-2 ${
-              viewMode === "leads"
+            className={`px-4 py-2.5 rounded-xl text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center gap-2 ${viewMode === "leads"
                 ? "bg-[#33077C] text-white shadow-sm"
                 : "bg-white text-slate-700 border border-slate-200 hover:border-slate-300 shadow-2xs"
-            }`}
+              }`}
           >
             {viewMode === "leads" && (
               <Check className="w-3.5 h-3.5 stroke-[3] text-white" />
@@ -781,11 +814,10 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
           <button
             type="button"
             onClick={() => setViewMode("clients")}
-            className={`px-4 py-2.5 rounded-xl text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center gap-2 ${
-              viewMode === "clients"
+            className={`px-4 py-2.5 rounded-xl text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center gap-2 ${viewMode === "clients"
                 ? "bg-[#33077C] text-white shadow-sm"
                 : "bg-white text-slate-700 border border-slate-200 hover:border-slate-300 shadow-2xs"
-            }`}
+              }`}
           >
             {viewMode === "clients" && (
               <Check className="w-3.5 h-3.5 stroke-[3] text-white" />
@@ -967,16 +999,15 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                           {/* 5. Status */}
                           <td className="py-4 px-4 border border-slate-200">
                             <span
-                              className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                                clientStatus === "Active"
+                              className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${clientStatus === "Active"
                                   ? "bg-emerald-50 text-emerald-600"
                                   : clientStatus === "Onboard" ||
-                                      clientStatus === "Onboarding"
+                                    clientStatus === "Onboarding"
                                     ? "bg-cyan-50 text-cyan-600"
                                     : clientStatus === "Paused"
                                       ? "bg-amber-50 text-amber-600"
                                       : "bg-slate-100 text-slate-600"
-                              }`}
+                                }`}
                             >
                               {clientStatus}
                             </span>
@@ -1048,11 +1079,10 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                             <button
                               type="button"
                               onClick={(e) => rowMenu.toggle(e, client.id)}
-                              data-row-menu-trigger className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all cursor-pointer shadow-xs active:scale-95 mx-auto ${
-                                rowMenu.activeId === client.id
+                              data-row-menu-trigger className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all cursor-pointer shadow-xs active:scale-95 mx-auto ${rowMenu.activeId === client.id
                                   ? "bg-[#4309A2] text-white ring-2 ring-[#4309A2]/20"
                                   : "bg-[#33077C] hover:bg-[#4309A2] text-white"
-                              }`}
+                                }`}
                               title="Actions"
                             >
                               <MoreVertical className="w-4 h-4 fill-white text-white" />
@@ -1303,11 +1333,10 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                             <button
                               type="button"
                               onClick={(e) => rowMenu.toggle(e, lead.id)}
-                              data-row-menu-trigger className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all cursor-pointer shadow-xs active:scale-95 mx-auto ${
-                                rowMenu.activeId === lead.id
+                              data-row-menu-trigger className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all cursor-pointer shadow-xs active:scale-95 mx-auto ${rowMenu.activeId === lead.id
                                   ? "bg-[#4309A2] text-white ring-2 ring-[#4309A2]/20"
                                   : "bg-[#33077C] hover:bg-[#4309A2] text-white"
-                              }`}
+                                }`}
                               title="Actions"
                             >
                               <MoreVertical className="w-4 h-4 fill-white text-white" />
@@ -1429,14 +1458,14 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                 <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
                   <span className="text-slate-400 font-medium shrink-0">Phone Number</span>
                   <span className="font-bold text-slate-800 text-right">
-                    {selectedClientDetail.phone || "-"}
+                    {formatPhoneNumber(selectedClientDetail.phone) || "-"}
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
                   <span className="text-slate-400 font-medium shrink-0">WhatsApp Number</span>
                   <span className="font-bold text-slate-800 text-right">
-                    {selectedClientDetail.whatsapp || selectedClientDetail.phone || "-"}
+                    {formatPhoneNumber(selectedClientDetail.whatsapp || selectedClientDetail.phone) || "-"}
                   </span>
                 </div>
 
@@ -1535,6 +1564,138 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* Attached Documents Section (Our Documents & Client Documents) */}
+            {(() => {
+              const ourDocs: Array<{ name: string; url: string }> =
+                (selectedClientDetail as any).ourDocuments ||
+                (selectedClientDetail.documents || [])
+                  .filter((d: any) => (d.type || "shared_by_company") === "shared_by_company")
+                  .map((d: any) => ({ name: d.title || d.name, url: d.url }));
+
+              const clientDocs: Array<{ name: string; url: string }> =
+                (selectedClientDetail as any).clientDocuments ||
+                (selectedClientDetail.documents || [])
+                  .filter((d: any) => d.type === "shared_by_client")
+                  .map((d: any) => ({ name: d.title || d.name, url: d.url }));
+
+              const hasDocs = ourDocs.length > 0 || clientDocs.length > 0;
+              if (!hasDocs) return null;
+
+              return (
+                <div className="pt-2 border-t border-slate-100 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-lg bg-purple-50 text-[#33077C] flex items-center justify-center font-bold">
+                        <Paperclip className="w-3.5 h-3.5" />
+                      </div>
+                      <span className="text-slate-900 font-bold text-sm">Attached Documents</span>
+                    </div>
+                    <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2.5 py-0.5 rounded-full">
+                      Total: <strong className="text-slate-800">{ourDocs.length + clientDocs.length}</strong>
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Our Documents */}
+                    <div className="bg-gradient-to-b from-purple-50/40 via-white to-white rounded-2xl border border-purple-100/80 p-4 space-y-2.5 shadow-2xs">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-lg bg-purple-100/70 text-[#4309A2] flex items-center justify-center shrink-0">
+                            <FileText className="w-3.5 h-3.5" />
+                          </div>
+                          <div>
+                            <span className="text-xs font-bold text-slate-800">Our Documents</span>
+                            <p className="text-[10px] text-slate-400">Contracts, MSA &amp; proposals sent</p>
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-purple-100/80 text-[#4309A2]">
+                          {ourDocs.length}
+                        </span>
+                      </div>
+
+                      <div className="space-y-1.5 max-h-[140px] overflow-y-auto pr-1">
+                        {ourDocs.length === 0 ? (
+                          <p className="text-xs text-slate-400 italic py-2 text-center">No company documents attached</p>
+                        ) : (
+                          ourDocs.map((doc, idx) => (
+                            <div
+                              key={idx}
+                              className="p-2 bg-white rounded-xl border border-slate-200/80 hover:border-purple-200 flex items-center justify-between gap-2 transition-all shadow-2xs"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <FileText className="w-3.5 h-3.5 text-[#4309A2] shrink-0" />
+                                <span className="text-xs font-semibold text-slate-800 truncate" title={doc.name}>
+                                  {doc.name}
+                                </span>
+                              </div>
+                              {doc.url && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenDocument(doc.url)}
+                                  className="text-slate-400 hover:text-[#4309A2] hover:bg-purple-50 p-1.5 rounded-lg transition-colors cursor-pointer shrink-0"
+                                  title="View / Download Document"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Client Documents */}
+                    <div className="bg-gradient-to-b from-emerald-50/40 via-white to-white rounded-2xl border border-emerald-100/80 p-4 space-y-2.5 shadow-2xs">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-lg bg-emerald-100/70 text-emerald-700 flex items-center justify-center shrink-0">
+                            <FileCheck className="w-3.5 h-3.5" />
+                          </div>
+                          <div>
+                            <span className="text-xs font-bold text-slate-800">Client Documents</span>
+                            <p className="text-[10px] text-slate-400">GST, PAN card, cheques &amp; proofs</p>
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-100/80 text-emerald-700">
+                          {clientDocs.length}
+                        </span>
+                      </div>
+
+                      <div className="space-y-1.5 max-h-[140px] overflow-y-auto pr-1">
+                        {clientDocs.length === 0 ? (
+                          <p className="text-xs text-slate-400 italic py-2 text-center">No client documents attached</p>
+                        ) : (
+                          clientDocs.map((doc, idx) => (
+                            <div
+                              key={idx}
+                              className="p-2 bg-white rounded-xl border border-slate-200/80 hover:border-emerald-200 flex items-center justify-between gap-2 transition-all shadow-2xs"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <FileCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                <span className="text-xs font-semibold text-slate-800 truncate" title={doc.name}>
+                                  {doc.name}
+                                </span>
+                              </div>
+                              {doc.url && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenDocument(doc.url)}
+                                  className="text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 p-1.5 rounded-lg transition-colors cursor-pointer shrink-0"
+                                  title="View / Download Document"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Bottom Action Buttons */}
             <div className="pt-4 border-t border-slate-200 flex items-center justify-end gap-3">
@@ -1655,9 +1816,16 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                 </div>
 
                 <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Phone Number</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {formatPhoneNumber(selectedLeadDetail.phone) || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
                   <span className="text-slate-400 font-medium shrink-0">WhatsApp Number</span>
                   <span className="font-bold text-slate-800 text-right">
-                    {selectedLeadDetail.whatsapp || selectedLeadDetail.phone || "-"}
+                    {formatPhoneNumber(selectedLeadDetail.whatsapp || selectedLeadDetail.phone) || "-"}
                   </span>
                 </div>
 
@@ -1857,22 +2025,22 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                   <>
                     {currentLead.status !== "Converted to Client" && (
                       <>
-                    {/* 1. Edit Lead (Blue circle) */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        rowMenu.close();
-                        handleEditLead(currentLead);
-                      }}
-                      className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
-                    >
-                      <div className="w-[26px] h-[26px] rounded-full bg-[#3B82F6] text-white flex items-center justify-center shrink-0 shadow-xs">
-                        <Pencil className="w-3.5 h-3.5 stroke-[2.2]" />
-                      </div>
-                      <span className="text-[13px] font-bold text-[#1E293B] tracking-tight">
-                        Edit Lead
-                      </span>
-                    </button>
+                        {/* 1. Edit Lead (Blue circle) */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            rowMenu.close();
+                            handleEditLead(currentLead);
+                          }}
+                          className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
+                        >
+                          <div className="w-[26px] h-[26px] rounded-full bg-[#3B82F6] text-white flex items-center justify-center shrink-0 shadow-xs">
+                            <Pencil className="w-3.5 h-3.5 stroke-[2.2]" />
+                          </div>
+                          <span className="text-[13px] font-bold text-[#1E293B] tracking-tight">
+                            Edit Lead
+                          </span>
+                        </button>
                       </>
                     )}
 
@@ -1895,83 +2063,83 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
 
                     {currentLead.status !== "Converted to Client" && (
                       <>
-                    {/* 3. Lost / 4. Converted - Lost is a valid lead status; Converted goes through the client conversion flow, so it is hidden once the lead is Won/converted */}
-                    {currentLead.status !== 'Inactive' && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        rowMenu.close();
-                        handleUpdateLeadStatus(currentLead.id, 'Inactive');
-                      }}
-                      className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
-                    >
-                      <div className="w-[26px] h-[26px] rounded-full bg-[#94A3B8] text-white flex items-center justify-center shrink-0 shadow-xs">
-                        <Ban className="w-3.5 h-3.5 stroke-[2.2]" />
-                      </div>
-                      <span className="text-[13px] font-bold text-[#1E293B] tracking-tight">
-                        Inactive
-                      </span>
-                    </button>
-                    )}
-                    {currentLead.status !== 'Lost' && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        rowMenu.close();
-                        handleUpdateLeadStatus(currentLead.id, 'Lost');
-                      }}
-                      className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
-                    >
-                      <div className="w-[26px] h-[26px] rounded-full bg-[#5A6E85] text-white flex items-center justify-center shrink-0 shadow-xs">
-                        <Ban className="w-3.5 h-3.5 stroke-[2.2]" />
-                      </div>
-                      <span className="text-[13px] font-bold text-[#1E293B] tracking-tight">
-                        Lost
-                      </span>
-                    </button>
-                    )}
-                    {!(currentLead as any).convertedOrganizationId && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        rowMenu.close();
-                        handleConvertLeadToCustomer(currentLead);
-                      }}
-                      className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
-                    >
-                      <div className="w-[26px] h-[26px] rounded-full bg-[#16A34A] text-white flex items-center justify-center shrink-0 shadow-xs">
-                        <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.2]" />
-                      </div>
-                      <span className="text-[13px] font-bold text-[#1E293B] tracking-tight">
-                        Converted to Client
-                      </span>
-                    </button>
-                    )}
+                        {/* 3. Lost / 4. Converted - Lost is a valid lead status; Converted goes through the client conversion flow, so it is hidden once the lead is Won/converted */}
+                        {currentLead.status !== 'Inactive' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              rowMenu.close();
+                              handleUpdateLeadStatus(currentLead.id, 'Inactive');
+                            }}
+                            className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
+                          >
+                            <div className="w-[26px] h-[26px] rounded-full bg-[#94A3B8] text-white flex items-center justify-center shrink-0 shadow-xs">
+                              <Ban className="w-3.5 h-3.5 stroke-[2.2]" />
+                            </div>
+                            <span className="text-[13px] font-bold text-[#1E293B] tracking-tight">
+                              Inactive
+                            </span>
+                          </button>
+                        )}
+                        {currentLead.status !== 'Lost' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              rowMenu.close();
+                              handleUpdateLeadStatus(currentLead.id, 'Lost');
+                            }}
+                            className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
+                          >
+                            <div className="w-[26px] h-[26px] rounded-full bg-[#5A6E85] text-white flex items-center justify-center shrink-0 shadow-xs">
+                              <Ban className="w-3.5 h-3.5 stroke-[2.2]" />
+                            </div>
+                            <span className="text-[13px] font-bold text-[#1E293B] tracking-tight">
+                              Lost
+                            </span>
+                          </button>
+                        )}
+                        {!(currentLead as any).convertedOrganizationId && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              rowMenu.close();
+                              handleConvertLeadToCustomer(currentLead);
+                            }}
+                            className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
+                          >
+                            <div className="w-[26px] h-[26px] rounded-full bg-[#16A34A] text-white flex items-center justify-center shrink-0 shadow-xs">
+                              <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.2]" />
+                            </div>
+                            <span className="text-[13px] font-bold text-[#1E293B] tracking-tight">
+                              Converted to Client
+                            </span>
+                          </button>
+                        )}
 
-                    {/* Subtle divider before Delete */}
-                    <div className="h-px bg-slate-100 my-0.5" />
+                        {/* Subtle divider before Delete */}
+                        <div className="h-px bg-slate-100 my-0.5" />
 
-                    {/* 4. Delete (Rose red circle) */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        rowMenu.close();
-                        setConfirmAction({
-                          type: 'Delete',
-                          category: 'lead',
-                          id: currentLead.id,
-                          name: currentLead.name,
-                        });
-                      }}
-                      className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-rose-50/50 transition-colors cursor-pointer"
-                    >
-                      <div className="w-[26px] h-[26px] rounded-full bg-[#E11D48] text-white flex items-center justify-center shrink-0 shadow-xs">
-                        <Trash2 className="w-3.5 h-3.5 stroke-[2.2]" />
-                      </div>
-                      <span className="text-[13px] font-bold text-[#E11D48] tracking-tight">
-                        Delete
-                      </span>
-                    </button>
+                        {/* 4. Delete (Rose red circle) */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            rowMenu.close();
+                            setConfirmAction({
+                              type: 'Delete',
+                              category: 'lead',
+                              id: currentLead.id,
+                              name: currentLead.name,
+                            });
+                          }}
+                          className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-rose-50/50 transition-colors cursor-pointer"
+                        >
+                          <div className="w-[26px] h-[26px] rounded-full bg-[#E11D48] text-white flex items-center justify-center shrink-0 shadow-xs">
+                            <Trash2 className="w-3.5 h-3.5 stroke-[2.2]" />
+                          </div>
+                          <span className="text-[13px] font-bold text-[#E11D48] tracking-tight">
+                            Delete
+                          </span>
+                        </button>
                       </>
                     )}
                   </>

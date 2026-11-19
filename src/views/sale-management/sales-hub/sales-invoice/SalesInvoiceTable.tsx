@@ -77,10 +77,11 @@ export const SalesInvoiceTable: React.FC<SalesInvoiceTableProps> = ({
           <CommonTableHead
             columns={[
               {
-                label: "INVOICE S.NO.",
+                label: "INVOICE ID",
                 align: "center",
                 minWidth: "140px",
               },
+              { label: "INVOICE NO.", align: "center", minWidth: "120px" },
               { label: "CUSTOMER", align: "left", minWidth: "180px" },
               {
                 label: "CREATED DATE & TIME",
@@ -112,7 +113,7 @@ export const SalesInvoiceTable: React.FC<SalesInvoiceTableProps> = ({
             {paginatedSales.length === 0 ? (
               <tr>
                 <td
-                  colSpan={10}
+                  colSpan={11}
                   className="py-16 text-center text-slate-400 border border-slate-200 font-medium"
                 >
                   <ShoppingCart className="w-10 h-10 mx-auto mb-2 text-slate-300 stroke-[1.5]" />
@@ -184,6 +185,11 @@ export const SalesInvoiceTable: React.FC<SalesInvoiceTableProps> = ({
                           className="justify-center"
                         />
                       </div>
+                    </td>
+
+                    {/* 1b. Invoice No. (manual) */}
+                    <td className="py-3.5 px-3 font-semibold text-slate-700 text-center border border-slate-200 whitespace-nowrap align-middle">
+                      {sale.salesInvoiceManualNo || "—"}
                     </td>
 
                     {/* 2. Customer */}

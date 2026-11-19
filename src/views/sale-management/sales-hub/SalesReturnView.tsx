@@ -657,10 +657,9 @@ export const SalesReturnView: React.FC = () => {
           sku: item.sku,
           batch: item.batch,
           soldQuantity: item.quantity,
-          returnQuantity: Math.min(1, item.quantity),
+          returnQuantity: 0,
           unitPrice: item.unitPrice || item.rate || 0,
-          returnAmount:
-            Math.min(1, item.quantity) * (item.unitPrice || item.rate || 0),
+          returnAmount: 0,
           reason: "Defective",
         })),
       );
@@ -702,6 +701,7 @@ export const SalesReturnView: React.FC = () => {
         !q ||
         tx.partyName.toLowerCase().includes(q) ||
         tx.refNo.toLowerCase().includes(q) ||
+        (tx.originalReturn?.salesReturnManualNo || "").toLowerCase().includes(q) ||
         tx.type.toLowerCase().includes(q);
 
       let matchesFirm = true;
@@ -763,6 +763,7 @@ export const SalesReturnView: React.FC = () => {
           !q ||
           tx.partyName.toLowerCase().includes(q) ||
           tx.refNo.toLowerCase().includes(q) ||
+          (tx.originalReturn?.salesReturnManualNo || "").toLowerCase().includes(q) ||
           tx.type.toLowerCase().includes(q);
         let matchesFirm = true;
         if (selectedFirm !== "ALL FIRMS") {
@@ -784,6 +785,7 @@ export const SalesReturnView: React.FC = () => {
       srNo: idx + 1,
       date: isoToDdmmyyyy(tx.date),
       refNo: tx.refNo || "-",
+      manualNo: tx.originalReturn?.salesReturnManualNo || "—",
       partyName: tx.partyName,
       categoryName: tx.categoryName || "-",
       type: tx.type,
@@ -800,7 +802,8 @@ export const SalesReturnView: React.FC = () => {
       columns: [
         { header: "#", key: "srNo", align: "center", width: 8 },
         { header: "Date", key: "date", align: "center", width: 15 },
-        { header: "Ref No.", key: "refNo", align: "center", width: 15 },
+        { header: "Sales Return ID", key: "refNo", align: "center", width: 18 },
+        { header: "Sales Return No.", key: "manualNo", align: "center", width: 18 },
         { header: "Customer Name", key: "partyName", align: "left", width: 28 },
         {
           header: "Category Name",
@@ -942,10 +945,9 @@ export const SalesReturnView: React.FC = () => {
           sku: item.sku,
           batch: item.batch,
           soldQuantity: item.quantity,
-          returnQuantity: Math.min(1, item.quantity),
+          returnQuantity: 0,
           unitPrice: item.unitPrice || item.rate || 0,
-          returnAmount:
-            Math.min(1, item.quantity) * (item.unitPrice || item.rate || 0),
+          returnAmount: 0,
           reason: "Defective",
         })),
       );
@@ -1448,6 +1450,10 @@ export const SalesReturnView: React.FC = () => {
       partyEmail: customer?.email,
       partyAddress: customer?.billingAddress || customer?.address,
       extraMeta: [
+        { label: "Sales Return ID", value: docNo },
+        ...(origReturn?.salesReturnManualNo
+          ? [{ label: "Sales Return No", value: origReturn.salesReturnManualNo }]
+          : []),
         ...(origReturn?.invoiceNo
           ? [{ label: "Original Invoice", value: origReturn.invoiceNo }]
           : []),
@@ -1824,9 +1830,14 @@ export const SalesReturnView: React.FC = () => {
               <CommonTableHead
                 columns={[
                   {
-                    label: "SALES RETURN S.NO.",
+                    label: "SALES RETURN ID",
                     align: "center",
                     minWidth: "140px",
+                  },
+                  {
+                    label: "SALES RETURN NO.",
+                    align: "center",
+                    minWidth: "130px",
                   },
                   { label: "CUSTOMER NAME", align: "left", minWidth: "160px" },
                   { label: "DATE", align: "left", minWidth: "110px" },
@@ -1887,6 +1898,11 @@ export const SalesReturnView: React.FC = () => {
                       {/* REF NO. */}
                       <td className="py-3.5 px-3 text-center text-slate-800 font-bold border-r border-slate-200 whitespace-nowrap align-middle">
                         {row.refNo || "-"}
+                      </td>
+
+                      {/* MANUAL SALES RETURN NO. */}
+                      <td className="py-3.5 px-3 text-center text-slate-700 font-semibold border-r border-slate-200 whitespace-nowrap align-middle">
+                        {row.originalReturn?.salesReturnManualNo || "—"}
                       </td>
 
                       {/* PARTY NAME */}
@@ -2487,6 +2503,11 @@ export const SalesReturnView: React.FC = () => {
                 <p className="text-sm font-bold text-slate-900">
                   {selectedReturn.returnNo}
                 </p>
+                {selectedReturn.salesReturnManualNo && (
+                  <p className="text-xs font-semibold text-slate-600">
+                    Sales Return No: {selectedReturn.salesReturnManualNo}
+                  </p>
+                )}
                 <p className="text-xs text-slate-500">
                   Date: {isoToDdmmyyyy(selectedReturn.returnDate)}
                 </p>
