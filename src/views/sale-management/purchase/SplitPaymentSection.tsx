@@ -1,6 +1,7 @@
 import React from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { FormError } from '../../../components/common/FormError';
+import { sanitizePaymentReferenceInput } from '../../../utils/validation';
 import {
   SPLIT_PAYMENT_METHODS, SplitPaymentMethod, SplitPaymentRow, SplitSummary, SplitValidation, newSplitRow, splitFieldLabels,
 } from '../../../utils/splitPayments';
@@ -113,7 +114,7 @@ export const SplitPaymentSection: React.FC<Props> = ({ rows, onChange, summary, 
                     maxLength={100}
                     placeholder={labels.reference}
                     aria-label={labels.reference}
-                    onChange={(e) => update(r.id, { reference: e.target.value })}
+                    onChange={(e) => update(r.id, { reference: sanitizePaymentReferenceInput(e.target.value) })}
                     className={`${INPUT} w-full`}
                   />
                 )}

@@ -92,6 +92,9 @@ import {
   isValidIntlPhone,
   checkIntlPhone,
   normalizeIndianPhoneTo10Digits,
+  sanitizeAlphaSpaceInput,
+  sanitizeDigitsOnlyInput,
+  sanitizeAlphanumericUpperInput,
 } from "../../../utils/validation";
 import { Badge } from "../../../components/common/Badge";
 import { Button } from "../../../components/common/Button";
@@ -1736,7 +1739,14 @@ export const SupplierView: React.FC = () => {
               <FormLabel>Bank Name</FormLabel>
               <input
                 type="text"
-                {...register("bankName")}
+                {...register("bankName", {
+                  onChange: (e) => {
+                    const clean = sanitizeAlphaSpaceInput(e.target.value);
+                    if (clean !== e.target.value) {
+                      setValue("bankName", clean, { shouldValidate: true });
+                    }
+                  },
+                })}
                 placeholder="e.g. HDFC Bank"
                 className={getFormInputCls(!!errors.bankName)}
               />
@@ -1746,7 +1756,16 @@ export const SupplierView: React.FC = () => {
               <FormLabel>Account Number</FormLabel>
               <input
                 type="text"
-                {...register("accountNumber")}
+                inputMode="numeric"
+                maxLength={18}
+                {...register("accountNumber", {
+                  onChange: (e) => {
+                    const clean = sanitizeDigitsOnlyInput(e.target.value).slice(0, 18);
+                    if (clean !== e.target.value) {
+                      setValue("accountNumber", clean, { shouldValidate: true });
+                    }
+                  },
+                })}
                 placeholder="e.g. 50200012345678"
                 className={getFormInputCls(!!errors.accountNumber)}
               />
@@ -1759,13 +1778,17 @@ export const SupplierView: React.FC = () => {
                 maxLength={11}
                 {...register("ifscCode", {
                   onChange: (e) => {
-                    setValue("ifscCode", e.target.value.toUpperCase(), {
-                      shouldValidate: true,
-                    });
+                    setValue(
+                      "ifscCode",
+                      sanitizeAlphanumericUpperInput(e.target.value).slice(0, 11),
+                      { shouldValidate: true },
+                    );
                   },
                 })}
                 onInput={(e) => {
-                  e.currentTarget.value = e.currentTarget.value.toUpperCase();
+                  e.currentTarget.value = sanitizeAlphanumericUpperInput(
+                    e.currentTarget.value,
+                  ).slice(0, 11);
                 }}
                 placeholder="e.g. HDFC0000123"
                 className={`${getFormInputCls(!!errors.ifscCode)} font-mono uppercase`}

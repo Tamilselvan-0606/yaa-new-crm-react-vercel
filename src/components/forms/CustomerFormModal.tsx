@@ -9,7 +9,7 @@ import { CustomSelect } from '../common/CustomSelect';
 import { useAuth } from '../../context/AuthContext';
 import { useScopeLock } from '../../hooks/useScopeLock';
 import { useActiveOrgType } from '../../hooks/useActiveOrgType';
-import { filterBranchesForSuite } from '../../utils/branchSuite';
+import { filterBranchesForSuite, excludeInactiveBranches } from '../../utils/branchSuite';
 import { api } from '../../services/api';
 import { customerApi } from '../../api/commerce/customerApi';
 import {
@@ -25,6 +25,7 @@ import {
   getStoredOrganizationId,
 } from '../../api';
 import { baseApi, baseClient } from '../../api/baseApi';
+import { store } from '../../store/store';
 import { RegisteredField } from '../common/FormField';
 import { PhoneField } from '../common/PhoneField';
 import { LocationFields, LocationMeta } from '../common/LocationFields';
@@ -56,6 +57,7 @@ interface CustomerFormModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialCustomer?: Customer | null;
+  onCustomerSaved?: () => void;
 }
 
 const inputClass =
@@ -66,6 +68,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
   isOpen,
   onClose,
   initialCustomer,
+  onCustomerSaved,
 }) => {
   // Prefilled records (e.g. converting a lead) have no id yet and must be created, not updated.
   const isEditing = Boolean(initialCustomer?.id);
@@ -199,13 +202,21 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           orgToQuery || undefined
         );
         if (cancelled) return;
-        const all = filterBranchesForSuite(res && Array.isArray(res.data) ? res.data : [], isSaleManagement);
-        const list = !selectedSubOrgId
+        const all = excludeInactiveBranches(filterBranchesForSuite(res && Array.isArray(res.data) ? res.data : [], isSaleManagement));
+        let list = !selectedSubOrgId
           ? all
           : selectedSubOrgId === '__PARENT_ORG__'
             ? // Main organization: only branches not attached to a sub-organization
               all.filter((b) => !b.subOrganizationId)
             : all.filter((b) => b.subOrganizationId === selectedSubOrgId);
+        // Ensure initial customer's branch is never filtered out in edit mode
+        const existingBranchId = (initialCustomer as any)?.branchId || (initialCustomer as any)?.branch_id;
+        if (initialCustomer && existingBranchId && !list.some((b) => b.id === existingBranchId)) {
+          const matchInAll = all.find((b) => b.id === existingBranchId);
+          if (matchInAll) {
+            list = [matchInAll, ...list];
+          }
+        }
         setBranches(list);
         // Drop a branch that belongs to a previously selected sub-organization
         if (!initialCustomer) setSelectedBranchId((cur) => (cur && !list.some((b) => b.id === cur) ? '' : cur));
@@ -355,7 +366,15 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         const existingSubOrgId =
           (initialCustomer as any).subOrganizationId || (initialCustomer as any).sub_organization_id || '';
         const existingBranchId = (initialCustomer as any).branchId || (initialCustomer as any).branch_id || '';
-        if (existingSubOrgId) setSelectedSubOrgId(existingSubOrgId);
+        if (existingSubOrgId) {
+          setSelectedSubOrgId(existingSubOrgId);
+        } else if (existingBranchId) {
+          // If sub-org id not directly provided, check if branch carries it
+          const matchedBranch = branches.find((b) => b.id === existingBranchId);
+          if (matchedBranch?.subOrganizationId) {
+            setSelectedSubOrgId(matchedBranch.subOrganizationId);
+          }
+        }
         if (existingBranchId) setSelectedBranchId(existingBranchId);
 
         const firstLinkedProd = initialCustomer.linkedProducts?.[0]?.productName || initialCustomer.linkedProducts?.[0]?.productId || '';
@@ -440,13 +459,46 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
     if (lockBranch) setSelectedBranchId(lockedBranchId);
   }, [isOpen, lockSubOrg, lockBranch, lockedSubOrgId, lockedBranchId, initialCustomer, subOrganizations]);
 
+  const isAudioOrVideoFile = (file: File): boolean => {
+    const mime = (file.type || '').toLowerCase();
+    if (mime.startsWith('audio/') || mime.startsWith('video/')) return true;
+    const ext = file.name.split('.').pop()?.toLowerCase() || '';
+    const audioVideoExts = [
+      'mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'wma',
+      'mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', '3gp', 'mpeg', 'mpg'
+    ];
+    return audioVideoExts.includes(ext);
+  };
+
   const handleFileUpload = (
     e: React.ChangeEvent<HTMLInputElement>,
     type: 'shared_by_company' | 'shared_by_client'
   ) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    Array.from(files).forEach((file: File) => {
+
+    const fileList = Array.from(files);
+    const validFiles: File[] = [];
+    let hasMediaError = false;
+
+    fileList.forEach((file: File) => {
+      if (isAudioOrVideoFile(file)) {
+        hasMediaError = true;
+      } else {
+        validFiles.push(file);
+      }
+    });
+
+    if (hasMediaError) {
+      toast.error('Invalid file format. Audio and video files are not supported. Please upload documents or images (such as PDF, DOCX, XLSX, JPG, or PNG).');
+    }
+
+    if (validFiles.length === 0) {
+      e.target.value = '';
+      return;
+    }
+
+    validFiles.forEach((file: File) => {
       const ext = file.name.split('.').pop()?.toUpperCase() || 'FILE';
       const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
       const sizeStr = Number(sizeMB) < 1 ? `${Math.round(file.size / 1024)} KB` : `${sizeMB} MB`;
@@ -476,7 +528,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
 
       setDocuments((prev) => [...prev, newDoc]);
     });
-    toast.success(`Uploaded ${files.length} document(s)`);
+    toast.success(`Uploaded ${validFiles.length} document(s)`);
     e.target.value = '';
   };
 
@@ -520,7 +572,10 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
     window.open(raw, '_blank', 'noopener,noreferrer');
   };
 
-  const productOptions = products.map((p) => ({
+  // Inactive products cannot be chosen (the one already saved on the record stays visible when editing).
+  const productOptions = products
+    .filter((p) => String(p.status ?? "Active").toLowerCase() !== "inactive" || p.name === selectedProductId)
+    .map((p) => ({
     value: p.name,
     label: `${p.name}${p.code ? ` (${p.code})` : ''}`,
   }));
@@ -724,6 +779,15 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         toast.success('Client profile created successfully');
       }
 
+      // Invalidate RTK Query cache so client lists immediately reflect the saved changes
+      store.dispatch(
+        baseApi.util.invalidateTags([
+          { type: 'PlatformClient', id: 'LIST' },
+          ...(initialCustomer?.id ? [{ type: 'PlatformClient' as const, id: initialCustomer.id }] : []),
+        ])
+      );
+      if (onCustomerSaved) onCustomerSaved();
+
       onClose();
     } catch (e: any) {
       console.error('Client save failed:', e);
@@ -787,11 +851,39 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                 type="text"
                 readOnly
                 disabled
-                value={
-                  subOrganizations.find((s) => s.id === selectedSubOrgId)?.name ||
-                  initialCustomer?.subOrganizationName ||
-                  (loadingSubOrgs ? 'Loading...' : '')
-                }
+                value={(() => {
+                  const matchedSub =
+                    subOrganizations.find(
+                      (s) =>
+                        s.id === selectedSubOrgId ||
+                        s.id === (initialCustomer as any)?.subOrganizationId ||
+                        s.id === (initialCustomer as any)?.sub_organization_id
+                    ) ||
+                    (() => {
+                      const bId = selectedBranchId || (initialCustomer as any)?.branchId || (initialCustomer as any)?.branch_id;
+                      const br = branches.find((b) => b.id === bId);
+                      return br?.subOrganizationId ? subOrganizations.find((s) => s.id === br.subOrganizationId) : null;
+                    })();
+
+                  if (matchedSub?.name) {
+                    return `${matchedSub.name}${matchedSub.code ? ` (${matchedSub.code})` : ''}`;
+                  }
+
+                  const explicitName =
+                    initialCustomer?.subOrganizationName ||
+                    (initialCustomer as any)?.sub_organization_name ||
+                    (initialCustomer as any)?.subOrganization?.name;
+                  if (explicitName) return explicitName;
+
+                  if (
+                    selectedSubOrgId === '__PARENT_ORG__' ||
+                    (!selectedSubOrgId && initialCustomer && !(initialCustomer as any).subOrganizationId && !(initialCustomer as any).sub_organization_id)
+                  ) {
+                    return selectedOrgName ? `${selectedOrgName} (Main Organization)` : 'Main Organization';
+                  }
+
+                  return loadingSubOrgs ? 'Loading...' : (selectedOrgName ? `${selectedOrgName} (Main Organization)` : 'Main Organization');
+                })()}
                 title="Sub-organization cannot be modified"
                 className={`${inputClass} bg-slate-100/80 cursor-not-allowed text-slate-600 font-semibold`}
               />
@@ -875,17 +967,24 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                 if (formErrors.branch) setFormErrors((prev) => ({ ...prev, branch: '' }));
               }}
               options={
-                branches.length > 0 || (selectedBranchId && initialCustomer?.branchName)
-                  ? [
-                      ...branches,
-                      ...(selectedBranchId && initialCustomer?.branchName && !branches.some((x) => x.id === selectedBranchId)
-                        ? [{ id: selectedBranchId, name: initialCustomer.branchName, location: '' } as any]
-                        : []),
-                    ].map((b) => ({
-                      value: b.id,
-                      label: `${b.name}${(b as any).code ? ` (${(b as any).code})` : ''}`,
-                    }))
-                  : [{ value: '', label: loadingBranches ? 'Loading branches...' : 'No branches found' }]
+                (() => {
+                  const existingName =
+                    initialCustomer?.branchName ||
+                    (initialCustomer as any)?.branch?.name ||
+                    (initialCustomer as any)?.branch_name;
+                  const combined = [
+                    ...branches,
+                    ...(selectedBranchId && !branches.some((x) => x.id === selectedBranchId)
+                      ? [{ id: selectedBranchId, name: existingName || 'Current Branch', location: '' } as any]
+                      : []),
+                  ];
+                  return combined.length > 0
+                    ? combined.map((b) => ({
+                        value: b.id,
+                        label: `${b.name}${(b as any).code ? ` (${(b as any).code})` : ''}`,
+                      }))
+                    : [{ value: '', label: loadingBranches ? 'Loading branches...' : 'No branches found' }];
+                })()
               }
               optionVariant="strong"
               placeholder={loadingBranches ? 'Loading branches...' : 'Select Branch'}
@@ -1145,6 +1244,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                   <input
                     type="file"
                     multiple
+                    accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.rtf,.odt,.ods,.jpg,.jpeg,.png,.webp,.gif,.svg,.zip,.rar"
                     onChange={(e) => handleFileUpload(e, 'shared_by_company')}
                     className="hidden"
                   />
@@ -1163,6 +1263,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                     <input
                       type="file"
                       multiple
+                      accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.rtf,.odt,.ods,.jpg,.jpeg,.png,.webp,.gif,.svg,.zip,.rar"
                       onChange={(e) => handleFileUpload(e, 'shared_by_company')}
                       className="hidden"
                     />
@@ -1240,6 +1341,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                   <input
                     type="file"
                     multiple
+                    accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.rtf,.odt,.ods,.jpg,.jpeg,.png,.webp,.gif,.svg,.zip,.rar"
                     onChange={(e) => handleFileUpload(e, 'shared_by_client')}
                     className="hidden"
                   />
@@ -1258,6 +1360,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                     <input
                       type="file"
                       multiple
+                      accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.rtf,.odt,.ods,.jpg,.jpeg,.png,.webp,.gif,.svg,.zip,.rar"
                       onChange={(e) => handleFileUpload(e, 'shared_by_client')}
                       className="hidden"
                     />

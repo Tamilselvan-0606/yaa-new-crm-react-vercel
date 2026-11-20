@@ -764,7 +764,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
             columns={tableColumns}
             data={filteredTasks}
             searchPlaceholder="Search tasks by title, scope, or assignee..."
-            pageSize={10}
+            pageSize={5}
           />
         </div>
       )}

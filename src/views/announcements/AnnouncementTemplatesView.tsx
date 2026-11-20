@@ -48,7 +48,7 @@ export const AnnouncementTemplatesView: React.FC = () => {
   const [pendingStatus, setPendingStatus] = useState('ALL');
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   const [previewing, setPreviewing] = useState<AnnouncementTemplate | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);

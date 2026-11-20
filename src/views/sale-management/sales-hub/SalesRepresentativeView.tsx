@@ -424,10 +424,11 @@ export const SalesRepresentativeView: React.FC = () => {
         );
       }
 
-      repList.sort((a, b) =>
-        (a.name || "").localeCompare(b.name || "", undefined, {
-          sensitivity: "base",
-        }),
+      // Newest-added first (name only breaks ties)
+      repList.sort(
+        (a, b) =>
+          new Date((b as any).createdAt || 0).getTime() - new Date((a as any).createdAt || 0).getTime() ||
+          (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }),
       );
 
       const totalRecs = repList.length;

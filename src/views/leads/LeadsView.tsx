@@ -177,7 +177,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
   const [pendingLeadStatus, setPendingLeadStatus] = useState("All");
   const [appliedLeadStatus, setAppliedLeadStatus] = useState("All");
   const [leadPage, setLeadPage] = useState(1);
-  const [leadLimit, setLeadLimit] = useState(10);
+  const [leadLimit, setLeadLimit] = useState(5);
 
   const [commerceCustomers, setCommerceCustomers] = useState<Customer[]>([]);
 
@@ -201,7 +201,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
   const [clientStaffFilter, setClientStaffFilter] = useState("All");
   const [clientPaymentFilter, setClientPaymentFilter] = useState("All");
   const [clientPage, setClientPage] = useState(1);
-  const [clientLimit, setClientLimit] = useState(10);
+  const [clientLimit, setClientLimit] = useState(5);
 
   // Header Sub-Organization and Branch Filter State
   const [activeSubOrgId, setActiveSubOrgId] = useState<string | undefined>(() => {
@@ -515,11 +515,11 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
           type: 'shared_by_client' as const,
         })),
       ],
-      organizationId: (pc as any).organizationId || "",
-      subOrganizationId: (pc as any).subOrganizationId || "",
-      subOrganizationName: (pc as any).subOrganizationName || (pc as any).subOrganization?.name || "",
-      branchId: (pc as any).branchId || "",
-      branchName: (pc as any).branchName || (pc as any).branch?.name || "",
+      organizationId: (pc as any).organizationId || (pc as any).organization_id || "",
+      subOrganizationId: (pc as any).subOrganizationId || (pc as any).sub_organization_id || "",
+      subOrganizationName: (pc as any).subOrganizationName || (pc as any).sub_organization_name || (pc as any).subOrganization?.name || "",
+      branchId: (pc as any).branchId || (pc as any).branch_id || "",
+      branchName: (pc as any).branchName || (pc as any).branch_name || (pc as any).branch?.name || "",
       createdAt: pc.createdAt,
       updatedAt: pc.updatedAt,
     };
@@ -1977,6 +1977,9 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       <CustomerFormModal
         isOpen={isAddClientOpen}
         initialCustomer={editingCustomer}
+        onCustomerSaved={() => {
+          refetchClients();
+        }}
         onClose={() => {
           setIsAddClientOpen(false);
           setEditingCustomer(null);
@@ -1986,6 +1989,9 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       <LeadFormModal
         isOpen={isAddLeadOpen}
         initialLead={editingLead}
+        onLeadSaved={() => {
+          refetchLeads();
+        }}
         onClose={() => {
           setIsAddLeadOpen(false);
           setEditingLead(null);

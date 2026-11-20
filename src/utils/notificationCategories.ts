@@ -43,7 +43,7 @@ export const moduleLabel = (module?: string | null): string => {
 export const CATEGORIES: Record<NotificationMode, string[]> = {
   CLIENT: [
     'Clients', 'Leads', 'Quotations', 'Proforma Invoices', 'Invoices', 'Payments',
-    'Organizations', 'Sub Organizations', 'Branches', 'Products', 'Subscriptions', 'Subscription Plans',
+    'Organizations', 'Sub Organizations', 'Branches', 'Products', 'Subscriptions',
   ],
   SALES: [
     'Customers', 'Quotations', 'Proforma Invoices', 'Orders', 'Challans', 'Invoices', 'Payments In', 'Returns',

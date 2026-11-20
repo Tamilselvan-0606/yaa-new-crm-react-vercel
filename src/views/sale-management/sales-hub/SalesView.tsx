@@ -95,7 +95,12 @@ import {
   extractApiFieldErrors,
   getApiErrorMessage,
 } from "../../../utils/formValidation";
-import { parseNumericValue } from "../../../utils/validation";
+import {
+  parseNumericValue,
+  sanitizePaymentReferenceInput,
+  isValidPaymentReference,
+  PAYMENT_REFERENCE_ERROR_MESSAGE,
+} from "../../../utils/validation";
 import { useBatchStock } from "../../../hooks/useBatchStock";
 
 import { AddCustomerModal } from "./AddCustomerModal";
@@ -3132,6 +3137,10 @@ export const SalesView: React.FC = () => {
         paymentFe.clearError(`payment.${index}.amount`);
       }
     }
+    if (field === "referenceNo") {
+      value = sanitizePaymentReferenceInput(String(value));
+      paymentFe.clearError(`payment.${index}.referenceNo`);
+    }
     setPaymentModalSplits((prev) => {
       const newSplits = [...prev];
       newSplits[index] = { ...newSplits[index], [field]: value };
@@ -3174,6 +3183,9 @@ export const SalesView: React.FC = () => {
         if (!String(p.method || "").trim()) {
           errs[`payment.${i}.method`] = "Please select a payment mode.";
         }
+      }
+      if (!isValidPaymentReference(p.referenceNo)) {
+        errs[`payment.${i}.referenceNo`] = PAYMENT_REFERENCE_ERROR_MESSAGE;
       }
     });
 

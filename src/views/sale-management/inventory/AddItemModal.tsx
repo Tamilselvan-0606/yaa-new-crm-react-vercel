@@ -800,7 +800,14 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
       }
       return null;
     })();
+    // Tax-inclusive prices need a tax rate, otherwise the included tax can't be worked out.
+    const anyTaxIncluded =
+      d.salePriceTaxType === "Included" ||
+      d.purchasePriceTaxType === "Included" ||
+      (!!d.hasWholesale && d.wholesaleTaxType === "Included");
+    const taxMissing = !d.taxRate || !d.taxRate.trim() || d.taxRate === "None";
     const checks: Array<[string, string | null]> = [
+      ["taxRate", anyTaxIncluded && taxMissing ? "Select a tax rate: a price is marked as tax included." : null],
       ["category", checkRequiredSelection(d.category, "category")],
       ["subcategory", checkRequiredSelection(d.subcategory, "subcategory")],
       ["unit", checkRequiredSelection(d.unit, "unit")],
@@ -836,6 +843,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
   useRevalidateAfterSubmit(fe, () => computeExtraErrors(getValues()), [
     formData.category, formData.subcategory, formData.unit, formData.salePrice, formData.discountValue, formData.discountType,
     formData.wholesalePrice, formData.minWholesaleQty, formData.hasWholesale,
+    formData.taxRate, formData.salePriceTaxType, formData.purchasePriceTaxType, formData.wholesaleTaxType,
     formData.purchasePrice, formData.minStockAlert, formData.batchNo, formData.mfgDate,
     formData.expDate,
   ]);
@@ -1434,6 +1442,12 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                     <div>
                       <SearchableDropdown
                         label="Taxes"
+                        required={
+                          formData.salePriceTaxType === "Included" ||
+                          formData.purchasePriceTaxType === "Included" ||
+                          (!!formData.hasWholesale && formData.wholesaleTaxType === "Included")
+                        }
+                        error={fe.errors.taxRate}
                         value={formData.taxRate}
                         onChange={(val) => setValue("taxRate", val)}
                         options={taxRateOptions}

@@ -79,6 +79,11 @@ import {
   type FieldErrors,
 } from '../../../utils/formValidation';
 import { FormError } from '../../../components/common/FormError';
+import {
+  sanitizePaymentReferenceInput,
+  isValidPaymentReference,
+  PAYMENT_REFERENCE_ERROR_MESSAGE,
+} from '../../../utils/validation';
 import { SaleActionDropdown } from '../utils';
 import { store } from '../../../store/store';
 import { baseApi } from '../../../api/baseApi';
@@ -1154,6 +1159,9 @@ export const CollectionsView: React.FC = () => {
     }
     if (paymentRepId && !isUuid(paymentRepId)) {
       errs.paymentRep = 'Please choose the collecting sales representative from the list.';
+    }
+    if (!isValidPaymentReference(paymentReference)) {
+      errs.paymentReference = PAYMENT_REFERENCE_ERROR_MESSAGE;
     }
     return errs;
   };
@@ -3079,10 +3087,14 @@ export const CollectionsView: React.FC = () => {
                 <input
                   type="text"
                   value={paymentReference}
-                  onChange={(e) => setPaymentReference(e.target.value)}
-                  placeholder="e.g. UTR12345678 or Cheque #88992"
+                  onChange={(e) => {
+                    setPaymentReference(sanitizePaymentReferenceInput(e.target.value));
+                    payFE.clearError('paymentReference');
+                  }}
+                  placeholder="e.g. UTR12345678 or Cheque-88992"
                   className={`${FORM_INPUT_CLS} font-mono`}
                 />
+                <FormError message={payFE.errors.paymentReference} />
               </div>
 
               {/* Notes */}

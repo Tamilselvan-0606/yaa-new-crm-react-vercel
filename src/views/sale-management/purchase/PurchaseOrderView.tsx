@@ -93,7 +93,12 @@ import {
   handleNonNegativeKeyDown,
 } from "../utils/formUtils";
 import { SaleActionDropdown } from "../utils";
-import { sanitizeHsnCodeInput } from "../../../utils/validation";
+import {
+  sanitizeHsnCodeInput,
+  sanitizePaymentReferenceInput,
+  isValidPaymentReference,
+  PAYMENT_REFERENCE_ERROR_MESSAGE,
+} from "../../../utils/validation";
 import { Button } from "../../../components/common/Button";
 import { Modal } from "../../../components/common/Modal";
 import { DeleteConfirmationModal } from "../../../components/common/DeleteConfirmationModal";
@@ -401,7 +406,7 @@ const validatePurchaseForm = (
 
 /** Validates the "Record Payment" modal inside the bill form. */
 const validateFormPayment = (
-  details: { amountPaid: number; date: string; paymentType: string },
+  details: { amountPaid: number; date: string; paymentType: string; transactionId?: string },
   balanceLimit: number,
   limitLabel: string,
 ): FieldErrors => {
@@ -419,6 +424,9 @@ const validateFormPayment = (
   if (dateErr) errors.date = dateErr;
   const typeErr = checkRequiredSelection(details.paymentType, "payment type");
   if (typeErr) errors.paymentType = typeErr;
+  if (!isValidPaymentReference(details.transactionId)) {
+    errors.transactionId = PAYMENT_REFERENCE_ERROR_MESSAGE;
+  }
   return errors;
 };
 
@@ -5796,14 +5804,16 @@ export const PurchaseOrderView: React.FC = () => {
                       <input
                         type="text"
                         value={formPaymentDetails.transactionId}
-                        onChange={(e) =>
+                        onChange={(e) => {
                           setFormPaymentDetails((prev) => ({
                             ...prev,
-                            transactionId: e.target.value,
-                          }))
-                        }
+                            transactionId: sanitizePaymentReferenceInput(e.target.value),
+                          }));
+                          formPayErr.clearError("transactionId");
+                        }}
                         className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
                       />
+                      <FormError message={formPayErr.errors.transactionId} />
                     </div>
 
                     {/* Remarks (single column like other fields in 3-col grid) */}
@@ -6013,7 +6023,6 @@ export const PurchaseOrderView: React.FC = () => {
                         onChange={(e) =>
                           setQuickProductForm((prev) => ({
                             ...prev,
-                            hsnCode: e.target.value,
                             hsnCode: sanitizeHsnCodeInput(e.target.value),
                           }))
                         }

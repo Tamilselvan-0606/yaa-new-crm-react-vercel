@@ -66,13 +66,20 @@ export const branchEndpoints = baseApi.injectEndpoints({
 
     updatePlatformBranchStatus: builder.mutation<
       BranchSingleResponse,
-      { id: string; status: 'Active' | 'Inactive' | 'Suspended' }
+      { id: string; status: 'Active' | 'Inactive' | 'Suspended'; organizationId?: string }
     >({
-      query: ({ id, status }) => ({
-        url: `/branches/${id}/status`,
-        method: 'PATCH',
-        body: { status },
-      }),
+      query: ({ id, status, organizationId }) => {
+        const activeOrgId = organizationId || getStoredOrganizationId();
+        const headers: Record<string, string> = {};
+        if (activeOrgId) headers['x-organization-id'] = activeOrgId;
+        return {
+          url: `/branches/${id}/status`,
+          method: 'PATCH',
+          body: { status },
+          params: activeOrgId ? { organization_id: activeOrgId } : undefined,
+          headers,
+        };
+      },
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Branch', id },
         { type: 'Branch', id: 'LIST' },
@@ -152,15 +159,24 @@ export const branchApi = {
    * Get one branch (with its login user)
    * GET /branches/{id}, falling back to /platform/branches/{id}
    */
-  getBranchById: async (id: string, orgId?: string): Promise<BranchSingleResponse> => {
+  getBranchById: async (id: string, orgId?: string, subOrgId?: string): Promise<BranchSingleResponse> => {
     const activeOrgId = orgId || getStoredOrganizationId();
     const headers: Record<string, string> = {};
     if (activeOrgId) headers['x-organization-id'] = activeOrgId;
+    const params: Record<string, any> = {};
+    if (activeOrgId) params.organization_id = activeOrgId;
+    if (subOrgId) params.sub_organization_id = subOrgId;
+
+    const urls = [
+      `/branches/${encodeURIComponent(id)}`,
+      `/platform/branches/${encodeURIComponent(id)}`,
+      ...(activeOrgId ? [`/organizations/${activeOrgId}/branches/${encodeURIComponent(id)}`] : []),
+    ];
 
     let lastError: any = null;
-    for (const url of [`/branches/${encodeURIComponent(id)}`, `/platform/branches/${encodeURIComponent(id)}`]) {
+    for (const url of urls) {
       try {
-        const res = await baseClient.get<BranchSingleResponse>(url, { headers });
+        const res = await baseClient.get<BranchSingleResponse>(url, { headers, params: Object.keys(params).length ? params : undefined });
         return res.data;
       } catch (err: any) {
         lastError = err;
@@ -176,11 +192,17 @@ export const branchApi = {
    * POST /branches
    */
   createBranch: async (payload: CreateBranchRequest): Promise<BranchSingleResponse> => {
+    const activeOrgId = payload.organizationId || getStoredOrganizationId();
+    const headers: Record<string, string> = {};
+    if (activeOrgId) headers['x-organization-id'] = activeOrgId;
+    const params: Record<string, any> = {};
+    if (activeOrgId) params.organization_id = activeOrgId;
+
     const urls = ['/branches', '/platform/branches'];
     let lastError: any = null;
     for (const url of urls) {
       try {
-        const res = await baseClient.post<BranchSingleResponse>(url, payload);
+        const res = await baseClient.post<BranchSingleResponse>(url, payload, { headers, params: Object.keys(params).length ? params : undefined });
         return res.data;
       } catch (err: any) {
         lastError = err;
@@ -200,26 +222,35 @@ export const branchApi = {
   updateBranch: async (
     id: string,
     payload: UpdateBranchRequest,
-    orgId?: string
+    orgId?: string,
+    subOrgId?: string
   ): Promise<BranchSingleResponse> => {
-    const activeOrgId = orgId || getStoredOrganizationId();
+    const activeOrgId = orgId || (payload as any)?.organizationId || getStoredOrganizationId();
+    const targetSubOrgId = subOrgId || (payload as any)?.subOrganizationId;
     const headers: Record<string, string> = {};
     if (activeOrgId) {
       headers['x-organization-id'] = activeOrgId;
     }
+    const params: Record<string, any> = {};
+    if (activeOrgId) params.organization_id = activeOrgId;
+    if (targetSubOrgId) params.sub_organization_id = targetSubOrgId;
 
     const endpoints = [
       { method: 'put', url: `/branches/${encodeURIComponent(id)}` },
       { method: 'patch', url: `/branches/${encodeURIComponent(id)}` },
       { method: 'put', url: `/platform/branches/${encodeURIComponent(id)}` },
       { method: 'patch', url: `/platform/branches/${encodeURIComponent(id)}` },
+      ...(activeOrgId ? [
+        { method: 'put', url: `/organizations/${activeOrgId}/branches/${encodeURIComponent(id)}` },
+        { method: 'patch', url: `/organizations/${activeOrgId}/branches/${encodeURIComponent(id)}` },
+      ] : []),
     ];
     let lastError: any = null;
     for (const ep of endpoints) {
       try {
         const res = ep.method === 'put'
-          ? await baseClient.put<BranchSingleResponse>(ep.url, payload, { headers })
-          : await baseClient.patch<BranchSingleResponse>(ep.url, payload, { headers });
+          ? await baseClient.put<BranchSingleResponse>(ep.url, payload, { headers, params: Object.keys(params).length ? params : undefined })
+          : await baseClient.patch<BranchSingleResponse>(ep.url, payload, { headers, params: Object.keys(params).length ? params : undefined });
         return res.data;
       } catch (err: any) {
         lastError = err;
@@ -239,32 +270,44 @@ export const branchApi = {
   updateBranchStatus: async (
     id: string,
     status: 'Active' | 'Inactive' | 'Suspended' | string,
-    orgId?: string
+    orgId?: string,
+    subOrgId?: string
   ): Promise<BranchSingleResponse> => {
     const activeOrgId = orgId || getStoredOrganizationId();
     const headers: Record<string, string> = {};
     if (activeOrgId) {
       headers['x-organization-id'] = activeOrgId;
     }
+    const params: Record<string, any> = {};
+    if (activeOrgId) params.organization_id = activeOrgId;
+    if (subOrgId) params.sub_organization_id = subOrgId;
 
+    // Documented route is /platform/branches/{id}/status; the bare /branches route is only a fallback.
     const urls = [
-      `/branches/${encodeURIComponent(id)}/status`,
       `/platform/branches/${encodeURIComponent(id)}/status`,
+      `/branches/${encodeURIComponent(id)}/status`,
     ];
     let lastError: any = null;
     for (const url of urls) {
       try {
-        const res = await baseClient.patch<BranchSingleResponse>(url, { status }, { headers });
+        const res = await baseClient.patch<BranchSingleResponse>(url, { status }, { headers, params: Object.keys(params).length ? params : undefined });
         return res.data;
       } catch (err: any) {
         lastError = err;
-        if (err?.response?.status === 404) {
+        const code = err?.response?.status ?? err?.status;
+        if (code === 404 || code === 405) {
           continue;
         }
         throw err;
       }
     }
-    throw lastError;
+
+    // Fallback: If dedicated status endpoint is not found, try regular updateBranch with status payload
+    try {
+      return await branchApi.updateBranch(id, { status } as any, activeOrgId, subOrgId);
+    } catch {
+      throw lastError;
+    }
   },
 
   /**
@@ -273,22 +316,27 @@ export const branchApi = {
    */
   deleteBranch: async (
     id: string,
-    orgId?: string
+    orgId?: string,
+    subOrgId?: string
   ): Promise<{ success: boolean; statusCode?: number; message?: string; data: null | string }> => {
     const activeOrgId = orgId || getStoredOrganizationId();
     const headers: Record<string, string> = {};
     if (activeOrgId) {
       headers['x-organization-id'] = activeOrgId;
     }
+    const params: Record<string, any> = {};
+    if (activeOrgId) params.organization_id = activeOrgId;
+    if (subOrgId) params.sub_organization_id = subOrgId;
 
     const urls = [
       `/branches/${encodeURIComponent(id)}`,
       `/platform/branches/${encodeURIComponent(id)}`,
+      ...(activeOrgId ? [`/organizations/${activeOrgId}/branches/${encodeURIComponent(id)}`] : []),
     ];
     let lastError: any = null;
     for (const url of urls) {
       try {
-        const res = await baseClient.delete(url, { headers });
+        const res = await baseClient.delete(url, { headers, params: Object.keys(params).length ? params : undefined });
         return res.data;
       } catch (err: any) {
         lastError = err;

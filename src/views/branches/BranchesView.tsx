@@ -39,7 +39,7 @@ import { Modal } from '../../components/common/Modal';
 import { CustomSelect } from '../../components/common/CustomSelect';
 import { ConfirmationModal } from '../../utils/confirmationModal';
 import {
-  alphabetsOnly,  lettersOnly,
+  alphabetsOnly, lettersOnly,
   digitsOnly,
   emailAddress,
   phoneNumber,
@@ -72,8 +72,8 @@ const mapApiBranchToBranch = (item: BranchApiItem): Branch => {
     rawStatus.toLowerCase().startsWith('suspend')
       ? 'Suspended'
       : rawStatus.toLowerCase().startsWith('inact')
-      ? 'Inactive'
-      : 'Active';
+        ? 'Inactive'
+        : 'Active';
 
   return {
     id: item.id,
@@ -148,7 +148,7 @@ export const BranchesView: React.FC = () => {
   const [pendingStatus, setPendingStatus] = useState('ALL');
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   // 3-dots row menu + click-to-copy contact buttons (shared hooks)
   const rowMenu = useRowActionMenu(220);
@@ -377,8 +377,8 @@ export const BranchesView: React.FC = () => {
       const matchedSub =
         activeSubOrgName && activeSubOrgName !== 'All'
           ? currentSubs.find(
-              (s) => s.name.toLowerCase() === activeSubOrgName.toLowerCase()
-            )
+            (s) => s.name.toLowerCase() === activeSubOrgName.toLowerCase()
+          )
           : undefined;
 
       const subIdToFilter =
@@ -530,10 +530,10 @@ export const BranchesView: React.FC = () => {
     const defaultBranchType = isClientOnly
       ? 'Client Management'
       : isSaleOnly
-      ? 'Sales Management'
-      : isSaleManagement
-      ? 'Sales Management'
-      : 'Client Management';
+        ? 'Sales Management'
+        : isSaleManagement
+          ? 'Sales Management'
+          : 'Client Management';
 
     setFormData({
       name: '',
@@ -658,7 +658,7 @@ export const BranchesView: React.FC = () => {
           try {
             catalogList = JSON.parse(savedCatalog);
             if (!Array.isArray(catalogList)) catalogList = [];
-          } catch {}
+          } catch { }
         }
         const updatedBranchObj: Branch = {
           ...editingBranch,
@@ -755,7 +755,7 @@ export const BranchesView: React.FC = () => {
           try {
             catalogList = JSON.parse(savedCatalog);
             if (!Array.isArray(catalogList)) catalogList = [];
-          } catch {}
+          } catch { }
         }
         catalogList.push(newBranchObj);
         localStorage.setItem('branches_catalog_orgsuperadmin', JSON.stringify(catalogList));
@@ -776,11 +776,13 @@ export const BranchesView: React.FC = () => {
 
   const handleUpdateStatus = async (branch: Branch, newStatus: BranchStatus) => {
     try {
-      try {
-        await branchApi.updateBranchStatus(branch.id, newStatus);
-      } catch (apiErr) {
-        console.warn('API updateBranchStatus notice (updating locally):', apiErr);
-      }
+      // Must succeed on the server; errors (401/403/404/...) are surfaced, not swallowed.
+      // Use the same org the branch was loaded under, otherwise the server answers "Branch not found".
+      await branchApi.updateBranchStatus(
+        branch.id,
+        newStatus,
+        branch.organizationId || currentUser?.organizationId || undefined
+      );
 
       // Update in local catalog
       const savedCatalog = localStorage.getItem('branches_catalog_orgsuperadmin');
@@ -796,26 +798,28 @@ export const BranchesView: React.FC = () => {
             });
             localStorage.setItem('branches_catalog_orgsuperadmin', JSON.stringify(updated));
           }
-        } catch {}
+        } catch { }
       }
       window.dispatchEvent(new CustomEvent('branchesChanged'));
 
       showToast?.('success', 'Status Updated', `Branch status changed to ${newStatus}`);
       loadData(page, pageSize, appliedSearch, appliedStatus);
     } catch (err: any) {
-      showToast?.('error', 'Error', err?.response?.data?.message || err.message || 'Failed to update status');
+      showToast?.('error', 'Status Update Failed', getApiErrorMessage(err, 'Failed to update status'));
     }
   };
 
   const handleDeleteBranch = async (branch: Branch) => {
     try {
+      const branchOrgId = branch.organizationId || (branch as any).organization?.id || (branch as any).organization_id;
+      const branchSubOrgId = branch.subOrganizationId || (branch as any).sub_organization_id;
       try {
-        await branchApi.deleteBranch(branch.id);
+        await branchApi.deleteBranch(branch.id, branch.organizationId || currentUser?.organizationId || undefined);
       } catch (delErr: any) {
         if (delErr?.response?.status === 404 || delErr?.response?.status === 405) {
           try {
-            await branchApi.updateBranchStatus(branch.id, 'Inactive');
-          } catch {}
+            await branchApi.updateBranchStatus(branch.id, 'Inactive', branchOrgId, branchSubOrgId);
+          } catch { }
         }
       }
 
@@ -828,7 +832,7 @@ export const BranchesView: React.FC = () => {
             const updated = catalogList.filter((b) => b.id !== branch.id && b.name.toLowerCase() !== branch.name.toLowerCase());
             localStorage.setItem('branches_catalog_orgsuperadmin', JSON.stringify(updated));
           }
-        } catch {}
+        } catch { }
       }
       window.dispatchEvent(new CustomEvent('branchesChanged'));
 
@@ -945,7 +949,7 @@ export const BranchesView: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[1100px]">
-<thead>
+            <thead>
               <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">BRANCH & CODE</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">SUB-ORGANIZATION & TYPE</th>
@@ -1209,16 +1213,16 @@ export const BranchesView: React.FC = () => {
 
       {/* Pagination */}
       <Pagination
-          total={totalRecords}
-          currentPage={safePage}
-          pageSize={pageSize}
-          pageSizeOptions={[5, 10, 20, 50]}
-          onPageChange={(newPage) => setPage(newPage)}
-          onPageSizeChange={(newSize) => {
-            setPageSize(newSize);
-            setPage(1);
-          }}
-        />
+        total={totalRecords}
+        currentPage={safePage}
+        pageSize={pageSize}
+        pageSizeOptions={[5, 10, 20, 50]}
+        onPageChange={(newPage) => setPage(newPage)}
+        onPageSizeChange={(newSize) => {
+          setPageSize(newSize);
+          setPage(1);
+        }}
+      />
 
       {/* 4. Add / Edit Branch Modal */}
       <Modal
@@ -1253,64 +1257,64 @@ export const BranchesView: React.FC = () => {
                     formData.subOrganizationId === '__PARENT_ORG__' || !formData.subOrganizationId
                       ? (defaultOrgName ? `${defaultOrgName} (Main Organization)` : 'Main Organization')
                       : subOrganizations.find((s) => s.id === formData.subOrganizationId)?.name ||
-                        (loadingSubOrgs ? 'Loading...' : '')
+                      (loadingSubOrgs ? 'Loading...' : '')
                   }
                   title="Sub-organization cannot be modified"
                   className="w-full h-11 px-4 bg-slate-100/80 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 cursor-not-allowed select-none outline-none"
                 />
               ) : (
-              <CustomSelect
-                value={formData.subOrganizationId}
-                onChange={(val) => {
-                  const targetSub = val && val !== '__PARENT_ORG__' ? subOrganizations.find((s) => s.id === val) : null;
-                  let targetTypes = BRANCH_TYPES;
-                  if (targetSub) {
-                    const code = Number(targetSub.subOrganizationType);
-                    if (code === 1) targetTypes = ['Client Management'];
-                    else if (code === 2) targetTypes = ['Sales Management'];
-                    else if (code === 3) targetTypes = BRANCH_TYPES;
-                    else {
-                      const t = (targetSub.organizationType || '').toLowerCase();
-                      if (t.includes('client') && !t.includes('sale')) targetTypes = ['Client Management'];
-                      else if (t.includes('sale') && !t.includes('client')) targetTypes = ['Sales Management'];
+                <CustomSelect
+                  value={formData.subOrganizationId}
+                  onChange={(val) => {
+                    const targetSub = val && val !== '__PARENT_ORG__' ? subOrganizations.find((s) => s.id === val) : null;
+                    let targetTypes = BRANCH_TYPES;
+                    if (targetSub) {
+                      const code = Number(targetSub.subOrganizationType);
+                      if (code === 1) targetTypes = ['Client Management'];
+                      else if (code === 2) targetTypes = ['Sales Management'];
+                      else if (code === 3) targetTypes = BRANCH_TYPES;
+                      else {
+                        const t = (targetSub.organizationType || '').toLowerCase();
+                        if (t.includes('client') && !t.includes('sale')) targetTypes = ['Client Management'];
+                        else if (t.includes('sale') && !t.includes('client')) targetTypes = ['Sales Management'];
+                      }
+                    } else {
+                      if (isClientOnly) targetTypes = ['Client Management'];
+                      else if (isSaleOnly) targetTypes = ['Sales Management'];
                     }
-                  } else {
-                    if (isClientOnly) targetTypes = ['Client Management'];
-                    else if (isSaleOnly) targetTypes = ['Sales Management'];
-                  }
 
-                  setFormData((prev) => ({
-                    ...prev,
-                    subOrganizationId: val,
-                    organizationType: targetTypes.includes(prev.organizationType)
-                      ? prev.organizationType
-                      : targetTypes[0] || prev.organizationType,
-                  }));
-                  if (formErrors.subOrganizationId) setFormErrors((prev) => ({ ...prev, subOrganizationId: '' }));
-                }}
-                options={(() => {
-                  const parentOrgLabel = defaultOrgName ? `${defaultOrgName} (Main Organization)` : 'Main Organization';
-                  const list: { value: string; label: string }[] = [];
-                  if (defaultOrgName) {
-                    list.push({ value: '__PARENT_ORG__', label: parentOrgLabel });
-                  }
-                  if (subOrganizations.length > 0) {
-                    subOrganizations.forEach((sub) => {
-                      list.push({
-                        value: sub.id,
-                        label: `${sub.name}${sub.code ? ` (${sub.code})` : ''}`,
+                    setFormData((prev) => ({
+                      ...prev,
+                      subOrganizationId: val,
+                      organizationType: targetTypes.includes(prev.organizationType)
+                        ? prev.organizationType
+                        : targetTypes[0] || prev.organizationType,
+                    }));
+                    if (formErrors.subOrganizationId) setFormErrors((prev) => ({ ...prev, subOrganizationId: '' }));
+                  }}
+                  options={(() => {
+                    const parentOrgLabel = defaultOrgName ? `${defaultOrgName} (Main Organization)` : 'Main Organization';
+                    const list: { value: string; label: string }[] = [];
+                    if (defaultOrgName) {
+                      list.push({ value: '__PARENT_ORG__', label: parentOrgLabel });
+                    }
+                    if (subOrganizations.length > 0) {
+                      subOrganizations.forEach((sub) => {
+                        list.push({
+                          value: sub.id,
+                          label: `${sub.name}${sub.code ? ` (${sub.code})` : ''}`,
+                        });
                       });
-                    });
-                  }
-                  if (list.length === 0) {
-                    return [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations found' }];
-                  }
-                  return list;
-                })()}
-                optionVariant="strong"
-                placeholder="Select Sub-Organization"
-                error={!!formErrors.subOrganizationId}
-              />
+                    }
+                    if (list.length === 0) {
+                      return [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations found' }];
+                    }
+                    return list;
+                  })()}
+                  optionVariant="strong"
+                  placeholder="Select Sub-Organization"
+                  error={!!formErrors.subOrganizationId}
+                />
               )}
               {formErrors.subOrganizationId && (
                 <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.subOrganizationId}</p>
@@ -1397,11 +1401,10 @@ export const BranchesView: React.FC = () => {
                     setFormData({ ...formData, password: e.target.value });
                     if (formErrors.password) setFormErrors((prev) => ({ ...prev, password: '' }));
                   }}
-                  className={`w-full h-11 pl-4 pr-10 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                    formErrors.password
+                  className={`w-full h-11 pl-4 pr-10 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.password
                       ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
                       : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
+                    }`}
                 />
                 <button
                   type="button"
@@ -1478,11 +1481,10 @@ export const BranchesView: React.FC = () => {
                 value={formData.address}
                 onChange={(e) => updateField('address', e.target.value)}
                 placeholder="Enter complete address"
-                className={`w-full min-h-[88px] px-4 py-3 bg-white rounded-[4px] text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all resize-y ${
-                  formErrors.address
+                className={`w-full min-h-[88px] px-4 py-3 bg-white rounded-[4px] text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all resize-y ${formErrors.address
                     ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
                     : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
+                  }`}
               />
               {formErrors.address && (
                 <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.address}</p>

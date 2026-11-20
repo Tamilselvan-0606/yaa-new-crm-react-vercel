@@ -6,6 +6,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { PaymentOutSchema, PaymentOutFormData } from '../../../validations';
 import { FormError } from '../../../components/common/FormError';
+import { sanitizePaymentReferenceInput } from '../../../utils/validation';
 import {
   checkRequiredSelection,
   checkRequiredDate,
@@ -1884,11 +1885,19 @@ export const PaymentOutView: React.FC = () => {
             {/* Field 8: Reference no */}
             <div>
               <FormLabel>Reference no</FormLabel>
-              <input
-                type="text"
-                {...register('referenceNo')}
-                className={getFormInputCls(!!errors.referenceNo)}
-                placeholder="e.g. UTR-9821892812"
+              <Controller
+                control={control}
+                name="referenceNo"
+                render={({ field }) => (
+                  <input
+                    type="text"
+                    value={field.value || ''}
+                    onChange={(e) => field.onChange(sanitizePaymentReferenceInput(e.target.value))}
+                    onBlur={field.onBlur}
+                    className={getFormInputCls(!!errors.referenceNo)}
+                    placeholder="e.g. UTR-9821892812"
+                  />
+                )}
               />
               <FormError message={errors.referenceNo?.message} />
             </div>

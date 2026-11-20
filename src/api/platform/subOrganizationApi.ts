@@ -171,13 +171,40 @@ export const subOrganizationApi = {
     return requestPromise;
   },
 
-  /** Get one sub-organization with its login user and branches (GET /sub-organizations/{id}). */
+  /** Get one sub-organization with its login user and branches (GET /platform/sub-organizations/{id} with fallback to /sub-organizations/{id}). */
   getSubOrganizationById: async (id: string, parentOrgId?: string): Promise<SubOrganizationSingleResponse> => {
-    const orgId = parentOrgId || getStoredOrganizationId();
-    const res = await baseClient.get<SubOrganizationSingleResponse>(`/sub-organizations/${id}`, {
-      headers: orgId ? { 'x-organization-id': orgId } : undefined,
-    });
-    return res.data;
+    const rawOrgId = parentOrgId || getStoredOrganizationId();
+    const orgId = rawOrgId && rawOrgId !== '11111111-1111-4111-8111-111111111111' ? rawOrgId : undefined;
+    const headers: Record<string, string> = {};
+    if (orgId) {
+      headers['x-organization-id'] = orgId;
+    }
+
+    const endpoints = [
+      { url: `/platform/sub-organizations/${id}`, params: orgId ? { organization_id: orgId } : undefined },
+      { url: `/sub-organizations/${id}`, params: orgId ? { organization_id: orgId } : undefined },
+      ...(orgId ? [{ url: `/organizations/${orgId}/sub-organizations/${id}`, params: undefined }] : []),
+    ];
+
+    let lastError: any = null;
+    for (const ep of endpoints) {
+      try {
+        const res = await baseClient.get<SubOrganizationSingleResponse>(ep.url, {
+          headers,
+          params: ep.params,
+        });
+        if (res.data) {
+          return res.data;
+        }
+      } catch (err: any) {
+        lastError = err;
+        // Continue to fallback if not found or method not allowed
+        if (err?.response?.status !== 404 && err?.response?.status !== 405) {
+          throw err;
+        }
+      }
+    }
+    throw lastError;
   },
 
   /**
@@ -237,6 +264,7 @@ export const subOrganizationApi = {
     }
 
     const { organization_id, organizationId, ...cleanPayload } = payload as any;
+    if (cleanPayload.status === 'Suspend') cleanPayload.status = 'Suspended';
 
     const endpoints = [
       { method: 'patch', url: `/platform/sub-organizations/${id}` },

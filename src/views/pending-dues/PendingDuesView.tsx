@@ -113,7 +113,7 @@ export const PendingDuesView: React.FC = () => {
   const [pendingProduct, setPendingProduct] = useState('ALL');
   const [appliedProduct, setAppliedProduct] = useState('ALL');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   // 3-Dots Action Dropdown & Share Popover State
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);

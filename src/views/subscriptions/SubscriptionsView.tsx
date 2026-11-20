@@ -158,7 +158,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   const [pendingSubStatus, setPendingSubStatus] = useState('ALL');
   const [appliedSubStatus, setAppliedSubStatus] = useState('ALL');
   const [subsPage, setSubsPage] = useState(1);
-  const [subsPageSize, setSubsPageSize] = useState(10);
+  const [subsPageSize, setSubsPageSize] = useState(5);
   const { copiedKey, copy: handleCopy } = useCopyToClipboard();
 
 
@@ -302,7 +302,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   const [pendingOrgPlan, setPendingOrgPlan] = useState('ALL');
   const [appliedOrgPlan, setAppliedOrgPlan] = useState('ALL');
   const [orgSubsPage, setOrgSubsPage] = useState(1);
-  const [orgSubsPageSize, setOrgSubsPageSize] = useState(10);
+  const [orgSubsPageSize, setOrgSubsPageSize] = useState(5);
 
   // Modal State for Organization Subscriptions (Super Admin)
   const [isOrgSubModalOpen, setIsOrgSubModalOpen] = useState(false);
@@ -1167,14 +1167,16 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     if (!startDate) return '';
     const d = new Date(startDate);
     if (isNaN(d.getTime())) return '';
-    if (cycle === 'Annually') {
+    if (cycle === 'Yearly' || cycle === 'Annually') {
       d.setFullYear(d.getFullYear() + 1);
+    } else if (cycle === 'Half-Yearly') {
+      d.setMonth(d.getMonth() + 6);
     } else if (cycle === 'Quarterly') {
       d.setMonth(d.getMonth() + 3);
     } else if (cycle === 'Monthly') {
       d.setMonth(d.getMonth() + 1);
     } else {
-      d.setMonth(d.getMonth() + 1); // One-Time or unknown
+      d.setMonth(d.getMonth() + 1);
     }
     return d.toISOString().split('T')[0];
   };
@@ -1999,7 +2001,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                               <td className="py-4 px-5 border border-slate-200">
                                 <div className="flex items-center gap-2 text-xs sm:text-[13px] font-medium text-slate-700">
                                   <Calendar className="w-4 h-4 text-slate-400 shrink-0" />
-                                  <span>{sub.endDate}</span>
+                                  <span>{formatDisplayDate(sub.endDate)}</span>
                                 </div>
                                 <span className="text-[11px] text-slate-400 block mt-0.5 pl-6">
                                   Since: {formatDisplayDate(sub.startDate)}
@@ -2043,23 +2045,6 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                           <Eye style={{ width: '13.13px', height: '13.13px' }} className="text-white stroke-[2.2]" />
                                         </span>
                                         <span>View</span>
-                                      </button>
-
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          rowMenu.close();
-                                          handleRenewSubscription(sub);
-                                        }}
-                                        className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
-                                      >
-                                        <span
-                                          style={{ width: '26.25px', height: '26.25px' }}
-                                          className="rounded-full bg-[#4309A2] flex items-center justify-center shrink-0 shadow-2xs"
-                                        >
-                                          <History style={{ width: '13.13px', height: '13.13px' }} className="text-white stroke-[2.2]" />
-                                        </span>
-                                        <span>Renew</span>
                                       </button>
 
                                       <button
@@ -3258,8 +3243,8 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   options={[
                     { value: 'Monthly', label: 'Monthly' },
                     { value: 'Quarterly', label: 'Quarterly' },
-                    { value: 'Annually', label: 'Annually' },
-                    { value: 'One-Time', label: 'One-Time' },
+                    { value: 'Half-Yearly', label: 'Half-Yearly' },
+                    { value: 'Yearly', label: 'Yearly' },
                   ]}
                   placeholder="Select Billing Cycle"
                   activeColor="brand"
@@ -3471,7 +3456,8 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   options={[
                     { value: 'Monthly', label: 'Monthly' },
                     { value: 'Quarterly', label: 'Quarterly' },
-                    { value: 'Annually', label: 'Annually' },
+                    { value: 'Half-Yearly', label: 'Half-Yearly' },
+                    { value: 'Yearly', label: 'Yearly' },
                   ]}
                   placeholder="Select Billing Cycle"
                   activeColor="brand"

@@ -41,6 +41,7 @@ import { SearchBar } from '../../components/common/SearchBar';
 import { Pagination } from '../../components/common/Pagination';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
 import { ConfirmationModal } from '../../utils/confirmationModal';
+import { confirmButtonLabel, nextStatus } from '../../utils/statusActions';
 import { CustomSelect } from '../../components/common/CustomSelect';
 import { useActiveOrgType } from '../../hooks/useActiveOrgType';
 
@@ -82,6 +83,7 @@ import { getApiErrorMessage } from '../../utils/apiErrorMessage';
 
 interface OrganizationItem {
   id: string;
+  organizationId?: string;
   name: string;
   code: string;
   country: string;
@@ -89,6 +91,8 @@ interface OrganizationItem {
   district: string;
   pincode: string;
   subOrganizationType?: number | string | null;
+  /** Parent organization that owns this sub-organization (sub-org rows only). */
+  parentOrganizationId?: string;
   organizationType?: string;
   industry: string;
   location: string;
@@ -212,6 +216,7 @@ const mapSubOrgToItem = (sub: SubOrganizationApiItem): OrganizationItem => {
 
   return {
     id: sub.id,
+    organizationId: sub.organizationId || (sub as any).organization_id || '',
     name: sub.name || 'Unnamed Sub-Organization',
     code: sub.code || 'SUB-01',
     country: sub.countryName || sub.country || '',
@@ -219,6 +224,7 @@ const mapSubOrgToItem = (sub: SubOrganizationApiItem): OrganizationItem => {
     district: sub.districtName || sub.district || '',
     pincode: sub.pincode || '',
     subOrganizationType: sub.subOrganizationType,
+    parentOrganizationId: sub.organizationId || (sub as any).organization_id,
     organizationType: formatOrganizationTypeName(sub.organizationType),
     industry: sub.industry || '',
     location: cityOf(sub) || sub.address || '',
@@ -355,7 +361,7 @@ export const OrganizationView: React.FC = () => {
 
   // Pagination states from server
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
   const [totalRecords, setTotalRecords] = useState(0);
 
   // Pending state - tracks what's typed/selected (not yet applied)
@@ -500,8 +506,9 @@ export const OrganizationView: React.FC = () => {
     if (!viewingOrgId) return;
     let cancelled = false;
     setViewLoading(true);
+    const targetParentOrgId = viewingOrg?.organizationId || parentOrgContext?.id;
     const request = viewingSubOrg
-      ? subOrganizationApi.getSubOrganizationById(viewingOrgId, parentOrgContext?.id).then((res) => {
+      ? subOrganizationApi.getSubOrganizationById(viewingOrgId, targetParentOrgId).then((res) => {
           if (!res?.success || !res.data) return null;
           // This endpoint carries less than the list row (no phone/GST/PAN/address), so it only adds
           // the login user and branches and refreshes the basics; it never blanks a field the row has.
@@ -546,7 +553,11 @@ export const OrganizationView: React.FC = () => {
     type: 'Suspend' | 'Inactive' | 'Delete';
     orgId: string;
     orgName: string;
+    /** Status of the record when the action was opened; "Suspended" / "Inactive" turns the action into a resume. */
+    currentStatus?: string;
   } | null>(null);
+  // Row status is stored as 'Suspend' in this view; the shared toggle helpers expect 'Suspended'.
+  const toApiStatus = (s?: string) => (s === 'Suspend' ? 'Suspended' : s);
   const [isProcessingAction, setIsProcessingAction] = useState(false);
 
   const handleOpenSubOrgManager = (org: OrganizationItem) => {
@@ -588,7 +599,9 @@ export const OrganizationView: React.FC = () => {
       if (!isSubOrgMode) {
         await organizationApi.updateOrganizationStatus(id, newStatus as 'Active' | 'Inactive' | 'Suspend');
       } else {
-        await subOrganizationApi.updateSubOrganizationStatus(id, newStatus === 'Suspend' ? 'Suspended' : newStatus, resolveParentOrgId());
+        // The server only finds a sub-org under its own parent org, so use that one.
+        const ownerOrgId = organizations.find((o) => o.id === id)?.parentOrganizationId || resolveParentOrgId();
+        await subOrganizationApi.updateSubOrganizationStatus(id, newStatus === 'Suspend' ? 'Suspended' : newStatus, ownerOrgId);
       }
       await loadOrganizations(currentPage, pageSize, appliedSearch, appliedStatus);
       rowMenu.close();
@@ -832,7 +845,10 @@ export const OrganizationView: React.FC = () => {
     if (countryId && country !== current.country) patch.countryId = countryId;
     if (stateId && stateName !== current.state) patch.stateId = stateId;
     if (districtId && district !== current.district) patch.districtId = districtId;
-    if (formStatus !== current.status) patch.status = formStatus;
+    if (formStatus !== current.status) {
+      // Sub-organization API only accepts Active | Inactive | Suspended (not "Suspend").
+      patch.status = isSubOrgMode && formStatus === 'Suspend' ? 'Suspended' : formStatus;
+    }
     if (subOrganizationSupport !== !!current.subOrganizationSupport) patch.subOrganizationSupport = subOrganizationSupport;
     if (t(password)) patch.password = t(password); // only when a new password is entered
     return patch;
@@ -871,7 +887,7 @@ export const OrganizationView: React.FC = () => {
       showToast('success', 'Organization Updated', `${name} has been updated.`);
       return;
     }
-    await subOrganizationApi.updateSubOrganization(current.id, patch, resolveParentOrgId());
+    await subOrganizationApi.updateSubOrganization(current.id, patch, current.parentOrganizationId || resolveParentOrgId());
     showToast('success', 'Sub-Organization Updated', `${name} has been updated.`);
   };
 
@@ -889,7 +905,7 @@ export const OrganizationView: React.FC = () => {
 
     const suiteType = organizationType || 'All';
     await subOrganizationApi.createSubOrganization(
-      { ...fields, organizationType: suiteType, status: formStatus as any },
+      { ...fields, organizationType: suiteType, status: (formStatus === 'Suspend' ? 'Suspended' : formStatus) as any },
       resolveParentOrgId()
     );
     localStorage.removeItem('organizations_catalog_orgsuperadmin');
@@ -1291,14 +1307,19 @@ export const OrganizationView: React.FC = () => {
                   type: 'Suspend',
                   orgId: targetOrg.id,
                   orgName: targetOrg.name,
+                  currentStatus: targetOrg.status,
                 });
               }}
               className="w-full px-3 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50 flex items-center gap-3 transition-colors rounded-xl cursor-pointer"
             >
               <div className="w-7 h-7 rounded-full bg-amber-500 flex items-center justify-center text-white shrink-0 shadow-xs">
-                <AlertCircle className="w-3.5 h-3.5 stroke-[2.5]" />
+                {targetOrg.status === 'Suspend' ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5]" />
+                ) : (
+                  <AlertCircle className="w-3.5 h-3.5 stroke-[2.5]" />
+                )}
               </div>
-              <span className="font-semibold text-slate-800 text-[13px]">Suspend</span>
+              <span className="font-semibold text-slate-800 text-[13px]">{targetOrg.status === 'Suspend' ? 'Resume' : 'Suspend'}</span>
             </button>
 
             {/* 4. Inactive */}
@@ -1310,6 +1331,7 @@ export const OrganizationView: React.FC = () => {
                   type: 'Inactive',
                   orgId: targetOrg.id,
                   orgName: targetOrg.name,
+                  currentStatus: targetOrg.status,
                 });
               }}
               className="w-full px-3 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50 flex items-center gap-3 transition-colors rounded-xl cursor-pointer"
@@ -1317,7 +1339,7 @@ export const OrganizationView: React.FC = () => {
               <div className="w-7 h-7 rounded-full bg-slate-500 flex items-center justify-center text-white shrink-0 shadow-xs">
                 <Ban className="w-3.5 h-3.5 stroke-[2.5]" />
               </div>
-              <span className="font-semibold text-slate-800 text-[13px]">Inactive</span>
+              <span className="font-semibold text-slate-800 text-[13px]">{targetOrg.status === 'Inactive' ? 'Active' : 'Inactive'}</span>
             </button>
           </div>
         );
@@ -1923,13 +1945,37 @@ export const OrganizationView: React.FC = () => {
         type={confirmAction?.type}
         itemTypeLabel={isSubOrgMode ? 'Sub Organization' : 'Organization'}
         itemName={confirmAction?.orgName}
+        title={
+          !confirmAction || confirmAction.type === 'Delete'
+            ? undefined
+            : confirmAction.type === 'Suspend'
+              ? `${toApiStatus(confirmAction.currentStatus) === 'Suspended' ? 'Resume' : 'Suspend'} ${isSubOrgMode ? 'Sub Organization' : 'Organization'}`
+              : `${confirmAction.currentStatus === 'Inactive' ? 'Activate' : 'Deactivate'} ${isSubOrgMode ? 'Sub Organization' : 'Organization'}`
+        }
+        description={
+          !confirmAction || confirmAction.type === 'Delete' ? undefined : (
+            <>
+              Are you sure you want to{' '}
+              {nextStatus(confirmAction.type, toApiStatus(confirmAction.currentStatus)) === 'Active' ? 'resume' : 'mark'}{' '}
+              <span className="font-semibold text-slate-700">{confirmAction.orgName}</span>{' '}
+              as {nextStatus(confirmAction.type, toApiStatus(confirmAction.currentStatus))}?
+            </>
+          )
+        }
+        confirmButtonText={
+          confirmAction && confirmAction.type !== 'Delete'
+            ? confirmButtonLabel(confirmAction.type, toApiStatus(confirmAction.currentStatus))
+            : undefined
+        }
         isLoading={isProcessingAction}
         onConfirm={async () => {
           if (!confirmAction) return;
           if (confirmAction.type === 'Delete') {
             await handleDeleteOrganization(confirmAction.orgId, confirmAction.orgName);
           } else {
-            await handleUpdateStatus(confirmAction.orgId, confirmAction.type);
+            const target = nextStatus(confirmAction.type, toApiStatus(confirmAction.currentStatus));
+            // The organizations API names the status "Suspend"; sub-organizations get "Suspended" in handleUpdateStatus.
+            await handleUpdateStatus(confirmAction.orgId, target === 'Suspended' ? 'Suspend' : target);
             setConfirmAction(null);
           }
         }}

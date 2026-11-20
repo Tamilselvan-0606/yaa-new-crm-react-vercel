@@ -5,6 +5,11 @@
  * types and decides whether Save is allowed.
  */
 
+import {
+  isValidPaymentReference,
+  PAYMENT_REFERENCE_ERROR_MESSAGE,
+} from './validation';
+
 export type SplitPaymentMethod = 'Cash' | 'Bank Transfer' | 'UPI' | 'Cheque' | 'Card' | 'Other' | 'Online Payment';
 
 /** Purchase bills (Payments Out). */
@@ -101,6 +106,10 @@ export const validateSplit = (
 ): SplitValidation => {
   const rowErrors: Record<string, string> = {};
   rows.forEach((r) => {
+    if (!isValidPaymentReference(r.reference)) {
+      rowErrors[r.id] = PAYMENT_REFERENCE_ERROR_MESSAGE;
+      return;
+    }
     const raw = String(r.amount ?? '').trim();
     if (raw === '') return; // an empty row is simply not submitted
     const n = parseFloat(raw.replace(/,/g, ''));

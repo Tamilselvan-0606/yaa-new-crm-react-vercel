@@ -21,8 +21,17 @@ export const useScopeLock = () => {
   const isBranchAdmin = roleKey === 'BRANCHADMIN';
   const isSubOrgAdmin = roleKey === 'SUBORGADMIN';
 
-  const subOrgId: string = user?.subOrganizationId || membership?.subOrganizationId || '';
-  const branchId: string = user?.accessibleBranchIds?.[0] || '';
+  const subOrgId: string =
+    user?.subOrganizationId ||
+    membership?.subOrganizationId ||
+    localStorage.getItem('active_sub_organization_id') ||
+    '';
+  const branchId: string =
+    user?.accessibleBranchIds?.[0] ||
+    membership?.branchId ||
+    user?.branchId ||
+    localStorage.getItem('active_branch_id') ||
+    '';
 
   return {
     isBranchAdmin,

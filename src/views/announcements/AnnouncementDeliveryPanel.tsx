@@ -45,7 +45,7 @@ export const AnnouncementDeliveryPanel: React.FC<Props> = ({ announcementId, tot
   const [pendingStatus, setPendingStatus] = useState('ALL');
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   const load = useCallback(async () => {
     setLoading(true);

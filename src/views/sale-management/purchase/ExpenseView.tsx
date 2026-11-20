@@ -4,6 +4,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { ExpenseSchema, ExpenseFormData } from '../../../validations';
 import { FormError } from '../../../components/common/FormError';
+import { sanitizePaymentReferenceInput } from '../../../utils/validation';
 import {
   checkRequiredText,
   checkRequiredDate,
@@ -2043,11 +2044,19 @@ export const ExpenseView: React.FC = () => {
 
             <div>
               <FormLabel>Reference No / Transaction ID</FormLabel>
-              <input
-                type="text"
-                placeholder="e.g. TXN-RENT-1008 or Cheque #"
-                {...register('referenceNo')}
-                className={FORM_INPUT_CLS}
+              <Controller
+                control={control}
+                name="referenceNo"
+                render={({ field }) => (
+                  <input
+                    type="text"
+                    placeholder="e.g. TXN-RENT-1008 or Cheque-101"
+                    value={field.value || ''}
+                    onChange={(e) => field.onChange(sanitizePaymentReferenceInput(e.target.value))}
+                    onBlur={field.onBlur}
+                    className={FORM_INPUT_CLS}
+                  />
+                )}
               />
               <FormError message={errors.referenceNo?.message} />
             </div>

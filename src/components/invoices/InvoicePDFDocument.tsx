@@ -589,9 +589,16 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
                 style={[styles.tableRow, idx % 2 === 1 ? styles.tableRowEven : {}]}
               >
                 <Text style={[styles.tableCell, styles.colNum, { fontFamily: PDF_FONT_BOLD }]}>{idx + 1}</Text>
-                <Text style={[styles.tableCell, styles.colItem, { fontFamily: PDF_FONT_BOLD, color: '#0F172A' }]}>
-                  {it.name}
-                </Text>
+                <View style={[styles.tableCell, styles.colItem]}>
+                  <Text style={{ fontFamily: PDF_FONT_BOLD, color: '#0F172A' }}>
+                    {it.name}
+                  </Text>
+                  {it.description ? (
+                    <Text style={{ fontSize: 6.5, color: '#64748B', marginTop: 2 }}>
+                      {it.description}
+                    </Text>
+                  ) : null}
+                </View>
                 <Text style={[styles.tableCell, styles.colGst]}>{it.taxPercent}%</Text>
                 <Text style={[styles.tableCell, styles.colQty, { fontFamily: PDF_FONT_BOLD }]}>{it.qty}</Text>
                 <Text style={[styles.tableCell, styles.colRate]}>₹{it.unitPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>

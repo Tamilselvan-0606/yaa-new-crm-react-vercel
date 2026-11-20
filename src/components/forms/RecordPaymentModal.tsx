@@ -14,6 +14,7 @@ import { CustomSelect } from '../common/CustomSelect';
 import { FormError } from '../common/FormError';
 import { SavedInvoice, InvoicePaymentDetails } from '../../store/useInvoiceStore';
 import { RecordPaymentSchema, RecordPaymentFormData } from '../../validations';
+import { sanitizeDigitsOnlyInput } from '../../utils/validation';
 
 interface RecordPaymentModalProps {
   isOpen: boolean;
@@ -60,6 +61,9 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
   });
 
   const amountPaid = watch('amountPaid') || 0;
+  const paymentMode = watch('paymentMode') || '';
+  const isCashPayment = paymentMode.trim().toLowerCase() === 'cash';
+  const isReferenceRequired = Boolean(paymentMode && !isCashPayment);
   const taxDeductedType = watch('taxDeductedType') || 'none';
   const gstTdsPercentage = watch('gstTdsPercentage');
   const incomeTaxTdsPercentage = watch('incomeTaxTdsPercentage');
@@ -362,7 +366,6 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                     'Cheque / Demand Draft',
                     'Cash',
                     'Online Gateway',
-                    'Other',
                   ]}
                 />
               )}
@@ -388,11 +391,27 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
 
           {/* Field 5: Reference / Transaction # */}
           <div>
-            <label className={labelClass}>Reference / Transaction #</label>
-            <input
-              type="text"
-              {...register('referenceId')}
-              className={inputClass}
+            <label className={labelClass}>
+              Reference / Transaction #
+              {isReferenceRequired ? (
+                <span className="text-rose-500 font-bold ml-1">*</span>
+              ) : null}
+            </label>
+            <Controller
+              control={control}
+              name="referenceId"
+              render={({ field }) => (
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={50}
+                  value={field.value || ''}
+                  onChange={(e) => field.onChange(sanitizeDigitsOnlyInput(e.target.value).slice(0, 50))}
+                  onBlur={field.onBlur}
+                  placeholder="e.g. 123456789012"
+                  className={inputClass}
+                />
+              )}
             />
             <FormError message={errors.referenceId?.message} />
           </div>

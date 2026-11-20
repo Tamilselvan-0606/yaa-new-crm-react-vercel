@@ -44,7 +44,7 @@ export const InboxAnnouncementsView: React.FC = () => {
   const [pendingState, setPendingState] = useState('ALL');
   const [appliedState, setAppliedState] = useState('ALL');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   const [viewing, setViewing] = useState<InboxAnnouncementDetail | null>(null);
   const [opening, setOpening] = useState(false);

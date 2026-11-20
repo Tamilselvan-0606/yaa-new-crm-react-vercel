@@ -522,9 +522,16 @@ export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
                 style={[styles.tableRow, idx % 2 === 1 ? styles.tableRowEven : {}]}
               >
                 <Text style={[styles.tableCell, styles.colNum, { fontFamily: PDF_FONT_BOLD }]}>{idx + 1}</Text>
-                <Text style={[styles.tableCell, styles.colItem, { fontFamily: PDF_FONT_BOLD, color: '#0F172A' }]}>
-                  {it.description}
-                </Text>
+                <View style={[styles.tableCell, styles.colItem]}>
+                  <Text style={{ fontFamily: PDF_FONT_BOLD, color: '#0F172A' }}>
+                    {it.description}
+                  </Text>
+                  {it.subDescription ? (
+                    <Text style={{ fontSize: 6.5, color: '#64748B', marginTop: 2 }}>
+                      {it.subDescription}
+                    </Text>
+                  ) : null}
+                </View>
                 <Text style={[styles.tableCell, styles.colGst]}>{gstRate}%</Text>
                 <Text style={[styles.tableCell, styles.colQty, { fontFamily: PDF_FONT_BOLD }]}>{qty}</Text>
                 <Text style={[styles.tableCell, styles.colRate]}>₹{rate.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>

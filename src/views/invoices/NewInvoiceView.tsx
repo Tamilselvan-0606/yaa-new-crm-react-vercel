@@ -39,7 +39,13 @@ import {
   isValidDocumentNumber,
   DOCUMENT_NUMBER_ERROR_MESSAGE,
   sanitizeHsnCodeInput,
+  sanitizeAlphaSpaceInput,
+  sanitizeDigitsOnlyInput,
+  sanitizeAlphanumericUpperInput,
+  sanitizeUpiIdInput,
 } from '../../utils/validation';
+import { BankAccountSchema } from '../../validations';
+import { FormError } from '../../components/common/FormError';
 import { CustomSelect } from '../../components/common/CustomSelect';
 import { useInvoiceStore, SavedInvoice } from '../../store/useInvoiceStore';
 import { useProformaInvoiceStore } from '../../store/useProformaInvoiceStore';
@@ -337,9 +343,31 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     accountName: '',
     accountNumber: '',
     ifscCode: '',
+    accountType: '',
     branchName: '',
     upiId: '',
   });
+  const [bankErrors, setBankErrors] = useState<Record<string, string>>({});
+
+  const closeAddBankModal = () => {
+    setIsAddBankModalOpen(false);
+    setBankErrors({});
+  };
+
+  const updateNewBankField = (
+    field: keyof BankAccount,
+    rawValue: string,
+    sanitizer: (val: string) => string,
+  ) => {
+    const clean = sanitizer(rawValue);
+    setNewBank((prev) => ({ ...prev, [field]: clean }));
+    setBankErrors((prev) => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
 
   const selectedBank = bankAccounts.find((b) => b.id === selectedBankId) || (bankAccounts.length > 0 ? bankAccounts[0] : null);
 
@@ -426,21 +454,38 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
   const handleSaveNewBank = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newBank.bankName?.trim() || !newBank.accountNumber?.trim()) {
-      showToast('error', 'Incomplete Details', 'Please enter Bank Name and Account Number.');
+    const parsed = BankAccountSchema.safeParse({
+      bankName: newBank.bankName ?? '',
+      accountName: newBank.accountName ?? '',
+      accountNumber: newBank.accountNumber ?? '',
+      ifscCode: newBank.ifscCode ?? '',
+      accountType: newBank.accountType ?? '',
+      branchName: newBank.branchName ?? '',
+      upiId: newBank.upiId ?? '',
+    });
+    if (!parsed.success) {
+      const errs: Record<string, string> = {};
+      for (const issue of parsed.error.issues) {
+        const key = String(issue.path[0] || '');
+        if (key && !errs[key]) errs[key] = issue.message;
+      }
+      setBankErrors(errs);
+      showToast('error', 'Invalid Bank Details', 'Please check the highlighted bank account fields.');
       return;
     }
+    setBankErrors({});
+    const valid = parsed.data;
     const { orgId, subOrgId, branchId } = getBankScope();
     try {
       setIsSavingBank(true);
       const res = await organizationBankApi.create({
-        bankName: newBank.bankName.trim(),
-        accountHolderName: newBank.accountName?.trim() || undefined,
-        accountNumber: newBank.accountNumber.trim(),
-        ifscCode: (newBank.ifscCode || '').toUpperCase().trim() || undefined,
-        accountType: newBank.accountType?.trim() || 'Current',
-        branchName: newBank.branchName?.trim() || undefined,
-        upiId: newBank.upiId?.trim() || undefined,
+        bankName: valid.bankName,
+        accountHolderName: valid.accountName,
+        accountNumber: valid.accountNumber,
+        ifscCode: valid.ifscCode,
+        accountType: valid.accountType || 'Current',
+        branchName: valid.branchName || undefined,
+        upiId: valid.upiId || undefined,
         isDefault: bankAccounts.length === 0,
         status: 'Active',
         organizationId: orgId,
@@ -452,6 +497,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       setSelectedBankId(created.id);
       setBankAccountDetails(created.bankName);
       setIsAddBankModalOpen(false);
+      setBankErrors({});
       setNewBank({ bankName: '', accountName: '', accountNumber: '', ifscCode: '', branchName: '', accountType: '', upiId: '' });
       showToast('success', 'Bank Account Added', `Added and selected ${created.bankName}.`);
     } catch (err: any) {
@@ -1917,7 +1963,10 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   placeholder="Select Bank Account"
                   optionVariant="strong"
                   addLabel="Add Bank Account"
-                  onAdd={() => setIsAddBankModalOpen(true)}
+                  onAdd={() => {
+                    setBankErrors({});
+                    setIsAddBankModalOpen(true);
+                  }}
                 />
               </div>
 
@@ -2433,7 +2482,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               <div className="flex items-center gap-3">
                 <button
                   type="button"
-                  onClick={() => setIsAddBankModalOpen(false)}
+                  onClick={closeAddBankModal}
                   className="p-1.5 -ml-1 rounded-xl transition-all cursor-pointer flex items-center justify-center text-white hover:bg-white/20 active:scale-95"
                   title="Go back"
                 >
@@ -2454,12 +2503,18 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   </label>
                   <input
                     type="text"
+                    maxLength={50}
                     required
                     placeholder="e.g. Axis Bank Ltd"
                     value={newBank.bankName || ''}
-                    onChange={(e) => setNewBank({ ...newBank, bankName: e.target.value })}
-                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
+                    onChange={(e) => updateNewBankField('bankName', e.target.value, (v) => sanitizeAlphaSpaceInput(v).slice(0, 50))}
+                    className={`w-full h-11 px-3.5 bg-white border rounded-xl text-sm font-medium text-slate-800 outline-none transition-all shadow-2xs ${
+                      bankErrors.bankName
+                        ? 'border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10'
+                        : 'border-[#E2E8F0] focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10'
+                    }`}
                   />
+                  <FormError message={bankErrors.bankName} />
                 </div>
 
                 <div>
@@ -2468,12 +2523,18 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   </label>
                   <input
                     type="text"
+                    maxLength={150}
                     required
                     placeholder="e.g. Yaa Creations"
                     value={newBank.accountName || ''}
-                    onChange={(e) => setNewBank({ ...newBank, accountName: e.target.value })}
-                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
+                    onChange={(e) => updateNewBankField('accountName', e.target.value, (v) => sanitizeAlphaSpaceInput(v).slice(0, 150))}
+                    className={`w-full h-11 px-3.5 bg-white border rounded-xl text-sm font-medium text-slate-800 outline-none transition-all shadow-2xs ${
+                      bankErrors.accountName
+                        ? 'border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10'
+                        : 'border-[#E2E8F0] focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10'
+                    }`}
                   />
+                  <FormError message={bankErrors.accountName} />
                 </div>
 
                 <div>
@@ -2482,12 +2543,21 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   </label>
                   <input
                     type="text"
+                    inputMode="numeric"
+                    maxLength={50}
                     required
                     placeholder="918020012345678"
                     value={newBank.accountNumber || ''}
-                    onChange={(e) => setNewBank({ ...newBank, accountNumber: e.target.value })}
-                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
+                    onChange={(e) =>
+                      updateNewBankField('accountNumber', e.target.value, (v) => sanitizeDigitsOnlyInput(v).slice(0, 50))
+                    }
+                    className={`w-full h-11 px-3.5 bg-white border rounded-xl text-sm font-medium text-slate-800 outline-none transition-all shadow-2xs ${
+                      bankErrors.accountNumber
+                        ? 'border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10'
+                        : 'border-[#E2E8F0] focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10'
+                    }`}
                   />
+                  <FormError message={bankErrors.accountNumber} />
                 </div>
 
                 <div>
@@ -2496,12 +2566,20 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   </label>
                   <input
                     type="text"
+                    maxLength={11}
                     required
                     placeholder="UTIB0000123"
                     value={newBank.ifscCode || ''}
-                    onChange={(e) => setNewBank({ ...newBank, ifscCode: e.target.value })}
-                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs uppercase"
+                    onChange={(e) =>
+                      updateNewBankField('ifscCode', e.target.value, (v) => sanitizeAlphanumericUpperInput(v).slice(0, 11))
+                    }
+                    className={`w-full h-11 px-3.5 bg-white border rounded-xl text-sm font-medium text-slate-800 outline-none transition-all shadow-2xs uppercase ${
+                      bankErrors.ifscCode
+                        ? 'border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10'
+                        : 'border-[#E2E8F0] focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10'
+                    }`}
                   />
+                  <FormError message={bankErrors.ifscCode} />
                 </div>
 
                 <div>
@@ -2510,11 +2588,17 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   </label>
                   <input
                     type="text"
+                    maxLength={50}
                     placeholder="e.g. Current or Savings"
                     value={newBank.accountType || ''}
-                    onChange={(e) => setNewBank({ ...newBank, accountType: e.target.value })}
-                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
+                    onChange={(e) => updateNewBankField('accountType', e.target.value, (v) => sanitizeAlphaSpaceInput(v).slice(0, 50))}
+                    className={`w-full h-11 px-3.5 bg-white border rounded-xl text-sm font-medium text-slate-800 outline-none transition-all shadow-2xs ${
+                      bankErrors.accountType
+                        ? 'border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10'
+                        : 'border-[#E2E8F0] focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10'
+                    }`}
                   />
+                  <FormError message={bankErrors.accountType} />
                 </div>
 
                 <div>
@@ -2523,11 +2607,17 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   </label>
                   <input
                     type="text"
-                    placeholder="e.g. Indiranagar, Bangalore"
+                    maxLength={50}
+                    placeholder="e.g. Indiranagar Bangalore"
                     value={newBank.branchName || ''}
-                    onChange={(e) => setNewBank({ ...newBank, branchName: e.target.value })}
-                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
+                    onChange={(e) => updateNewBankField('branchName', e.target.value, (v) => sanitizeAlphaSpaceInput(v).slice(0, 50))}
+                    className={`w-full h-11 px-3.5 bg-white border rounded-xl text-sm font-medium text-slate-800 outline-none transition-all shadow-2xs ${
+                      bankErrors.branchName
+                        ? 'border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10'
+                        : 'border-[#E2E8F0] focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10'
+                    }`}
                   />
+                  <FormError message={bankErrors.branchName} />
                 </div>
 
                 <div>
@@ -2536,18 +2626,24 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   </label>
                   <input
                     type="text"
+                    maxLength={50}
                     placeholder="e.g. company@axis"
                     value={newBank.upiId || ''}
-                    onChange={(e) => setNewBank({ ...newBank, upiId: e.target.value })}
-                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
+                    onChange={(e) => updateNewBankField('upiId', e.target.value, (v) => sanitizeUpiIdInput(v).slice(0, 50))}
+                    className={`w-full h-11 px-3.5 bg-white border rounded-xl text-sm font-medium text-slate-800 outline-none transition-all shadow-2xs ${
+                      bankErrors.upiId
+                        ? 'border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10'
+                        : 'border-[#E2E8F0] focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10'
+                    }`}
                   />
+                  <FormError message={bankErrors.upiId} />
                 </div>
               </div>
 
               <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3 pt-5 sm:pt-6 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setIsAddBankModalOpen(false)}
+                  onClick={closeAddBankModal}
                   className="w-full sm:w-auto h-10 px-4.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 hover:border-slate-300 rounded-xl text-sm font-bold shadow-2xs transition-all duration-200 cursor-pointer select-none active:scale-[0.98] flex items-center justify-center gap-2"
                 >
                   <X className="w-4 h-4 text-slate-500 stroke-[2.2]" />

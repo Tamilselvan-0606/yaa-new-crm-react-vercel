@@ -2,6 +2,10 @@ import { z } from "zod";
 import {
   isValidIndianPhone,
   INDIAN_PHONE_ERROR_MESSAGE,
+  isValidPaymentReference,
+  PAYMENT_REFERENCE_ERROR_MESSAGE,
+  isValidUpiId,
+  isValidIfscOrSwift,
 } from "../utils/validation";
 
 // ==========================================
@@ -456,9 +460,34 @@ export const SupplierSchema = z.object({
       z.string().refine((v) => !v || (!isNaN(Number(v)) && Number(v) >= 0), "Credit limit cannot be negative"),
     ])
     .optional(),
-  bankName: z.string().trim().optional(),
-  accountNumber: z.string().trim().optional(),
-  ifscCode: z.string().trim().optional(),
+  bankName: z
+    .string()
+    .trim()
+    .refine(
+      (v) => !v || v.length <= 50,
+      "Bank name must not exceed 50 characters.",
+    )
+    .refine(
+      (v) => !v || /^[a-zA-Z ]+$/.test(v),
+      "Bank name must contain letters and spaces only.",
+    )
+    .optional(),
+  accountNumber: z
+    .string()
+    .trim()
+    .refine(
+      (v) => !v || /^\d{9,50}$/.test(v),
+      "Account number must be 9 to 50 digits.",
+    )
+    .optional(),
+  ifscCode: z
+    .string()
+    .trim()
+    .refine(
+      (v) => !v || isValidIfscOrSwift(v),
+      "Enter a valid IFSC (e.g. HDFC0000123) or SWIFT code.",
+    )
+    .optional(),
   branchName: z.string().trim().optional(),
   status: z.enum(["Active", "Inactive", "Blocked"]).optional(),
   notes: z.string().trim().optional(),
@@ -494,7 +523,11 @@ export const ExpenseSchema = z.object({
     ])
     .optional(),
   paymentMode: z.string().min(1, "Payment mode is required"),
-  referenceNo: z.string().trim().optional(),
+  referenceNo: z
+    .string()
+    .trim()
+    .refine(isValidPaymentReference, PAYMENT_REFERENCE_ERROR_MESSAGE)
+    .optional(),
   receiptImage: z.string().optional(),
   notes: z.string().trim().optional(),
   status: z.enum(["Paid", "Pending", "Approved"]).optional(),
@@ -515,7 +548,11 @@ export const PaymentOutSchema = z.object({
   ]),
   paymentDate: z.string().min(1, "Payment date is required"),
   paymentMode: z.string().min(1, "Payment mode is required"),
-  referenceNo: z.string().trim().optional(),
+  referenceNo: z
+    .string()
+    .trim()
+    .refine(isValidPaymentReference, PAYMENT_REFERENCE_ERROR_MESSAGE)
+    .optional(),
   receiptImage: z.string().optional(),
   notes: z.string().trim().optional(),
   purchaseId: z.string().optional(),
@@ -558,7 +595,11 @@ export const PaymentSchema = z.object({
   dueDate: z.string().min(1, "Due date is required"),
   paymentDate: z.string().optional(),
   paymentMethod: z.string().optional(),
-  transactionId: z.string().trim().optional(),
+  transactionId: z
+    .string()
+    .trim()
+    .refine(isValidPaymentReference, PAYMENT_REFERENCE_ERROR_MESSAGE)
+    .optional(),
   status: z.enum(["Pending", "Paid", "Partially Paid", "Overdue"]).optional(),
   notes: z.string().trim().optional(),
 });
@@ -573,7 +614,11 @@ export const PaymentInSchema = z.object({
   date: z.string().min(1, "Payment date is required"),
   paymentType: z.string().min(1, "Payment mode is required"),
   receivedAmount: z.number().positive("Received amount must be greater than 0"),
-  referenceNo: z.string().trim().optional(),
+  referenceNo: z
+    .string()
+    .trim()
+    .refine(isValidPaymentReference, PAYMENT_REFERENCE_ERROR_MESSAGE)
+    .optional(),
   description: z.string().trim().optional(),
   invoiceId: z.string().optional(),
   invoiceNo: z.string().optional(),
@@ -589,10 +634,103 @@ export const RecordPaymentSchema = z.object({
   gstTdsPercentage: z.union([z.number(), z.string()]).optional(),
   incomeTaxTdsPercentage: z.union([z.number(), z.string()]).optional(),
   bankDeductions: z.number().min(0, "Bank deductions cannot be negative").optional(),
-  referenceId: z.string().trim().optional(),
+  referenceId: z
+    .string()
+    .trim()
+    .refine(
+      (v) => !v || /^\d+$/.test(v),
+      "Reference number must contain numbers only.",
+    )
+    .refine(
+      (v) => !v || v.length <= 50,
+      "Reference number must not exceed 50 characters.",
+    )
+    .optional(),
   notes: z.string().trim().optional(),
 });
 export type RecordPaymentFormData = z.infer<typeof RecordPaymentSchema>;
+
+export const BankAccountSchema = z.object({
+  bankName: z
+    .string()
+    .trim()
+    .min(1, "Bank name is required")
+    .min(2, "Bank name must be at least 2 characters")
+    .max(50, "Bank name must not exceed 50 characters.")
+    .regex(
+      /^[a-zA-Z ]+$/,
+      "Bank name must contain letters and spaces only.",
+    ),
+  accountName: z
+    .string()
+    .trim()
+    .min(1, "Account holder name is required")
+    .min(2, "Account holder name must be at least 2 characters")
+    .max(150, "Account holder name must not exceed 150 characters.")
+    .regex(
+      /^[a-zA-Z ]+$/,
+      "Account holder name must contain letters and spaces only.",
+    ),
+  accountNumber: z
+    .string()
+    .trim()
+    .min(1, "Account number is required")
+    .regex(/^\d+$/, "Account number must contain numbers only.")
+    .min(9, "Account number must be at least 9 digits.")
+    .max(50, "Account number must not exceed 50 characters."),
+  ifscCode: z
+    .string()
+    .trim()
+    .min(1, "IFSC / SWIFT code is required")
+    .max(50, "IFSC / SWIFT code must not exceed 50 characters.")
+    .transform((v) => v.toUpperCase())
+    .refine(
+      (v) => /^[A-Z0-9]+$/.test(v),
+      "IFSC / SWIFT code can only contain letters and numbers.",
+    )
+    .refine(
+      (v) => isValidIfscOrSwift(v),
+      "Enter a valid IFSC (e.g. UTIB0000123) or SWIFT code (8 or 11 characters).",
+    ),
+  accountType: z
+    .string()
+    .trim()
+    .refine(
+      (v) => !v || v.length <= 50,
+      "Account type must not exceed 50 characters.",
+    )
+    .refine(
+      (v) => !v || /^[a-zA-Z ]+$/.test(v),
+      "Account type must contain letters and spaces only.",
+    )
+    .optional(),
+  branchName: z
+    .string()
+    .trim()
+    .refine(
+      (v) => !v || v.length <= 50,
+      "Branch name must not exceed 50 characters.",
+    )
+    .refine(
+      (v) => !v || /^[a-zA-Z ]+$/.test(v),
+      "Branch name must contain letters and spaces only.",
+    )
+    .refine(
+      (v) => !v || v.length >= 2,
+      "Branch name must be at least 2 characters.",
+    )
+    .optional(),
+  upiId: z
+    .string()
+    .trim()
+    .refine(
+      (v) => !v || v.length <= 50,
+      "UPI ID must not exceed 50 characters.",
+    )
+    .refine(isValidUpiId, "Enter a valid UPI ID (e.g. company@axis).")
+    .optional(),
+});
+export type BankAccountFormData = z.infer<typeof BankAccountSchema>;
 
 // ==========================================
 // 9. SALES REPRESENTATIVE & COLLECTIONS

@@ -45,6 +45,10 @@ import {
   sanitizeDocumentNumberInput,
   isValidDocumentNumber,
   DOCUMENT_NUMBER_ERROR_MESSAGE,
+  sanitizeAlphaSpaceInput,
+  sanitizeDigitsOnlyInput,
+  sanitizeAlphanumericUpperInput,
+  sanitizeUpiIdInput,
 } from '../../utils/validation';
 import { organizationBankApi } from '../../api/platform/organizationBankApi';
 import { renderPdfBlob } from '../../components/common/pdf/pdfLogo';
@@ -499,7 +503,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   }, [isSuperAdmin, currentUser?.organizationId]);
 
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
   const [viewingInvoice, setViewingInvoice] = useState<SavedInvoice | null>(null);
 
   // The bank saved on the invoice comes back from the API as an object (shown as is) or just an id (looked up
@@ -1600,6 +1604,11 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                         </td>
                         <td className="border border-slate-200 px-3 py-3">
                           <span className="font-bold text-slate-900 block font-sans">{it.name}</span>
+                          {it.description ? (
+                            <span className="text-xs text-slate-500 block font-normal mt-0.5 whitespace-pre-line font-sans">
+                              {it.description}
+                            </span>
+                          ) : null}
                         </td>
                         <td className="border border-slate-200 px-2 sm:px-2.5 py-3 text-center text-slate-600 font-sans">
                           {it.taxPercent}%
@@ -3271,6 +3280,13 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                               style={{ borderRadius: '4px' }}
                               className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] !rounded-[4px] text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
                             />
+                            <input
+                              type="text"
+                              value={it.description || ''}
+                              onChange={(e) => handleEditItemChange(idx, 'description', e.target.value)}
+                              placeholder="+ Add Description (optional)..."
+                              className="w-full px-1.5 py-1 text-xs text-slate-500 placeholder:text-slate-400 bg-transparent border-0 focus:ring-0 outline-none mt-1"
+                            />
                           </div>
 
                           {/* 2. Quantity */}
@@ -3372,11 +3388,12 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                     </label>
                     <input
                       type="text"
+                      maxLength={50}
                       value={editingInvoice.bank.bankName}
                       onChange={(e) =>
                         setEditingInvoice({
                           ...editingInvoice,
-                          bank: { ...editingInvoice.bank, bankName: e.target.value },
+                          bank: { ...editingInvoice.bank, bankName: sanitizeAlphaSpaceInput(e.target.value).slice(0, 50) },
                         })
                       }
                       className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
@@ -3388,11 +3405,16 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                     </label>
                     <input
                       type="text"
+                      inputMode="numeric"
+                      maxLength={50}
                       value={editingInvoice.bank.accountNumber}
                       onChange={(e) =>
                         setEditingInvoice({
                           ...editingInvoice,
-                          bank: { ...editingInvoice.bank, accountNumber: e.target.value },
+                          bank: {
+                            ...editingInvoice.bank,
+                            accountNumber: sanitizeDigitsOnlyInput(e.target.value).slice(0, 50),
+                          },
                         })
                       }
                       className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
@@ -3404,14 +3426,18 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                     </label>
                     <input
                       type="text"
+                      maxLength={11}
                       value={editingInvoice.bank.ifscCode}
                       onChange={(e) =>
                         setEditingInvoice({
                           ...editingInvoice,
-                          bank: { ...editingInvoice.bank, ifscCode: e.target.value },
+                          bank: {
+                            ...editingInvoice.bank,
+                            ifscCode: sanitizeAlphanumericUpperInput(e.target.value).slice(0, 11),
+                          },
                         })
                       }
-                      className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
+                      className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs uppercase"
                     />
                   </div>
                   <div>
@@ -3420,11 +3446,12 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                     </label>
                     <input
                       type="text"
+                      maxLength={50}
                       value={editingInvoice.bank.upiId || ''}
                       onChange={(e) =>
                         setEditingInvoice({
                           ...editingInvoice,
-                          bank: { ...editingInvoice.bank, upiId: e.target.value },
+                          bank: { ...editingInvoice.bank, upiId: sanitizeUpiIdInput(e.target.value).slice(0, 50) },
                         })
                       }
                       placeholder="e.g. company@upi"

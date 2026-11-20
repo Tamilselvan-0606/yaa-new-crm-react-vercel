@@ -7,6 +7,7 @@ import {
   StyleSheet,
 } from '@react-pdf/renderer';
 import { DocumentPrintOptions, numberToWordsIndian, pdfToday } from '../../../utils/printUtils';
+import { formatPhoneNumber } from '../../../utils/fieldValidators';
 
 const styles = StyleSheet.create({
   page: {
@@ -398,7 +399,7 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
             {companyAddress ? <Text style={styles.companyDetails}>{companyAddress}</Text> : null}
             {companyGstin || companyPhone ? (
               <Text style={styles.companyDetails}>
-                {[companyGstin ? `GSTIN: ${companyGstin}` : '', companyPhone ? `Phone: ${companyPhone}` : '']
+                {[companyGstin ? `GSTIN: ${companyGstin}` : '', companyPhone ? `Phone: ${formatPhoneNumber(companyPhone)}` : '']
                   .filter(Boolean)
                   .join(' | ')}
               </Text>
@@ -424,7 +425,7 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
               <Text style={styles.partyLine}>{partyCompany}</Text>
             ) : null}
             {partyAddress ? <Text style={styles.partyLine}>{partyAddress}</Text> : null}
-            {partyPhone ? <Text style={styles.partyLine}>Phone: {partyPhone}</Text> : null}
+            {partyPhone ? <Text style={styles.partyLine}>Phone: {formatPhoneNumber(partyPhone)}</Text> : null}
             {partyEmail ? <Text style={styles.partyLine}>Email: {partyEmail}</Text> : null}
             {partyGstin ? <Text style={styles.partyLine}>GSTIN: {partyGstin}</Text> : null}
           </View>

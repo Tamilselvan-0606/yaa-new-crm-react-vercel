@@ -67,7 +67,7 @@ export const PaymentsView: React.FC = () => {
   const [pendingStatus, setPendingStatus] = useState('ALL');
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   // 3-Dots Action Dropdown State
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -124,7 +124,14 @@ export const PaymentsView: React.FC = () => {
         ? (rawData as any).items
         : [];
 
-    return rawItems.map((item: any) => {
+    // Newest payment first
+    const newestFirst = [...rawItems].sort(
+      (x: any, y: any) =>
+        new Date(y.createdAt || y.paymentDateTime || y.paymentDate || 0).getTime() -
+        new Date(x.createdAt || x.paymentDateTime || x.paymentDate || 0).getTime()
+    );
+
+    return newestFirst.map((item: any) => {
       const rawProduct = (item.productName || item.productOrService || '').trim();
       const cleanProduct =
         rawProduct &&

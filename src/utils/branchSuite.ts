@@ -32,3 +32,7 @@ export const filterBranchesForSuite = <T extends { id: string }>(list: T[], isSa
     return isSaleManagement ? suite.includes('sale') : !suite.includes('sale');
   });
 };
+
+/** Branches that can still be picked in a form: Inactive branches are left out (a missing status counts as active). */
+export const excludeInactiveBranches = <T extends { id: string }>(list: T[]): T[] =>
+  list.filter((b) => String((b as any).status ?? 'Active').trim().toLowerCase() !== 'inactive');

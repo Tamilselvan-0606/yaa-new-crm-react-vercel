@@ -76,6 +76,9 @@ import { getNextPaymentInNumber } from "../../../utils/documentNumbering";
 import {
   isValidIndianPhone,
   normalizeIndianPhoneTo10Digits,
+  sanitizePaymentReferenceInput,
+  isValidPaymentReference,
+  PAYMENT_REFERENCE_ERROR_MESSAGE,
 } from "../../../utils/validation";
 import {
   checkRequiredText,
@@ -1217,6 +1220,10 @@ export const PaymentInView: React.FC = () => {
 
     const amountErr = checkMoney(formReceivedAmount, "received amount");
     if (amountErr) errs.amount = amountErr;
+
+    if (!isValidPaymentReference(formReferenceNo)) {
+      errs.referenceNo = PAYMENT_REFERENCE_ERROR_MESSAGE;
+    }
 
     // A payment must be linked to an invoice. Only an old payment that was already saved without one can still
     // be edited without choosing an invoice.
@@ -2422,10 +2429,14 @@ export const PaymentInView: React.FC = () => {
                   <input
                     type="text"
                     value={formReferenceNo}
-                    onChange={(e) => setFormReferenceNo(e.target.value)}
+                    onChange={(e) => {
+                      setFormReferenceNo(sanitizePaymentReferenceInput(e.target.value));
+                      payFE.clearError("referenceNo");
+                    }}
                     placeholder="e.g. UPI-UTR-9918237192"
                     className={FORM_INPUT_CLS}
                   />
+                  <FormError message={payFE.errors.referenceNo} />
                 </div>
               </div>
             </div>

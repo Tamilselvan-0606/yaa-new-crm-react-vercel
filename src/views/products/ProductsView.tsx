@@ -42,7 +42,7 @@ import { Modal } from '../../components/common/Modal';
 import { CustomSelect } from '../../components/common/CustomSelect';
 import { ConfirmationModal } from '../../utils/confirmationModal';
 import { useScopeLock } from '../../hooks/useScopeLock';
-import { filterBranchesForSuite } from '../../utils/branchSuite';
+import { filterBranchesForSuite, excludeInactiveBranches } from '../../utils/branchSuite';
 import {
   alphabetsOnly,  lettersOnly,
   alphanumericUpper,
@@ -98,7 +98,7 @@ export const ProductsView: React.FC = () => {
   const [pendingStatus, setPendingStatus] = useState('ALL');
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
   // 3-dots row menu + click-to-copy contact buttons (shared hooks)
   const rowMenu = useRowActionMenu(240);
   const { copiedKey, copy: handleCopy } = useCopyToClipboard();
@@ -325,7 +325,7 @@ export const ProductsView: React.FC = () => {
       const isSaleSuite = window.location.pathname.startsWith('/sale-management') || localStorage.getItem('active_org_type_view') === 'Sales Management';
       try {
         const subRes = await subOrganizationApi.getSubOrganizations(
-          { page_no: 1, page_size: 100, pagination_required: 'false', subOrganizationType: isSaleSuite ? 2 : 1 },
+          { page_no: 1, page_size: 100, pagination_required: 'false' },
           activeOrgId || undefined
         );
         if (subRes && Array.isArray(subRes.data)) {
@@ -497,11 +497,20 @@ export const ProductsView: React.FC = () => {
     setEditingProduct(prod);
     setFormErrors({});
     setApiModalError(null);
-    const resolvedSubOrgId = prod.subOrganizationId || (prod as any).sub_organization_id || '';
+    let resolvedSubOrgId = prod.subOrganizationId || (prod as any).sub_organization_id || '';
     const resolvedBranchId = prod.branchId || (prod as any).branch_id || '';
+
+    // If sub-organization is not directly on product, infer it from the branch if available
+    if (!resolvedSubOrgId && resolvedBranchId) {
+      const matchedBranch = branches.find((b) => b.id === resolvedBranchId || (b as any).branchId === resolvedBranchId);
+      if (matchedBranch?.subOrganizationId) {
+        resolvedSubOrgId = matchedBranch.subOrganizationId;
+      }
+    }
+
     setFormData({
       organizationId: prod.organizationId || currentUser?.organizationId || getStoredOrganizationId() || '',
-      subOrganizationId: lockedSubOrgId || resolvedSubOrgId,
+      subOrganizationId: lockedSubOrgId || resolvedSubOrgId || '__PARENT_ORG__',
       branchId: lockedBranchId || resolvedBranchId,
       name: prod.name || '',
       code: prod.code || '',
@@ -537,7 +546,15 @@ export const ProductsView: React.FC = () => {
 
     try {
       setSubmitting(true);
-      const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
+      // The server checks the branch / sub-organization against the organization we send, so use the one that
+      // actually owns the selected branch (then sub-organization) rather than the logged-in user's organization.
+      const pickedBranch = branches.find((b) => b.id === formData.branchId);
+      const pickedSub = subOrganizations.find((s) => s.id === formData.subOrganizationId);
+      const activeOrgId =
+        pickedBranch?.organizationId ||
+        pickedSub?.organizationId ||
+        currentUser?.organizationId ||
+        getStoredOrganizationId();
       const payload: CreateClientProductRequest = {
         name: formData.name.trim(),
         organizationId: activeOrgId || undefined,
@@ -1007,10 +1024,40 @@ export const ProductsView: React.FC = () => {
                   type="text"
                   readOnly
                   disabled
-                  value={
-                    subOrganizations.find((s) => s.id === formData.subOrganizationId)?.name ||
-                    (loadingSubOrgs ? 'Loading...' : '')
-                  }
+                  value={(() => {
+                    const matchedSub =
+                      subOrganizations.find(
+                        (s) =>
+                          s.id === formData.subOrganizationId ||
+                          s.id === editingProduct?.subOrganizationId ||
+                          s.id === (editingProduct as any)?.sub_organization_id
+                      ) ||
+                      // check from branch
+                      (() => {
+                        const bId = formData.branchId || editingProduct?.branchId || (editingProduct as any)?.branch_id;
+                        const br = branches.find((b) => b.id === bId);
+                        return br?.subOrganizationId ? subOrganizations.find((s) => s.id === br.subOrganizationId) : null;
+                      })();
+
+                    if (matchedSub?.name) {
+                      return `${matchedSub.name}${matchedSub.code ? ` (${matchedSub.code})` : ''}`;
+                    }
+
+                    const explicitName =
+                      (editingProduct as any)?.subOrganizationName ||
+                      (editingProduct as any)?.sub_organization_name ||
+                      (editingProduct as any)?.subOrganization?.name;
+                    if (explicitName) return explicitName;
+
+                    if (
+                      formData.subOrganizationId === '__PARENT_ORG__' ||
+                      (!formData.subOrganizationId && editingProduct && !editingProduct.subOrganizationId && !(editingProduct as any).sub_organization_id)
+                    ) {
+                      return defaultOrgName ? `${defaultOrgName} (Main Organization)` : 'Main Organization';
+                    }
+
+                    return loadingSubOrgs ? 'Loading...' : (defaultOrgName ? `${defaultOrgName} (Main Organization)` : 'Main Organization');
+                  })()}
                   title="Sub-organization cannot be modified"
                   className="w-full h-11 px-4 bg-slate-100/80 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 cursor-not-allowed select-none outline-none"
                 />
@@ -1080,7 +1127,7 @@ export const ProductsView: React.FC = () => {
                 }}
                 options={
                   (() => {
-                    const filtered = filterBranchesForSuite<BranchApiItem>(branches, isSaleSuiteActive).filter((b) => {
+                    const filtered = excludeInactiveBranches(filterBranchesForSuite<BranchApiItem>(branches, isSaleSuiteActive)).filter((b) => {
                       if (!formData.subOrganizationId) return true;
                       // Main organization: only branches not attached to any sub-organization
                       if (formData.subOrganizationId === '__PARENT_ORG__') return !b.subOrganizationId;

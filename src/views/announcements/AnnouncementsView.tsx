@@ -56,7 +56,7 @@ export const AnnouncementsView: React.FC = () => {
   const [pendingAudience, setPendingAudience] = useState('ALL');
   const [appliedAudience, setAppliedAudience] = useState('ALL');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   const [viewing, setViewing] = useState<AnnouncementDetail | null>(null);
   const [opening, setOpening] = useState(false);

@@ -459,3 +459,57 @@ export const isValidHsnCode = (val?: string | null): boolean => {
   const trimmed = (val ?? "").trim();
   return trimmed.length === 0 || HSN_CODE_REGEX.test(trimmed);
 };
+
+/** Payment Reference / UTR / Cheque numbers allow letters, digits, and hyphens (-). */
+export const PAYMENT_REFERENCE_REGEX = /^[a-zA-Z0-9-]+$/;
+
+export const PAYMENT_REFERENCE_ERROR_MESSAGE =
+  "Reference number can only contain letters, numbers, and hyphens (-).";
+
+/** Strips any character other than A-Z, a-z, 0-9, and hyphen (-) from a payment reference input. */
+export const sanitizePaymentReferenceInput = (val: string): string =>
+  val.replace(/[^a-zA-Z0-9-]/g, "");
+
+/** Returns true when payment reference is empty (optional) or contains only letters, digits, and hyphens (-). */
+export const isValidPaymentReference = (val?: string | null): boolean => {
+  const trimmed = (val ?? "").trim();
+  return trimmed.length === 0 || PAYMENT_REFERENCE_REGEX.test(trimmed);
+};
+
+/** Strips special characters, keeping only letters, digits, and spaces. */
+export const sanitizeAlphanumericSpaceInput = (val: string): string =>
+  val.replace(/[^a-zA-Z0-9 ]/g, "");
+
+/** Strips digits and special characters, keeping only letters and spaces. */
+export const sanitizeAlphaSpaceInput = (val: string): string =>
+  val.replace(/[^a-zA-Z ]/g, "");
+
+/** Strips all non-digit characters (e.g. bank account numbers). */
+export const sanitizeDigitsOnlyInput = (val: string): string =>
+  val.replace(/\D/g, "");
+
+/** Strips special characters and spaces, uppercasing letters (e.g. IFSC / SWIFT). */
+export const sanitizeAlphanumericUpperInput = (val: string): string =>
+  val.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+
+/** Strips invalid characters from UPI ID input while preserving valid handle characters (. @ _ -). */
+export const sanitizeUpiIdInput = (val: string): string =>
+  val.replace(/[^a-zA-Z0-9.@_-]/g, "");
+
+/** Returns true when UPI ID is empty (optional) or matches `<handle>@<provider>`. */
+export const isValidUpiId = (val?: string | null): boolean => {
+  const trimmed = (val ?? "").trim();
+  return (
+    trimmed.length === 0 ||
+    /^[a-zA-Z0-9._-]+@[a-zA-Z0-9]+(?:[.-][a-zA-Z0-9]+)*$/.test(trimmed)
+  );
+};
+
+/** Indian IFSC (4 letters + 0 + 6 alphanumeric) or SWIFT/BIC (8 or 11 chars starting with 6 letters). */
+export const IFSC_OR_SWIFT_REGEX =
+  /^(?:[A-Z]{4}0[A-Z0-9]{6}|[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)$/;
+
+export const isValidIfscOrSwift = (val?: string | null): boolean => {
+  const trimmed = (val ?? "").trim().toUpperCase();
+  return trimmed.length > 0 && IFSC_OR_SWIFT_REGEX.test(trimmed);
+};

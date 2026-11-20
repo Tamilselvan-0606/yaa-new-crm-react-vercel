@@ -120,7 +120,9 @@ export interface Quotation {
   updatedAt?: string;
   items: {
     id: string;
+    title?: string;
     description: string;
+    subDescription?: string;
     quantity: number;
     unitPrice: number;
     discount?: number;
@@ -419,7 +421,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       items: (() => {
         const rawList = (item.items || []).map((it, idx) => ({
           id: it.id || `item_${idx}`,
+          title: it.title || '',
           description: it.title || it.description || '',
+          subDescription: (it as any).subDescription || (it.title && it.description && it.description !== it.title ? it.description : '') || '',
           quantity: Number(it.quantity) || 1,
           unitPrice: Number(it.unitPrice) || 0,
           discount: (it as any).discount || 0,
@@ -473,7 +477,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const [appliedBilledOrgId, setAppliedBilledOrgId] = useState<string>('');
 
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -1426,11 +1430,12 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
           const disc = Number(it.discount) || 0;
           const discPct = gross > 0 && disc > 0 ? parseFloat(((disc / gross) * 100).toFixed(2)) : 0;
           const saved = savedDiscounts?.[idx];
+          const subDesc = it.subDescription || (it.title && it.description !== it.title ? it.description : '') || '';
           if (saved?.type === 'percent') {
             return {
               id: it.id || `item_${Date.now()}_${idx}`,
               description: it.description || '',
-              subDescription: '',
+              subDescription: subDesc,
               hsnCode: '',
               quantity: qty,
               unitPrice: price,
@@ -1444,7 +1449,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
           return {
             id: it.id || `item_${Date.now()}_${idx}`,
             description: it.description || '',
-            subDescription: '',
+            subDescription: subDesc,
             hsnCode: '',
             quantity: qty,
             unitPrice: price,
@@ -2042,6 +2047,11 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                         </td>
                         <td className="border border-slate-200 px-3 py-3">
                           <span className="font-bold text-slate-900 block font-sans">{it.description}</span>
+                          {it.subDescription ? (
+                            <span className="text-xs text-slate-500 block font-normal mt-0.5 whitespace-pre-line font-sans">
+                              {it.subDescription}
+                            </span>
+                          ) : null}
                         </td>
                         <td className="border border-slate-200 px-2 sm:px-2.5 py-3 text-center text-slate-600 font-sans">
                           18%
@@ -3326,7 +3336,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                     items: (targetQuote.items || []).map((it, idx) => ({
                       id: it.id || `item-${idx + 1}`,
                       name: it.description || '',
-                      description: '',
+                      description: it.subDescription || '',
                       hsnCode: '998314',
                       qty: Number(it.quantity) || 1,
                       unitPrice: Number(it.unitPrice) || 0,

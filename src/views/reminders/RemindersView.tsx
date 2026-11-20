@@ -42,7 +42,7 @@ export const RemindersView: React.FC = () => {
   const [pendingCategory, setPendingCategory] = useState('ALL');
   const [appliedCategory, setAppliedCategory] = useState('ALL');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
   const [markingId, setMarkingId] = useState<string | null>(null);
   const [isMarkingAll, setIsMarkingAll] = useState(false);
 
@@ -122,7 +122,11 @@ export const RemindersView: React.FC = () => {
 
   // Filter & Search Logic
   const filteredReminders = useMemo(() => {
-    return reminders.filter((rem) => {
+    // Newest reminder first
+    const newestFirst = [...reminders].sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+    return newestFirst.filter((rem) => {
       const matchesSearch =
         !appliedSearch.trim() ||
         rem.title.toLowerCase().includes(appliedSearch.toLowerCase()) ||

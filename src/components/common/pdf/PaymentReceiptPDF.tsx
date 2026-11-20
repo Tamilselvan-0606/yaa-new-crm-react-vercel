@@ -1,6 +1,7 @@
 import React from 'react';
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer';
 import { numberToWordsIndian, pdfToday } from '../../../utils/printUtils';
+import { formatPhoneNumber } from '../../../utils/fieldValidators';
 
 export interface PaymentReceiptOptions {
   receiptNo: string;
@@ -187,7 +188,8 @@ export const PaymentReceiptPDF: React.FC<{ options: PaymentReceiptOptions }> = (
     companyEmail = '',
   } = options;
 
-  const contact = [companyGstin ? `GSTIN: ${companyGstin}` : '', companyPhone ? `Phone: ${companyPhone}` : '']
+  const formattedPhone = formatPhoneNumber(companyPhone);
+  const contact = [companyGstin ? `GSTIN: ${companyGstin}` : '', formattedPhone ? `Phone: ${formattedPhone}` : '']
     .filter(Boolean)
     .join('  |  ');
 

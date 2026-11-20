@@ -186,6 +186,11 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                           placeholder="Enter reference number"
                           className="w-full h-10 px-3 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs sm:text-[13px] font-normal text-slate-700 placeholder:text-slate-400 outline-none transition-all shadow-2xs"
                         />
+                        <FormError
+                          message={
+                            paymentFormErrors[`payment.${sIdx}.referenceNo`]
+                          }
+                        />
                       </div>
 
                       {/* Delete Row Button */}

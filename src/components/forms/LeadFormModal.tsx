@@ -8,7 +8,7 @@ import { Button } from '../common/Button';
 import { useAuth } from '../../context/AuthContext';
 import { useScopeLock } from '../../hooks/useScopeLock';
 import { useActiveOrgType } from '../../hooks/useActiveOrgType';
-import { filterBranchesForSuite } from '../../utils/branchSuite';
+import { filterBranchesForSuite, excludeInactiveBranches } from '../../utils/branchSuite';
 import { RegisteredField } from '../common/FormField';
 import { PhoneField } from '../common/PhoneField';
 import { LocationFields, LocationMeta } from '../common/LocationFields';
@@ -259,9 +259,12 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
       notes: initialLead.notes || initialLead.feedback || '',
     });
 
-    if (initialLead.organizationId) setSelectedOrgId(initialLead.organizationId);
-    if (initialLead.subOrganizationId) setSelectedSubOrgId(initialLead.subOrganizationId);
-    if (initialLead.branchId) setSelectedBranchId(initialLead.branchId);
+    const existingOrgId = initialLead.organizationId || (initialLead as any).organization_id || '';
+    const existingSubOrgId = initialLead.subOrganizationId || (initialLead as any).sub_organization_id || '';
+    const existingBranchId = initialLead.branchId || (initialLead as any).branch_id || '';
+    if (existingOrgId) setSelectedOrgId(existingOrgId);
+    if (existingSubOrgId) setSelectedSubOrgId(existingSubOrgId);
+    if (existingBranchId) setSelectedBranchId(existingBranchId);
   }, [isOpen, initialLead, reset, currentUser]);
 
   // Sub-org / branch admins are pinned to the scope from their login
@@ -363,21 +366,29 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
         effectiveOrgId
       )
       .then((res) => (Array.isArray(res?.data) ? res.data : []))
-      .then((rows: BranchApiItem[]) => filterBranchesForSuite(rows, isSaleManagement))
-      .then((list: BranchApiItem[]) =>
-        !selectedSubOrgId
-          ? list
+      .then((rows: BranchApiItem[]) => excludeInactiveBranches(filterBranchesForSuite(rows, isSaleManagement)))
+      .then((all: BranchApiItem[]) => {
+        let list = !selectedSubOrgId
+          ? all
           : selectedSubOrgId === '__PARENT_ORG__'
             ? // Main organization: only branches not attached to a sub-organization
-              list.filter((b) => !b.subOrganizationId)
-            : list.filter((b) => b.subOrganizationId === selectedSubOrgId)
-      )
+              all.filter((b) => !b.subOrganizationId)
+            : all.filter((b) => b.subOrganizationId === selectedSubOrgId);
+        const existingBranchId = (initialLead as any)?.branchId || (initialLead as any)?.branch_id;
+        if (initialLead && existingBranchId && !list.some((b) => b.id === existingBranchId)) {
+          const matchInAll = all.find((b) => b.id === existingBranchId);
+          if (matchInAll) {
+            list = [matchInAll, ...list];
+          }
+        }
+        return list;
+      })
       .catch(() => [] as BranchApiItem[])
       .then((list) => {
         if (!isMounted) return;
         setBranches(list);
         // Drop a branch that belongs to a previously selected sub-organization
-        if (!lockBranch) setSelectedBranchId((cur) => (cur && !list.some((b) => b.id === cur) ? '' : cur));
+        if (!lockBranch && !initialLead) setSelectedBranchId((cur) => (cur && !list.some((b) => b.id === cur) ? '' : cur));
         setBranchesLoadedFor(branchesKey);
         setLoadingBranches(false);
       });
@@ -427,7 +438,10 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
     };
   }, [isOpen, branchesLoadedFor, branchesKey, branches, effectiveOrgId, selectedSubOrgId, selectedBranchId]);
 
-  const productOptions = products.map((prod) => ({
+  // Inactive products cannot be chosen (the one already saved on the lead stays visible when editing).
+  const productOptions = products
+    .filter((prod) => String(prod.status ?? "Active").toLowerCase() !== "inactive" || prod.name === initialLead?.interestedProductOrService)
+    .map((prod) => ({
     value: prod.name,
     label: `${prod.name}${prod.code ? ` (${prod.code})` : ''}`,
   }));
@@ -558,11 +572,39 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
                 type="text"
                 readOnly
                 disabled
-                value={
-                  subOrganizations.find((s) => s.id === selectedSubOrgId)?.name ||
-                  initialLead?.subOrganizationName ||
-                  (loadingSubOrgs ? 'Loading...' : '')
-                }
+                value={(() => {
+                  const matchedSub =
+                    subOrganizations.find(
+                      (s) =>
+                        s.id === selectedSubOrgId ||
+                        s.id === (initialLead as any)?.subOrganizationId ||
+                        s.id === (initialLead as any)?.sub_organization_id
+                    ) ||
+                    (() => {
+                      const bId = selectedBranchId || (initialLead as any)?.branchId || (initialLead as any)?.branch_id;
+                      const br = branches.find((b) => b.id === bId);
+                      return br?.subOrganizationId ? subOrganizations.find((s) => s.id === br.subOrganizationId) : null;
+                    })();
+
+                  if (matchedSub?.name) {
+                    return `${matchedSub.name}${matchedSub.code ? ` (${matchedSub.code})` : ''}`;
+                  }
+
+                  const explicitName =
+                    initialLead?.subOrganizationName ||
+                    (initialLead as any)?.sub_organization_name ||
+                    (initialLead as any)?.subOrganization?.name;
+                  if (explicitName) return explicitName;
+
+                  if (
+                    selectedSubOrgId === '__PARENT_ORG__' ||
+                    (!selectedSubOrgId && initialLead && !(initialLead as any).subOrganizationId && !(initialLead as any).sub_organization_id)
+                  ) {
+                    return selectedOrgName ? `${selectedOrgName} (Main Organization)` : 'Main Organization';
+                  }
+
+                  return loadingSubOrgs ? 'Loading...' : (selectedOrgName ? `${selectedOrgName} (Main Organization)` : 'Main Organization');
+                })()}
                 title="Sub-organization cannot be modified"
                 className={`${inputClass} bg-slate-100/80 cursor-not-allowed text-slate-600 font-semibold`}
               />
@@ -646,17 +688,24 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
                 if (formErrors.branch) setFormErrors((prev) => ({ ...prev, branch: '' }));
               }}
               options={
-                branches.length > 0 || (selectedBranchId && initialLead?.branchName)
-                  ? [
-                      ...branches,
-                      ...(selectedBranchId && initialLead?.branchName && !branches.some((x) => x.id === selectedBranchId)
-                        ? [{ id: selectedBranchId, name: initialLead.branchName, location: '' } as any]
-                        : []),
-                    ].map((b) => ({
-                      value: b.id,
-                      label: `${b.name}${(b as any).code ? ` (${(b as any).code})` : ''}`,
-                    }))
-                  : [{ value: '', label: loadingBranches ? 'Loading branches...' : 'No branches found' }]
+                (() => {
+                  const existingName =
+                    initialLead?.branchName ||
+                    (initialLead as any)?.branch?.name ||
+                    (initialLead as any)?.branch_name;
+                  const combined = [
+                    ...branches,
+                    ...(selectedBranchId && !branches.some((x) => x.id === selectedBranchId)
+                      ? [{ id: selectedBranchId, name: existingName || 'Current Branch', location: '' } as any]
+                      : []),
+                  ];
+                  return combined.length > 0
+                    ? combined.map((b) => ({
+                        value: b.id,
+                        label: `${b.name}${(b as any).code ? ` (${(b as any).code})` : ''}`,
+                      }))
+                    : [{ value: '', label: loadingBranches ? 'Loading branches...' : 'No branches found' }];
+                })()
               }
               optionVariant="strong"
               placeholder={loadingBranches ? 'Loading branches...' : 'Select Branch'}
