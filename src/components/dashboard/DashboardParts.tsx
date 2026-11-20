@@ -192,17 +192,24 @@ export interface QuickAction {
   desc: string;
   icon: React.ComponentType<{ className?: string }>;
   cls: string;
-  to: string;
+  to?: string;
+  onClick?: () => void;
 }
 
 export const QuickActions: React.FC<{ actions: QuickAction[]; onGo: (to: string) => void }> = ({ actions, onGo }) => (
   <section>
     <SectionTitle>Quick Actions</SectionTitle>
     <div className={`grid grid-cols-1 sm:grid-cols-2 ${actions.length >= 4 ? 'xl:grid-cols-4' : 'xl:grid-cols-3'} gap-4`}>
-      {actions.map(({ title, desc, icon: Icon, cls, to }) => (
+      {actions.map(({ title, desc, icon: Icon, cls, to, onClick }) => (
         <div
           key={title}
-          onClick={() => onGo(to)}
+          onClick={() => {
+            if (onClick) {
+              onClick();
+            } else if (to) {
+              onGo(to);
+            }
+          }}
           className="bg-white rounded-xl border border-slate-200 shadow-2xs p-5 cursor-pointer hover:shadow-md transition-shadow"
         >
           <div className="flex items-center gap-3">

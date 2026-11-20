@@ -93,16 +93,20 @@ const formatDateDMY = (dateStr?: string | null): string => {
 interface LeadsViewProps {
   initialCreateOpen?: boolean;
   onCloseInitialCreate?: () => void;
+  initialViewMode?: "leads" | "clients";
+  initialCreateClientOpen?: boolean;
 }
 
 export const LeadsView: React.FC<LeadsViewProps> = ({
   initialCreateOpen = false,
   onCloseInitialCreate,
+  initialViewMode,
+  initialCreateClientOpen = false,
 }) => {
   // Page Navigation State: 'leads' | 'clients'
-  const [viewMode, setViewMode] = useState<"leads" | "clients">("leads");
+  const [viewMode, setViewMode] = useState<"leads" | "clients">(initialViewMode || "leads");
 
-  const [isAddClientOpen, setIsAddClientOpen] = useState(false);
+  const [isAddClientOpen, setIsAddClientOpen] = useState(initialCreateClientOpen);
   const [isAddLeadOpen, setIsAddLeadOpen] = useState(initialCreateOpen);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
@@ -365,6 +369,19 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       setIsAddLeadOpen(true);
     }
   }, [initialCreateOpen]);
+
+  useEffect(() => {
+    if (initialCreateClientOpen) {
+      setViewMode("clients");
+      setIsAddClientOpen(true);
+    }
+  }, [initialCreateClientOpen]);
+
+  useEffect(() => {
+    if (initialViewMode) {
+      setViewMode(initialViewMode);
+    }
+  }, [initialViewMode]);
 
   const handleEditLead = (lead: Lead) => {
     setEditingLead(lead);

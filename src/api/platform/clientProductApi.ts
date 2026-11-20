@@ -27,20 +27,28 @@ export const clientProductEndpoints = baseApi.injectEndpoints({
         if (p.status && p.status !== 'All' && p.status !== 'ALL') queryParams.status = p.status;
         if (p.sortBy) queryParams.sortBy = p.sortBy;
         if (p.sortOrder) queryParams.sortOrder = p.sortOrder;
-        if (p.organizationId) queryParams.organizationId = p.organizationId;
+        if (p.organizationId) {
+          queryParams.organizationId = p.organizationId;
+          queryParams.organization_id = p.organizationId;
+        }
         const subId = p.subOrganizationId || p.sub_organization_id;
         if (subId) {
           queryParams.subOrganizationId = subId;
+          queryParams.sub_organization_id = subId;
         }
         const bId = p.branchId || p.branch_id;
         if (bId) {
           queryParams.branchId = bId;
+          queryParams.branch_id = bId;
         }
 
         const activeOrgId = p.xOrganizationId || getStoredOrganizationId();
         const headers: Record<string, string> = {};
         if (activeOrgId) {
           headers['x-organization-id'] = activeOrgId;
+          if (!queryParams.organizationId && !queryParams.organization_id) {
+            queryParams.organization_id = activeOrgId;
+          }
         }
 
         return {
@@ -238,21 +246,60 @@ export const clientProductApi = {
     if (params?.status && params.status !== 'All' && params.status !== 'ALL') queryParams.status = params.status;
     if (params?.sortBy) queryParams.sortBy = params.sortBy;
     if (params?.sortOrder) queryParams.sortOrder = params.sortOrder;
-    if (params?.organizationId) queryParams.organizationId = params.organizationId;
+    if (params?.organizationId) {
+      queryParams.organizationId = params.organizationId;
+      queryParams.organization_id = params.organizationId;
+    } else if (activeOrgId) {
+      queryParams.organization_id = activeOrgId;
+    }
     const subId = params?.subOrganizationId || params?.sub_organization_id;
     if (subId) {
       queryParams.subOrganizationId = subId;
+      queryParams.sub_organization_id = subId;
     }
     const bId = params?.branchId || params?.branch_id;
     if (bId) {
       queryParams.branchId = bId;
+      queryParams.branch_id = bId;
     }
 
-    const response = await baseClient.get<ClientProductListResponse>('/products', {
-      params: queryParams,
-      headers,
-    });
-    return response.data;
+    try {
+      const response = await baseClient.get<ClientProductListResponse>('/products', {
+        params: queryParams,
+        headers,
+      });
+      return response.data;
+    } catch (err: any) {
+      // Check multiple formats where error information is stored (err.response, err.data, err.status, err.message)
+      const errStatus = err?.response?.status ?? err?.status;
+      const errData = err?.response?.data ?? err?.data;
+      const errCode = errData?.error?.code ?? errData?.code;
+      const errMsg = errData?.error?.message ?? errData?.message ?? err?.message ?? '';
+
+      const isInvalidBranch =
+        (errStatus === 422 || errStatus === 400) &&
+        (errCode === 'INVALID_BRANCH' || /branch/i.test(errMsg) || /branch.*belong/i.test(errMsg));
+
+      if (isInvalidBranch) {
+        console.warn('clientProductApi.getProducts: branch does not belong to current organization scope, removing branchId filter and retrying');
+        // Clear stale branch id from localStorage so subsequent component calls don't repeat the error
+        try {
+          localStorage.setItem('active_branch', 'All');
+          localStorage.removeItem('active_branch_id');
+          localStorage.removeItem('active_branch_id_sales');
+        } catch {}
+
+        const fallbackParams = { ...queryParams };
+        delete fallbackParams.branchId;
+        delete fallbackParams.branch_id;
+        const response = await baseClient.get<ClientProductListResponse>('/products', {
+          params: fallbackParams,
+          headers,
+        });
+        return response.data;
+      }
+      throw err;
+    }
   },
 
   /**

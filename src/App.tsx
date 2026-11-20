@@ -81,6 +81,7 @@ const MainLayout: React.FC = () => {
 
   // Quick Action Modal States
   const [quickLeadOpen, setQuickLeadOpen] = useState(false);
+  const [quickClientOpen, setQuickClientOpen] = useState(false);
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
   const [quickContentOpen, setQuickContentOpen] = useState(false);
 
@@ -154,6 +155,7 @@ const MainLayout: React.FC = () => {
                 element={
                   <DashboardView
                     onOpenAddLead={() => setQuickLeadOpen(true)}
+                    onOpenAddClient={() => setQuickClientOpen(true)}
                     onOpenCreateTask={() => setQuickTaskOpen(true)}
                     onOpenCreateContent={() => setQuickContentOpen(true)}
                   />
@@ -171,7 +173,11 @@ const MainLayout: React.FC = () => {
                 element={
                   <LeadsView
                     initialCreateOpen={quickLeadOpen}
-                    onCloseInitialCreate={() => setQuickLeadOpen(false)}
+                    initialCreateClientOpen={quickClientOpen}
+                    onCloseInitialCreate={() => {
+                      setQuickLeadOpen(false);
+                      setQuickClientOpen(false);
+                    }}
                   />
                 }
               />

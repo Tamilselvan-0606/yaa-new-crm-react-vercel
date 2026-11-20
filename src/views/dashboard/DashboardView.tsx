@@ -15,6 +15,7 @@ interface DashboardViewProps {
   onNavigateTab?: (tab: string) => void;
   onOpenQuickModal?: (modalType: 'lead' | 'task' | 'content' | 'onboarding') => void;
   onOpenAddLead?: () => void;
+  onOpenAddClient?: () => void;
   onOpenCreateTask?: () => void;
   onOpenCreateContent?: () => void;
 }
@@ -23,6 +24,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onNavigateTab,
   onOpenQuickModal,
   onOpenAddLead,
+  onOpenAddClient,
   onOpenCreateTask,
   onOpenCreateContent,
 }) => {
@@ -52,7 +54,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   if (isAdmin && !isSuperAdmin) {
     if (isBranchAdmin) return <BranchAdminDashboardView />;
     if (isSubOrgAdminLocked) return <SubOrgAdminDashboardView />;
-    return <OrgAdminDashboardView />;
+    return <OrgAdminDashboardView onOpenAddClient={onOpenAddClient} />;
   }
 
 

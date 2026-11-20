@@ -262,18 +262,33 @@ export const ProductsView: React.FC = () => {
       });
       setLeadCountsByProduct(lCounts);
 
-      if (res && res.success) {
-        let items = res.data || [];
+      if (res && (res.success || Array.isArray(res.data) || Array.isArray((res as any)?.items))) {
+        let rawItems: any[] = [];
+        if (Array.isArray(res.data)) {
+          rawItems = res.data;
+        } else if (Array.isArray((res as any)?.items)) {
+          rawItems = (res as any).items;
+        } else if (Array.isArray(res)) {
+          rawItems = res as any;
+        }
+
+        let items = rawItems;
         if (activeProduct && activeProduct !== 'All') {
-          items = items.filter(
+          const filtered = items.filter(
             (p) =>
               (p.name || '').trim().toLowerCase() === activeProduct.trim().toLowerCase() ||
               (p.code || '').trim().toLowerCase() === activeProduct.trim().toLowerCase()
           );
+          // If the filter matched nothing (e.g. stale header product name), don't blank out all products
+          if (filtered.length > 0) {
+            items = filtered;
+          }
         }
         setProducts(items);
-        const total = (activeProduct && activeProduct !== 'All') ? items.length : (res.pagination?.totalRecords ?? items.length);
-        setTotalProducts(total);
+        const total = (activeProduct && activeProduct !== 'All' && items.length < rawItems.length)
+          ? items.length
+          : (res.pagination?.totalRecords ?? (res as any)?.total ?? rawItems.length);
+        setTotalProducts(items.length === 0 ? 0 : total);
       } else {
         setProducts([]);
         setTotalProducts(0);

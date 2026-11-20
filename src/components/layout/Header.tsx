@@ -662,6 +662,13 @@ export const Header: React.FC<HeaderProps> = ({
     setSelectedBranch('All');
     setSelectedProduct('All');
     setIsSubOrgDropdownOpen(false);
+    // Clear branch IDs immediately from localStorage so other tabs don't query mismatched branch + sub-org
+    localStorage.setItem('active_branch', 'All');
+    localStorage.removeItem('active_branch_id');
+    if (isSalesMode) {
+      localStorage.setItem('active_branch_sales', 'All');
+      localStorage.removeItem('active_branch_id_sales');
+    }
   };
 
   const handleSelectBranch = (branchName: string) => {

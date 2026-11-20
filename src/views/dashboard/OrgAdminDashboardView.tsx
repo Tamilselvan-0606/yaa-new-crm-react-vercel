@@ -28,7 +28,11 @@ const ZERO_TOTALS = { total: 0, active: 0 };
 const ZERO_FUNNEL = { open: 0, contacted: 0, qualified: 0, converted: 0, lost: 0 };
 const ZERO_QI = { monthly: [], totals: { quotes: 0, accepted: 0, invoices: 0, invoiced: 0, outstanding: 0 } };
 
-export const OrgAdminDashboardView: React.FC = () => {
+interface OrgAdminDashboardViewProps {
+  onOpenAddClient?: () => void;
+}
+
+export const OrgAdminDashboardView: React.FC<OrgAdminDashboardViewProps> = ({ onOpenAddClient }) => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
   const { orgId, subOrgId, branchId, subOrgName, branchName } = useDashboardScope();
@@ -181,10 +185,24 @@ export const OrgAdminDashboardView: React.FC = () => {
       <QuickActions
         onGo={navigate}
         actions={[
-          { title: 'Add Sub Organization', desc: 'Create a new sub-organization', icon: Building2, cls: 'bg-[#EDE7F9] text-[#4309A2]', to: '/organization' },
-          { title: 'Add Branch', desc: 'Register a new branch', icon: GitBranch, cls: 'bg-[#33077C] text-white', to: '/branches' },
-          { title: 'Add Product', desc: 'Set up a new product', icon: Package, cls: 'bg-[#7C4DDB] text-white', to: '/products' },
-          { title: 'Add Lead', desc: 'Capture a new sales lead', icon: UserPlus, cls: 'bg-[#A78BEA] text-white', to: '/leads' },
+          { title: 'Add Branch', desc: 'Register a new branch', icon: GitBranch, cls: 'bg-[#EDE7F9] text-[#4309A2]', to: '/branches' },
+          { title: 'Add Product', desc: 'Set up a new product', icon: Package, cls: 'bg-[#33077C] text-white', to: '/products' },
+          { title: 'Add Lead', desc: 'Capture a new sales lead', icon: UserPlus, cls: 'bg-[#7C4DDB] text-white', to: '/leads' },
+          {
+            title: 'Add Client',
+            desc: 'Register a new client profile',
+            icon: Users,
+            cls: 'bg-[#A78BEA] text-white',
+            to: '/leads',
+            onClick: () => {
+              if (onOpenAddClient) {
+                navigate('/leads');
+                onOpenAddClient();
+              } else {
+                navigate('/leads');
+              }
+            },
+          },
         ]}
       />
 
