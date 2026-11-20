@@ -2441,14 +2441,14 @@ export const PurchaseRequestView: React.FC = () => {
             facts={[
               { label: "Request Date", value: historyRequest.requestDate ? formatDate(historyRequest.requestDate) : "" },
               { label: "Required By", value: historyRequest.requiredDate ? formatDate(historyRequest.requiredDate) : "" },
-              { label: "Items", value: `${historyRequest.items?.length || 0} material(s)` },
+              { label: "Items", value: `${historyRequest.items?.length || 0} item(s)` },
             ]}
             events={[
               {
                 title: "Purchase Requisition Raised",
                 at: historyRequest.createdAt || historyRequest.requestDate,
                 tone: "primary",
-                description: `${historyRequest.items?.length || 0} material(s) requested for ${historyRequest.department}.`,
+                description: `${historyRequest.items?.length || 0} item(s) requested for ${historyRequest.department}.`,
                 details: [
                   { label: "Request Date", value: historyRequest.requestDate ? formatDate(historyRequest.requestDate) : "" },
                   { label: "Required By", value: historyRequest.requiredDate ? formatDate(historyRequest.requiredDate) : "" },

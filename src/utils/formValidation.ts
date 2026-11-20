@@ -734,3 +734,16 @@ export const getApiErrorMessage = (err: any, fallback = 'Something went wrong. P
   }
   return fallback;
 };
+
+/** `later` must be strictly after `earlier` (the same day is not allowed), e.g. expiry date vs manufacturing date. */
+export const checkDateAfter = (
+  later: string | null | undefined,
+  earlier: string | null | undefined,
+  laterLabel: string,
+  earlierLabel: string,
+): string | null => {
+  const a = toTime(later);
+  const b = toTime(earlier);
+  if (a === null || b === null) return null;
+  return a <= b ? `The ${lower(laterLabel)} must be after the ${lower(earlierLabel)}.` : null;
+};

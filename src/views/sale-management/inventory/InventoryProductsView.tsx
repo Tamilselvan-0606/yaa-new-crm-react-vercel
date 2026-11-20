@@ -102,6 +102,7 @@ import {
   checkPercent,
   checkNumber,
   checkDateNotBefore,
+  checkDateAfter,
   extractApiFieldErrors,
   getApiErrorMessage,
 } from "../../../utils/formValidation";
@@ -2076,7 +2077,7 @@ export const InventoryProductsView: React.FC = () => {
       ],
       [
         "expDate",
-        checkDateNotBefore(
+        checkDateAfter(
           data.expDate,
           data.mfgDate,
           "expiry date",

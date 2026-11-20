@@ -32,6 +32,7 @@ import { Button } from "../../../components/common/Button";
 import { Pagination } from "../../../components/common/Pagination";
 import { Modal } from "../../../components/common/Modal";
 import { CustomSelect } from "../../../components/common/CustomSelect";
+import { SearchableDropdown } from "./SearchableDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import { useStatusConfirm } from "../utils/useStatusConfirm";
@@ -1160,7 +1161,7 @@ export const SubcategoryView: React.FC = () => {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
               <div className="flex flex-col">
                 <FormLabel required>Category</FormLabel>
-                <CustomSelect
+                <SearchableDropdown
                   options={
                     watchCategory &&
                     !categoryOptions.some((o) => o.value === watchCategory)
@@ -1174,8 +1175,9 @@ export const SubcategoryView: React.FC = () => {
                   onChange={(val) =>
                     setValue("category", val, { shouldValidate: isSubmitted })
                   }
-                  placeholder="Select category"
-                  activeColor="brand"
+                  placeholder="Select Category"
+                  searchPlaceholder="Search Category..."
+                  error={errors.category?.message}
                 />
                 <FormError message={errors.category?.message} showIcon />
               </div>

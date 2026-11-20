@@ -83,6 +83,7 @@ import {
   checkNumber,
   checkMoney,
   checkDateNotBefore,
+  checkDateAfter,
   extractApiFieldErrors,
   getApiErrorMessage,
 } from "../../../utils/formValidation";
@@ -882,7 +883,7 @@ export const StocksView: React.FC = () => {
     if (adjustType === "add" && batchMode === "new") {
       checks.push(
         ["newBatchNo", checkRequiredText(newBatchNo, "batch number")],
-        ["expDate", checkDateNotBefore(batchExpDate, batchMfgDate, "expiry date", "manufacturing date")],
+        ["expDate", checkDateAfter(batchExpDate, batchMfgDate, "expiry date", "manufacturing date")],
       );
     }
     return collectErrors(checks);

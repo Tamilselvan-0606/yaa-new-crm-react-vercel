@@ -3,7 +3,9 @@ import { useForm } from 'react-hook-form';
 import { Check, X, Loader2, AlertCircle } from 'lucide-react';
 import { toast } from "../../../utils/toast";
 import { Modal } from '../../../components/common/Modal';
-import { CustomSelect } from '../../../components/common/CustomSelect';
+import { CustomSelect } from "../../../components/common/CustomSelect";
+import { SearchableDropdown } from "./SearchableDropdown";
+import { AddCategoryModal } from "./AddCategoryModal";
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS } from '../utils/formUtils';
 import { subcategoryApi, ApiSubcategory, categoryApi } from '../../../api';
 import { store } from '../../../store/store';
@@ -36,6 +38,7 @@ export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
 }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [liveCategoryOptions, setLiveCategoryOptions] = useState<{ label: string; value: string }[]>([]);
+  const [isAddCategoryOpen, setIsAddCategoryOpen] = useState(false);
   const { runOnce } = useSubmitGuard();
 
   const {
@@ -205,12 +208,15 @@ export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
           <div className="flex flex-col">
             <FormLabel required>Category</FormLabel>
-            <CustomSelect
+            <SearchableDropdown
               options={liveCategoryOptions}
               value={watchCategory}
-              onChange={(val) => setValue('category', val, { shouldValidate: isSubmitted })}
-              placeholder="Select category"
-              activeColor="brand"
+              onChange={(val) => setValue("category", val, { shouldValidate: isSubmitted })}
+              placeholder="Select Category"
+              searchPlaceholder="Search Category..."
+              addNewButtonLabel="+ Add New Category"
+              onAddNew={() => setIsAddCategoryOpen(true)}
+              error={errors.category?.message}
               disabled={isSubmitting}
             />
             {errors.category && (
@@ -292,6 +298,17 @@ export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
           </button>
         </div>
       </form>
+      {isAddCategoryOpen && (
+        <AddCategoryModal
+          isOpen={isAddCategoryOpen}
+          onClose={() => setIsAddCategoryOpen(false)}
+          onCategoryCreated={(created: any) => {
+            const name = created?.name || created?.categoryName || "";
+            if (name) setValue("category", name, { shouldValidate: isSubmitted });
+            loadCategories();
+          }}
+        />
+      )}
     </Modal>
   );
 };
