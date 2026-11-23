@@ -121,6 +121,8 @@ interface ReturnFormValidationInput {
   /** Quantity of a product already returned against the chosen purchase bill (excluding this return). */
   alreadyReturned: (productId: string, productName: string) => number;
   totalReturnAmount: number;
+  /** True when an existing return is being edited (the bill balance may already account for it). */
+  isEditing?: boolean;
 }
 
 /** Validates the whole purchase return form. Returns `fieldKey -> message` (empty when valid). */
@@ -137,6 +139,7 @@ const validatePurchaseReturnForm = (f: ReturnFormValidationInput): FieldErrors =
       ['returnDate', checkRequiredDate(f.returnDate, 'return date')],
     ]),
   );
+  if (!f.purchaseSelected) errors.purchaseId = 'Please select a purchase order.';
   if (errors.returnDate === undefined && f.purchase) {
     const e = checkDateNotBefore(f.returnDate, f.purchase.purchaseDate, 'return date', 'purchase date');
     if (e) errors.returnDate = e;
@@ -211,6 +214,11 @@ const validatePurchaseReturnForm = (f: ReturnFormValidationInput): FieldErrors =
       errors.total = totalErr;
     } else if (f.purchase && billTotal > 0 && f.totalReturnAmount > billTotal + 0.005) {
       errors.total = `The return amount cannot exceed the purchase bill total of ${fmtInrReturn(billTotal)}.`;
+    } else if (f.purchase && !f.isEditing && f.purchase.balance !== undefined && f.purchase.balance !== null) {
+      const outstanding = Math.max(0, Number(f.purchase.balance) || 0);
+      if (f.totalReturnAmount > outstanding + 0.005) {
+        errors.total = `You can return items worth up to ${fmtInrReturn(outstanding)} for this bill. Please reduce the return quantity.`;
+      }
     }
   }
 
@@ -1034,6 +1042,7 @@ export const PurchaseReturnView: React.FC = () => {
       purchaseSelected,
       alreadyReturned: getAlreadyReturnedQty,
       totalReturnAmount: totalCalculatedReturnAmount,
+      isEditing: !!editingReturn,
     });
 
   // After the first Save attempt keep errors in sync with the values (cleared only when valid).
@@ -1055,7 +1064,12 @@ export const PurchaseReturnView: React.FC = () => {
   const performSubmitReturn = async () => {
     // Validate EVERYTHING first. Nothing below (API call, stock outward, PO status patch,
     // list refresh, modal close) runs unless the form is valid.
-    if (!retErr.validateAll(computeReturnErrors())) {
+    const formErrors = computeReturnErrors();
+    if (!retErr.validateAll(formErrors)) {
+      // The balance problem is the one users need to hear about even if they cannot see the field.
+      if (formErrors.total && /can return items worth/i.test(formErrors.total)) {
+        toast.error(formErrors.total);
+      }
       return;
     }
 
@@ -1208,6 +1222,9 @@ export const PurchaseReturnView: React.FC = () => {
             throw new Error('No data returned from create API');
           }
         } catch (apiErr: any) {
+          // The server answered and rejected the return (e.g. INSUFFICIENT_BATCH_STOCK): show the message
+          // and keep the form open instead of saving a local-only copy.
+          if (apiErr?.response) throw apiErr;
           console.warn('API create failed, saving to local store:', apiErr);
           const generatedNo = '';
           newReturn = {
@@ -1252,6 +1269,7 @@ export const PurchaseReturnView: React.FC = () => {
               outwardCount++;
             } catch (stkErr) {
               console.warn('API Stock outward return warning:', stkErr);
+              toast.error(getApiErrorMessage(stkErr, 'We could not deduct stock for this return.'));
             }
           }
           if (outwardCount > 0) {
@@ -1356,6 +1374,7 @@ export const PurchaseReturnView: React.FC = () => {
             outwardCount++;
           } catch (stkErr) {
             console.warn('API Stock outward return warning:', stkErr);
+            toast.error(getApiErrorMessage(stkErr, 'We could not deduct stock for this return.'));
           }
         }
         if (outwardCount > 0) {
@@ -1820,21 +1839,6 @@ export const PurchaseReturnView: React.FC = () => {
                 { label: 'Cancelled', value: 'Cancelled', dotColor: '#94a3b8' },
               ]}
             />
-
-            <FilterDropdown
-              placeholder="Refund : All"
-              value={pendingRefundStatus}
-              onChange={(val) => {
-                setPendingRefundStatus(val);
-              }}
-              options={[
-                { label: 'Refund : All', value: 'All' },
-                { label: 'Supplier Credit', value: 'Supplier Credit', dotColor: '#8b5cf6' },
-                { label: 'Refunded', value: 'Refunded', dotColor: '#10b981' },
-                { label: 'Pending', value: 'Pending', dotColor: '#f59e0b' },
-                { label: 'Adjusted', value: 'Adjusted', dotColor: '#3b82f6' },
-              ]}
-            />
           </div>
         }
         rightSlot={
@@ -1918,9 +1922,6 @@ export const PurchaseReturnView: React.FC = () => {
                     {/* 3. Supplier */}
                     <td className="py-4 px-5 border border-slate-200">
                       <div className="font-bold text-slate-900 leading-snug">{pret.supplierName || '—'}</div>
-                      <div className="text-xs text-slate-500 mt-0.5 font-medium">
-                        Refund: <span className="font-semibold text-purple-800">{pret.refundStatus || 'Supplier Credit'}</span>
-                      </div>
                     </td>
 
                     {/* 4. Items */}
@@ -2149,19 +2150,21 @@ export const PurchaseReturnView: React.FC = () => {
 
             {/* Purchase Order Selection */}
             <div>
-              <FormLabel>Purchase Order</FormLabel>
+              <FormLabel required>Purchase Order</FormLabel>
               <select
                 value={selectedPurchaseId}
                 onChange={(e) => handleSelectPurchase(e.target.value)}
                 className={FORM_SELECT_CLS}
+                {...fieldAttr('purchaseId')}
               >
-                <option value="">-- Choose Existing PO (Optional) --</option>
+                <option value="">-- Choose Purchase Order --</option>
                 {purchases.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.purchaseNo} ({p.supplierName})
                   </option>
                 ))}
               </select>
+              <FormError message={retErr.errors.purchaseId} />
             </div>
 
             {/* PO Reference (Manual if not selected) */}
@@ -2219,36 +2222,20 @@ export const PurchaseReturnView: React.FC = () => {
             </div>
           </div>
 
-          {/* Refund Status & Return Status Row */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-            <div>
-              <FormLabel>Refund Method / Status</FormLabel>
-              <select
-                value={refundStatus}
-                onChange={(e) => setRefundStatus(e.target.value as RefundStatusType)}
-                className={FORM_SELECT_CLS}
-              >
-                <option value="Supplier Credit">Supplier Credit (Debit Note Adjustment)</option>
-                <option value="Refunded">Refunded (Bank / Cash Refund Received)</option>
-                <option value="Pending">Pending Refund</option>
-                <option value="Adjusted">Adjusted in Ledger</option>
-              </select>
-            </div>
-
-            <div>
-              <FormLabel>Return Status</FormLabel>
-              <select
-                value={returnStatus}
-                onChange={(e) => setReturnStatus(e.target.value)}
-                className={FORM_SELECT_CLS}
-              >
-                <option value="Requested">Requested (Review Needed)</option>
-                <option value="Approved">Approved (Awaiting Dispatch)</option>
-                <option value="Dispatched">Dispatched to Vendor</option>
-                <option value="Completed">Completed (Debit Note Settled)</option>
-                <option value="Cancelled">Cancelled</option>
-              </select>
-            </div>
+          {/* Return Status */}
+          <div className="pt-1">
+            <FormLabel>Return Status</FormLabel>
+            <select
+              value={returnStatus}
+              onChange={(e) => setReturnStatus(e.target.value)}
+              className={FORM_SELECT_CLS}
+            >
+              <option value="Requested">Requested (Review Needed)</option>
+              <option value="Approved">Approved (Awaiting Dispatch)</option>
+              <option value="Dispatched">Dispatched to Vendor</option>
+              <option value="Completed">Completed (Debit Note Settled)</option>
+              <option value="Cancelled">Cancelled</option>
+            </select>
           </div>
 
           {/* Product Return Items Table */}
@@ -2258,14 +2245,6 @@ export const PurchaseReturnView: React.FC = () => {
                 <PackageCheck className="w-4 h-4 text-[#33077C]" />
                 Return Line Items & Quantities
               </span>
-              <button
-                type="button"
-                onClick={handleAddReturnItem}
-                className="px-3 py-1.5 bg-white hover:bg-slate-100 text-[#33077C] border border-slate-200 rounded-lg text-xs font-bold transition-all shadow-2xs flex items-center gap-1 cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Item</span>
-              </button>
             </div>
 
             <div className="overflow-x-auto max-w-full">
@@ -2426,10 +2405,6 @@ export const PurchaseReturnView: React.FC = () => {
                 </tbody>
               </table>
             </div>
-          </div>
-
-          <div {...fieldAttr('items')} className="!mt-1">
-            <FormError message={retErr.errors.items} showIcon />
           </div>
 
           {/* Total Summary Banner */}

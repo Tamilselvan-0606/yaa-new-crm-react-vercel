@@ -286,11 +286,11 @@ export const ActionIconBadge: React.FC<{ variant: ActionVariant }> = ({ variant 
 export const SaleActionDropdown: React.FC<SaleActionDropdownProps> = ({
   items,
   title = 'Actions',
-  dropdownWidth = 'w-52',
+  dropdownWidth = 'w-60',
   className = '',
 }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number; maxHeight?: number } | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -320,20 +320,27 @@ export const SaleActionDropdown: React.FC<SaleActionDropdownProps> = ({
     if (!buttonRef.current) return;
 
     const rect = buttonRef.current.getBoundingClientRect();
-    const spaceBelow = window.innerHeight - rect.bottom;
-    const estimatedHeight = Math.min(validItems.length * 44 + 24, 380);
-    const maxRight = Math.max(8, window.innerWidth - 224);
+    const MARGIN = 8;
+    const spaceBelow = window.innerHeight - rect.bottom - MARGIN - 6;
+    const spaceAbove = rect.top - MARGIN - 6;
+    // Real item height is ~42px (+ divider and padding); do not underestimate or the last items get cut off.
+    const estimatedHeight = validItems.length * 44 + 28;
+    const maxRight = Math.max(8, window.innerWidth - 264);
     const rightPos = Math.min(Math.max(8, window.innerWidth - rect.right), maxRight);
 
-    if (spaceBelow < estimatedHeight && rect.top > estimatedHeight) {
+    // Open on the side that fits the whole menu; otherwise the side with more room, scrolling inside the menu.
+    const openUp = spaceBelow < estimatedHeight && spaceAbove > spaceBelow;
+    if (openUp) {
       setDropdownPos({
         bottom: window.innerHeight - rect.top + 6,
         right: rightPos,
+        maxHeight: Math.max(120, spaceAbove),
       });
     } else {
       setDropdownPos({
         top: rect.bottom + 6,
         right: rightPos,
+        maxHeight: Math.max(120, spaceBelow),
       });
     }
 
@@ -405,6 +412,7 @@ export const SaleActionDropdown: React.FC<SaleActionDropdownProps> = ({
               top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : undefined,
               bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : undefined,
               right: `${dropdownPos.right}px`,
+              maxHeight: dropdownPos.maxHeight !== undefined ? `${dropdownPos.maxHeight}px` : undefined,
             }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -448,7 +456,7 @@ export const SaleActionDropdown: React.FC<SaleActionDropdownProps> = ({
                     >
                       {config.icon}
                     </span>
-                    <span className="truncate">{item.label}</span>
+                    <span className="truncate" title={item.label}>{item.label}</span>
                   </button>
                 </React.Fragment>
               );

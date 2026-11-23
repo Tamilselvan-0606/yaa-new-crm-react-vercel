@@ -37,7 +37,48 @@ export const ProductBulkUploadModal: React.FC<Props> = ({ isOpen, onClose, onUpl
     onClose();
   };
 
-  const pick = (f: File | undefined | null) => {
+  /** Returns an error message if any row has a percentage discount above 100, otherwise ''. */
+  const findPercentageError = async (f: File): Promise<string> => {
+    try {
+      const { default: ExcelJS } = await import('exceljs');
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(await f.arrayBuffer());
+      const ws = wb.worksheets[0];
+      if (!ws) return '';
+      const cols: Record<string, number> = {};
+      ws.getRow(1).eachCell((cell, n) => { cols[String(cell.value ?? '').trim()] = n; });
+      const rows = (list: number[]) => list.slice(0, 10).join(', ') + (list.length > 10 ? ` and ${list.length - 10} more` : '');
+      const pctBad: number[] = [];
+      const yesNoBad: Record<string, number[]> = { hasWholesale: [], isBatchTracking: [] };
+      ws.eachRow((row, rowNum) => {
+        if (rowNum === 1) return;
+        if (cols.discountValue) {
+          const raw = row.getCell(cols.discountValue).value;
+          const val = typeof raw === 'object' && raw !== null && 'result' in raw ? (raw as any).result : raw;
+          const num = typeof val === 'number' ? val : parseFloat(String(val ?? '').replace('%', ''));
+          const type = cols.discountType ? String(row.getCell(cols.discountType).value ?? '').trim().toLowerCase() : 'percentage';
+          if (!Number.isNaN(num) && num > 100 && (type === '' || type.startsWith('percent') || type === '%')) pctBad.push(rowNum);
+        }
+        Object.keys(yesNoBad).forEach((key) => {
+          if (!cols[key]) return;
+          const v = row.getCell(cols[key]).value;
+          if (v === null || v === undefined || String(v).trim() === '') return;
+          const t = String(v).trim().toLowerCase();
+          if (t !== 'yes' && t !== 'no') yesNoBad[key].push(rowNum);
+        });
+      });
+      const msgs: string[] = [];
+      if (pctBad.length) msgs.push(`Percentage discountValue cannot be more than 100 (row ${rows(pctBad)}).`);
+      Object.entries(yesNoBad).forEach(([key, list]) => {
+        if (list.length) msgs.push(`${key} must be Yes or No (row ${rows(list)}).`);
+      });
+      return msgs.length ? `${msgs.join(' ')} Please correct the file and upload again.` : '';
+    } catch {
+      return ''; // unreadable here: let the server validate it
+    }
+  };
+
+  const pick = async (f: File | undefined | null) => {
     setResult(null);
     if (!f) return;
     if (!f.name.toLowerCase().endsWith('.xlsx')) {
@@ -53,6 +94,13 @@ export const ProductBulkUploadModal: React.FC<Props> = ({ isOpen, onClose, onUpl
     if (f.size > MAX_BYTES) {
       setFile(null);
       setFileError('The file is larger than 5 MB. Split it into smaller files.');
+      return;
+    }
+    const pctError = await findPercentageError(f);
+    if (pctError) {
+      setFile(null);
+      setFileError(pctError);
+      if (inputRef.current) inputRef.current.value = '';
       return;
     }
     setFileError('');

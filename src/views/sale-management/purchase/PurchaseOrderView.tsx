@@ -1327,9 +1327,8 @@ export const PurchaseOrderView: React.FC = () => {
   const [appliedSupplier, setAppliedSupplier] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(5);
-  const [priceTaxMode, setPriceTaxMode] = useState<"Without Tax" | "With Tax">(
-    "Without Tax",
-  );
+  // Purchase price is always entered without tax now that the header toggle is removed
+  const [priceTaxMode] = useState<"Without Tax" | "With Tax">("Without Tax");
 
   // Deduplication & Sync Refs (prevents multiple redundant API calls)
   const isFetchingRef = useRef(false);
@@ -2475,7 +2474,9 @@ export const PurchaseOrderView: React.FC = () => {
 
       const lineRes = calculateLineItem(
         {
-          quantity: current.quantity,
+          // An empty quantity counts as 1 here, like everywhere else on the row, so changing
+          // GST / discount does not wipe the amount.
+          quantity: current.quantity || 1,
           unitPrice: current.purchasePrice,
           discountPercent: current.discountPercent,
           discountAmount: current.discountAmount,
@@ -4447,23 +4448,6 @@ export const PurchaseOrderView: React.FC = () => {
                         </th>
                         <th className="py-2.5 px-3 text-right border-r border-white/20 min-w-[130px] text-white">
                           <div>Purchase Price</div>
-                          <div className="mt-0.5">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setPriceTaxMode(
-                                  priceTaxMode === "Without Tax"
-                                    ? "With Tax"
-                                    : "Without Tax",
-                                )
-                              }
-                              title="Click to toggle With/Without Tax"
-                              className="inline-flex items-center gap-1 text-[10px] text-white font-medium bg-transparent border-0 p-0 cursor-pointer opacity-90 hover:opacity-100 transition-opacity"
-                            >
-                              <span>({priceTaxMode.toLowerCase()})</span>
-                              <ChevronDown className="w-3 h-3 text-white" />
-                            </button>
-                          </div>
                         </th>
                         <th className="py-2.5 px-3 text-right border-r border-white/20 min-w-[105px] text-white">
                           Sale Price
@@ -4771,47 +4755,15 @@ export const PurchaseOrderView: React.FC = () => {
                               {/* 9. Purchase Price (with and without tax separation) */}
                               <td className="py-3 px-2 border-r border-slate-200 min-w-[150px] align-top">
                                 <div className="relative">
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    min="0"
+                                  {/* Read-only: the price comes from the product */}
+                                  <div
                                     {...fieldAttr(`items.${idx}.price`)}
-                                    value={
-                                      priceTaxMode === "With Tax"
-                                        ? unitPriceWithTax
-                                          ? Number(unitPriceWithTax.toFixed(2))
-                                          : ""
-                                        : it.purchasePrice === 0
-                                          ? ""
-                                          : it.purchasePrice
-                                    }
-                                    onKeyDown={handleNonNegativeKeyDown}
-                                    onChange={(e) => {
-                                      const entered = Number(e.target.value);
-                                      if (priceTaxMode === "With Tax") {
-                                        const base =
-                                          taxRate > 0
-                                            ? entered / (1 + taxRate / 100)
-                                            : entered;
-                                        handleItemFieldChange(
-                                          idx,
-                                          "purchasePrice",
-                                          Number(base.toFixed(2)),
-                                        );
-                                      } else {
-                                        handleItemFieldChange(
-                                          idx,
-                                          "purchasePrice",
-                                          entered,
-                                        );
-                                      }
-                                    }}
-                                    className="w-full h-10 px-2.5 text-right bg-white hover:border-slate-400 focus:bg-white border border-slate-300 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/10 rounded-[4px] text-xs font-bold text-slate-800 outline-none shadow-2xs transition-all"
-                                  />
-                                  <div className="text-[9.5px] text-slate-400 text-right pr-1 mt-1 leading-none font-medium">
-                                    {priceTaxMode === "With Tax"
-                                      ? `Excl: ₹${(it.purchasePrice || 0).toFixed(2)}`
-                                      : `Incl: ₹${unitPriceWithTax.toFixed(2)}`}
+                                    className="h-10 flex items-center justify-end px-3 rounded-[4px] bg-emerald-50 text-emerald-800 border border-emerald-200/80 font-bold text-xs font-sans"
+                                  >
+                                    ₹
+                                    {(Number(it.purchasePrice) || 0).toLocaleString(
+                                      "en-IN",
+                                    )}
                                   </div>
                                   <FormError
                                     message={
@@ -4823,26 +4775,13 @@ export const PurchaseOrderView: React.FC = () => {
 
                               {/* 10. Sale Price */}
                               <td className="py-3 px-2 border-r border-slate-200 min-w-[120px] align-top">
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  min="0"
-                                  value={
-                                    it.salePrice === 0 ||
-                                    it.salePrice === undefined
-                                      ? ""
-                                      : it.salePrice
-                                  }
-                                  onKeyDown={handleNonNegativeKeyDown}
-                                  onChange={(e) =>
-                                    handleItemFieldChange(
-                                      idx,
-                                      "salePrice" as any,
-                                      Number(e.target.value),
-                                    )
-                                  }
-                                  className="w-full h-10 px-2.5 text-right bg-white hover:border-slate-400 focus:bg-white border border-slate-300 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/10 rounded-[4px] text-xs font-bold text-slate-800 outline-none shadow-2xs transition-all"
-                                />
+                                {/* Read-only: the price comes from the product */}
+                                <div className="h-10 flex items-center justify-end px-3 rounded-[4px] bg-emerald-50 text-emerald-800 border border-emerald-200/80 font-bold text-xs font-sans">
+                                  ₹
+                                  {(Number(it.salePrice) || 0).toLocaleString(
+                                    "en-IN",
+                                  )}
+                                </div>
                                 <FormError
                                   message={
                                     formErr.errors[`items.${idx}.salePrice`]
@@ -4924,9 +4863,14 @@ export const PurchaseOrderView: React.FC = () => {
                                         )
                                       }
                                       options={[
-                                        ...TAX_RATE_OPTIONS.map((t) => ({
-                                          value: String(t.rate),
-                                          label: `${t.rate}%`,
+                                        // Several labels share a rate (0%), so list each rate once
+                                        ...Array.from(
+                                          new Set(
+                                            TAX_RATE_OPTIONS.map((t) => t.rate),
+                                          ),
+                                        ).map((rate) => ({
+                                          value: String(rate),
+                                          label: `${rate}%`,
                                         })),
                                         // A rate from an older slab (12%, 28% ...) stays selectable on existing documents.
                                         ...(TAX_RATE_OPTIONS.some(
@@ -6766,7 +6710,11 @@ export const PurchaseOrderView: React.FC = () => {
                                       "returned" ||
                                     (po.status as string)?.toLowerCase() ===
                                       "converted" ||
-                                    false
+                                    // Fully paid bills cannot be converted to a return
+                                    (po.paymentStatus as string)?.toLowerCase() ===
+                                      "paid" ||
+                                    (Number(po.balance) <= 0 &&
+                                      Number(po.paidAmount ?? po.amountPaid ?? 0) > 0)
                                   ) && {
                                     label: "Convert to Return",
                                     variant: "return",

@@ -4,6 +4,12 @@ import { stockEndpoints } from '../api/commerce/stockApi';
 import type { ApiStockBatch } from '../api/commerce/productTypes';
 import { isUuid } from '../utils/formValidation';
 
+const hasRealBatchNo = (batchNo: unknown): boolean => {
+  if (batchNo === null || batchNo === undefined) return false;
+  const t = String(batchNo).trim().toLowerCase();
+  return t !== '' && t !== 'null' && t !== 'undefined';
+};
+
 /**
  * Batch-wise stock for sales documents (Estimate, Proforma, Sale Order, Delivery Challan, Invoice).
  *
@@ -49,7 +55,8 @@ export const useBatchStock = (opts: { branchId?: string } = {}) => {
           const res = await sub.unwrap();
           cacheRef.current.set(
             productId,
-            (res?.data || []).filter((b) => b.productId === productId),
+            // Rows without a real batch number (null / "null" / blank = unbatched stock) are not selectable batches.
+            (res?.data || []).filter((b) => b.productId === productId && hasRealBatchNo(b.batchNo)),
           );
           setVersion((v) => v + 1);
         } catch (err) {

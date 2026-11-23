@@ -79,7 +79,12 @@ export const BatchSearchableSelect: React.FC<BatchSearchableSelectProps> = ({
   });
 
   const options: SearchableOption[] = useMemo(() => {
-    return items.map((b) => ({
+    // Unbatched stock rows come back with a null / "null" batch number: they are not selectable batches.
+    const real = (n: unknown) => {
+      const t = String(n ?? '').trim().toLowerCase();
+      return t !== '' && t !== 'null' && t !== 'undefined';
+    };
+    return items.filter((b) => real(b.batchNo)).map((b) => ({
       value: b.batchNo,
       label: b.batchNo,
       subLabel: `${b.quantity ?? 0} in stock${b.expDate ? ` • Exp: ${b.expDate}` : ''}`,

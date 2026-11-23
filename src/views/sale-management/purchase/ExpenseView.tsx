@@ -79,6 +79,7 @@ import {
   baseClient,
 } from '../../../api';
 
+import { API_BASE_URL } from '../../../api/config';
 import { formatDate } from '../utils/dateUtils';
 import { DateInput } from "../../../components/common/DateInput";
 export interface ExpenseItem {
@@ -1190,6 +1191,54 @@ export const ExpenseView: React.FC = () => {
   const handlePrintExpense = async (exp: ExpenseItem) => {
     const latest = await fetchLatestExpense(exp);
     printBusinessDocument(buildExpensePrintOptions(latest));
+  };
+
+  /** Saves the attached bill straight to the device (the <a download> attribute is ignored for other-origin links). */
+  const handleDownloadBill = async (exp: ExpenseItem) => {
+    const src = exp.receiptImage;
+    if (!src) return;
+    try {
+      let blob: Blob | null = null;
+      // 1. Direct fetch. "reload" skips the cache: the <img> preview cached the file without CORS headers,
+      //    which would make a normal fetch fail.
+      try {
+        const res = await fetch(src, { mode: 'cors', cache: 'reload' });
+        if (res.ok) blob = await res.blob();
+      } catch {
+        // fall through to the backend proxy
+      }
+      // 2. Backend proxy (same one the PDF logo loader uses)
+      if (!blob && !src.startsWith('data:')) {
+        const res = await fetch(`${API_BASE_URL}/uploads/image-proxy?url=${encodeURIComponent(src)}`);
+        if (res.ok) blob = await res.blob();
+      }
+      if (!blob) throw new Error('Could not read the bill file');
+      const mimeExt: Record<string, string> = {
+        'application/pdf': 'pdf', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif',
+      };
+      const urlExt = src.startsWith('data:') ? '' : (src.split('?')[0].match(/\.([a-z0-9]{2,5})$/i)?.[1] || '');
+      const ext = mimeExt[blob.type] || urlExt || 'png';
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = `Bill_${exp.expenseNo || 'receipt'}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 3000);
+    } catch (err) {
+      console.warn('Bill download failed (likely blocked by the file host CORS policy):', err);
+      // Last resort: hand the file to the browser in a NEW tab so this page is never navigated away.
+      const a = document.createElement('a');
+      a.href = src;
+      a.target = '_blank';
+      a.rel = 'noreferrer';
+      a.download = `Bill_${exp.expenseNo || 'receipt'}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast.info('Your browser blocked a direct download, so the bill opened in a new tab. Save it from there.');
+    }
   };
 
   const handleDownloadExpense = async (exp: ExpenseItem) => {
@@ -2490,14 +2539,14 @@ export const ExpenseView: React.FC = () => {
                       <ExternalLink className="w-3.5 h-3.5" />
                       <span>Open in New Tab</span>
                     </a>
-                    <a
-                      href={selectedBillExpense.receiptImage}
-                      download={`Bill_${selectedBillExpense.expenseNo || 'receipt'}.png`}
-                      className="inline-flex items-center gap-1 text-xs font-semibold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg border border-slate-200 transition-colors"
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadBill(selectedBillExpense)}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg border border-slate-200 transition-colors cursor-pointer"
                     >
                       <Download className="w-3.5 h-3.5" />
                       <span>Download</span>
-                    </a>
+                    </button>
                   </div>
                 </div>
 

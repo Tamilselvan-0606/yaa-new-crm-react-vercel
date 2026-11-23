@@ -10,6 +10,7 @@ import {
   Boxes,
   UsersRound,
   Building2,
+  Building,
   Film,
   CheckSquare,
   CreditCard,
@@ -352,6 +353,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       ? [{ id: 'organization', path: '/organization', label: 'Sub Organization', icon: Building2 }]
       : []),
     { id: 'branches', path: '/branches', label: 'Branches', icon: GitBranch, adminOnly: true },
+    { id: 'firms', path: '/sale-management/firms', label: 'Firms', icon: Building, adminOnly: true },
     inventoryNavItem,
     purchaseNavItem,
     salesHubNavItem,

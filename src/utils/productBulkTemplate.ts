@@ -40,16 +40,16 @@ export const PRODUCT_BULK_COLUMNS: { key: string; width: number }[] = [
 const SAMPLE_ROWS: Record<string, string | number | boolean>[] = [
   {
     itemType: 'Product', productName: 'Sample Product A (10 Kg)', unit: 'BAG', category: 'Grains & Flours', subcategory: 'Flours',
-    salePrice: 495, salePriceTaxType: 'Included', discountValue: 5, discountType: 'Percentage', hasWholesale: true, wholesalePrice: 440,
+    salePrice: 495, salePriceTaxType: 'Included', discountValue: 5, discountType: 'Percentage', hasWholesale: 'Yes', wholesalePrice: 440,
     wholesaleTaxType: 'Excluded', minWholesaleQty: 20, purchasePrice: 420, purchasePriceTaxType: 'Excluded', taxRate: 'GST @ 5%', atPrice: 420,
-    asOfDate: '2026-10-01', minStockAlert: 15, location: 'Warehouse A - Bay 3', status: 'Active', isBatchTracking: true, batchNo: 'BAT-0001',
+    asOfDate: '2026-10-01', minStockAlert: 15, location: 'Warehouse A - Bay 3', status: 'Active', isBatchTracking: 'Yes', batchNo: 'BAT-0001',
     mfgDate: '2026-08-15', expDate: '2027-02-15',
   },
   {
     itemType: 'Product', productName: 'Sample Product B (1 Kg)', unit: 'PACK', category: 'Pulses & Lentils', subcategory: 'Pulses',
-    salePrice: 165, salePriceTaxType: 'Included', discountValue: 0, discountType: 'Percentage', hasWholesale: false,
+    salePrice: 165, salePriceTaxType: 'Included', discountValue: 0, discountType: 'Percentage', hasWholesale: 'No',
     purchasePrice: 138, purchasePriceTaxType: 'Excluded', taxRate: 'GST @ 0%', atPrice: 138, asOfDate: '2026-10-01', minStockAlert: 25,
-    location: 'Warehouse B - Shelf 2', status: 'Active', isBatchTracking: false,
+    location: 'Warehouse B - Shelf 2', status: 'Active', isBatchTracking: 'No',
   },
 ];
 

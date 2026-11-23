@@ -37,6 +37,7 @@ import { SettingsView } from './views/settings/SettingsView';
 import { QuotesView } from './views/quotes/QuotesView';
 import { LoginView } from './views/login/LoginView';
 import { OrganizationView } from './views/organizations/OrganizationView';
+import { FirmsView } from './views/sale-management/firms/FirmsView';
 
 // Sale Management Views
 import { CategoryView } from './views/sale-management/inventory/CategoryView';
@@ -165,6 +166,10 @@ const MainLayout: React.FC = () => {
               <Route
                 path="/branches"
                 element={isBranchAdmin ? <Navigate to="/" replace /> : <BranchesView />}
+              />
+              <Route
+                path="/sale-management/firms"
+                element={<FirmsView />}
               />
               <Route path="/products" element={<ProductsView />} />
               <Route path="/products/:productId" element={<ProductsView />} />

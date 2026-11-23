@@ -313,6 +313,7 @@ export const OrganizationView: React.FC = () => {
     code: string;
     organizationType?: string;
     subscriptionPlan?: string;
+    subOrganizationSupport?: boolean;
   } | null>(() => {
     if (parentOrgIdParam) {
       return {
@@ -325,6 +326,44 @@ export const OrganizationView: React.FC = () => {
     return null;
   });
 
+  // Track whether the current active organization supports sub-organizations
+  const [activeOrgSubSupport, setActiveOrgSubSupport] = useState<boolean | null>(null);
+
+  // Fetch parent / current organization details to check subOrganizationSupport
+  useEffect(() => {
+    const orgId = parentOrgIdParam || currentUser?.organizationId || getStoredOrganizationId();
+    if (!orgId) {
+      setActiveOrgSubSupport(false);
+      return;
+    }
+    let isMounted = true;
+    organizationApi
+      .getOrganizationById(orgId)
+      .then((res) => {
+        if (!isMounted) return;
+        if (res?.data) {
+          const supports = res.data.subOrganizationSupport ?? false;
+          setActiveOrgSubSupport(supports);
+          if (parentOrgIdParam) {
+            const typeStr = formatOrganizationTypeName(res.data.organizationType);
+            setParentOrgContext((prev) =>
+              prev
+                ? { ...prev, organizationType: typeStr, subOrganizationSupport: supports }
+                : null
+            );
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not fetch organization sub-support status:', err);
+        if (isMounted) setActiveOrgSubSupport(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [parentOrgIdParam, currentUser?.organizationId]);
+
   // Keep state in sync with URL search params
   useEffect(() => {
     if (parentOrgIdParam) {
@@ -333,20 +372,8 @@ export const OrganizationView: React.FC = () => {
         name: parentOrgNameParam || 'Organization',
         code: parentOrgCodeParam || 'ORG',
         organizationType: parentOrgTypeParam || prev?.organizationType,
+        subOrganizationSupport: prev?.subOrganizationSupport,
       }));
-
-      // If parentOrgType is not in the URL, fetch the parent organization to know its suite capability
-      if (!parentOrgTypeParam) {
-        organizationApi
-          .getOrganizationById(parentOrgIdParam)
-          .then((res) => {
-            if (res?.data) {
-              const typeStr = formatOrganizationTypeName(res.data.organizationType);
-              setParentOrgContext((prev) => (prev ? { ...prev, organizationType: typeStr } : null));
-            }
-          })
-          .catch(() => {});
-      }
     } else {
       setParentOrgContext(null);
     }
@@ -1022,7 +1049,8 @@ export const OrganizationView: React.FC = () => {
             </button>
           )}
 
-          {!isOrgSuperAdmin && (
+          {/* Add Button: In Sub Organization mode, visible only if subOrganizationSupport is enabled */}
+          {(!isSubOrgMode || activeOrgSubSupport === true) && (
             <Button
               variant="primary"
               size="md"

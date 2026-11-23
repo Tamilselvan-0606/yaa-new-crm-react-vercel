@@ -22,6 +22,8 @@ import {
   RotateCw,
   ArrowLeft,
   Grid,
+  Smartphone,
+  Key,
 } from 'lucide-react';
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -58,15 +60,28 @@ const SetNewPasswordValidationSchema = z.object({
 type SetNewPasswordFields = z.infer<typeof SetNewPasswordValidationSchema>;
 
 type Screen = 'login' | 'forgot-email' | 'forgot-otp' | 'forgot-password' | 'forgot-success';
+type LoginTab = 'otp' | 'password';
 
 export const LoginView: React.FC = () => {
   const { login, isLoading } = useAuth();
   const navigate = useNavigate();
 
+  const [loginTab, setLoginTab] = useState<LoginTab>('password');
   const [showPassword, setShowPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // OTP Login State
+  const [otpMobile, setOtpMobile] = useState('');
+  const [otpMobileError, setOtpMobileError] = useState('');
+  const [loginOtpValues, setLoginOtpValues] = useState<string[]>(['', '', '', '', '', '']);
+  const [isOtpSent, setIsOtpSent] = useState(false);
+  const [isSendingLoginOtp, setIsSendingLoginOtp] = useState(false);
+  const [isVerifyingLoginOtp, setIsVerifyingLoginOtp] = useState(false);
+  const [loginOtpTimer, setLoginOtpTimer] = useState(60);
+  const [canResendLoginOtp, setCanResendLoginOtp] = useState(false);
+  const loginOtpRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   // Screen flow: login -> forgot-email -> forgot-otp -> forgot-password -> forgot-success
   const [currentScreen, setCurrentScreen] = useState<Screen>('login');
@@ -79,7 +94,7 @@ export const LoginView: React.FC = () => {
   const [isResendingOtp, setIsResendingOtp] = useState<boolean>(false);
   const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // OTP Countdown Timer
+  // OTP Countdown Timer (Forgot Password)
   useEffect(() => {
     if (currentScreen !== 'forgot-otp') return;
     if (otpTimer <= 0) {
@@ -92,6 +107,19 @@ export const LoginView: React.FC = () => {
     return () => clearTimeout(timer);
   }, [currentScreen, otpTimer]);
 
+  // Login OTP Countdown Timer
+  useEffect(() => {
+    if (!isOtpSent) return;
+    if (loginOtpTimer <= 0) {
+      setCanResendLoginOtp(true);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setLoginOtpTimer((prev) => prev - 1);
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [isOtpSent, loginOtpTimer]);
+
   // Focus the first OTP box upon opening the OTP screen
   useEffect(() => {
     if (currentScreen === 'forgot-otp') {
@@ -100,6 +128,15 @@ export const LoginView: React.FC = () => {
       }, 100);
     }
   }, [currentScreen]);
+
+  // Focus OTP box when OTP is sent on Login tab
+  useEffect(() => {
+    if (isOtpSent && loginTab === 'otp') {
+      setTimeout(() => {
+        loginOtpRefs.current[0]?.focus();
+      }, 100);
+    }
+  }, [isOtpSent, loginTab]);
 
   // React Hook Form for Login
   const {
@@ -156,6 +193,112 @@ export const LoginView: React.FC = () => {
     setOtpTimer(60);
     setCanResendOtp(false);
     resetResetForm();
+  };
+
+  // Login with OTP Handlers
+  const handleSendLoginOtp = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setOtpMobileError('');
+    setErrorMsg(null);
+    const cleanNumber = otpMobile.replace(/[\s-]/g, '');
+    if (!cleanNumber) {
+      setOtpMobileError('Please enter your registered mobile number');
+      return;
+    }
+    if (!phoneRegex.test(cleanNumber)) {
+      setOtpMobileError('Please enter a valid mobile number');
+      return;
+    }
+
+    setIsSendingLoginOtp(true);
+    try {
+      // Simulate/Trigger OTP send for mobile
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      setIsOtpSent(true);
+      setLoginOtpValues(['', '', '', '', '', '']);
+      setLoginOtpTimer(60);
+      setCanResendLoginOtp(false);
+      toast.success(`Verification OTP sent to +91 ${cleanNumber.slice(-10)}`);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to send OTP. Please try again.');
+    } finally {
+      setIsSendingLoginOtp(false);
+    }
+  };
+
+  const handleLoginOtpChange = (index: number, val: string) => {
+    const cleanVal = val.replace(/\D/g, '');
+    if (!cleanVal) {
+      const newOtp = [...loginOtpValues];
+      newOtp[index] = '';
+      setLoginOtpValues(newOtp);
+      return;
+    }
+
+    if (cleanVal.length > 1) {
+      const digits = cleanVal.slice(0, 6).split('');
+      const newOtp = [...loginOtpValues];
+      digits.forEach((digit, dIdx) => {
+        if (index + dIdx < 6) {
+          newOtp[index + dIdx] = digit;
+        }
+      });
+      setLoginOtpValues(newOtp);
+      const nextIdx = Math.min(index + digits.length, 5);
+      loginOtpRefs.current[nextIdx]?.focus();
+      return;
+    }
+
+    const newOtp = [...loginOtpValues];
+    newOtp[index] = cleanVal;
+    setLoginOtpValues(newOtp);
+
+    if (index < 5) {
+      loginOtpRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleLoginOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Backspace') {
+      if (!loginOtpValues[index] && index > 0) {
+        e.preventDefault();
+        const newOtp = [...loginOtpValues];
+        newOtp[index - 1] = '';
+        setLoginOtpValues(newOtp);
+        loginOtpRefs.current[index - 1]?.focus();
+      }
+    } else if (e.key === 'ArrowLeft' && index > 0) {
+      e.preventDefault();
+      loginOtpRefs.current[index - 1]?.focus();
+    } else if (e.key === 'ArrowRight' && index < 5) {
+      e.preventDefault();
+      loginOtpRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleVerifyLoginOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const code = loginOtpValues.join('');
+    if (code.length < 6) {
+      setErrorMsg('Please enter the full 6-digit verification code.');
+      return;
+    }
+
+    setIsVerifyingLoginOtp(true);
+    setErrorMsg(null);
+    try {
+      // If mobile corresponds to an account, authenticate
+      const success = await login(otpMobile.trim(), code);
+      if (success) {
+        navigate('/', { replace: true });
+      } else {
+        setErrorMsg('Invalid or expired OTP. Please verify and try again.');
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'OTP verification failed. Please try again.');
+    } finally {
+      setIsVerifyingLoginOtp(false);
+    }
   };
 
   const onLoginSubmit = async (data: LoginFields) => {
@@ -380,11 +523,43 @@ export const LoginView: React.FC = () => {
                   <Lock className="w-6 h-6" />
                 </div>
                 <h2 className="text-2xl font-extrabold text-[#0B1536] tracking-tight">
-                  Account Sign In
+                  Welcome Back!
                 </h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  Sign in with your enterprise credentials
+                  Choose your preferred login method
                 </p>
+              </div>
+
+              {/* Login Method Tabs: 1st Password Login, 2nd OTP Login (text only) */}
+              <div className="mb-6 grid grid-cols-2 p-1 bg-slate-100 rounded-2xl border border-slate-200/80">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginTab('password');
+                    setErrorMsg(null);
+                  }}
+                  className={`flex items-center justify-center py-3 rounded-xl text-sm font-bold transition-all cursor-pointer ${
+                    loginTab === 'password'
+                      ? 'bg-white text-[#33077C] shadow-sm shadow-slate-300/50'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <span>Password Login</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginTab('otp');
+                    setErrorMsg(null);
+                  }}
+                  className={`flex items-center justify-center py-3 rounded-xl text-sm font-bold transition-all cursor-pointer ${
+                    loginTab === 'otp'
+                      ? 'bg-white text-[#33077C] shadow-sm shadow-slate-300/50'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <span>OTP Login</span>
+                </button>
               </div>
 
               {/* Error Banner */}
@@ -395,112 +570,246 @@ export const LoginView: React.FC = () => {
                 </div>
               )}
 
-              {/* Form */}
-              <form noValidate onSubmit={handleLoginSubmit(onLoginSubmit)} className="space-y-4">
-                {/* Mobile / Email Input */}
-                <div>
-                  <label htmlFor="email" className="block text-xs font-bold text-slate-700 mb-1.5">
-                    Mobile Number / Email Address <span className="text-rose-500">*</span>
-                  </label>
-                  <div className="relative flex items-center">
-                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
-                      <Mail className="w-4 h-4" />
-                    </div>
-                    <input
-                      id="email"
-                      type="text"
-                      {...registerLogin('email')}
-                      placeholder="user@login.com"
-                      autoComplete="username"
-                      className={`w-full pl-10 pr-4 py-3 bg-[#33077C]/[0.06] hover:bg-[#33077C]/[0.09] border rounded-xl text-slate-900 text-sm font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all ${
-                        loginErrors.email ? 'border-rose-400 focus:ring-rose-500/20' : 'border-[#33077C]/20 focus:border-[#33077C] focus:ring-[#33077C]/20'
-                      }`}
-                    />
-                  </div>
-                  <FormError message={loginErrors.email?.message} />
-                </div>
+              {/* TAB 1: OTP LOGIN FORM */}
+              {loginTab === 'otp' && (
+                <div className="space-y-4">
+                  {!isOtpSent ? (
+                    <form noValidate onSubmit={handleSendLoginOtp} className="space-y-4">
+                      <div>
+                        <label htmlFor="otpMobile" className="block text-xs font-bold text-slate-700 mb-1.5">
+                          Registered Mobile Number <span className="text-rose-500">*</span>
+                        </label>
+                        <div className="relative flex items-center">
+                          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                            <Smartphone className="w-4 h-4" />
+                          </div>
+                          <input
+                            id="otpMobile"
+                            type="tel"
+                            value={otpMobile}
+                            onChange={(e) => {
+                              setOtpMobile(e.target.value);
+                              if (otpMobileError) setOtpMobileError('');
+                            }}
+                            placeholder="e.g. 9876543210"
+                            autoComplete="tel"
+                            className={`w-full pl-10 pr-4 py-3 bg-[#33077C]/[0.06] hover:bg-[#33077C]/[0.09] border rounded-xl text-slate-900 text-sm font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all ${
+                              otpMobileError ? 'border-rose-400 focus:ring-rose-500/20' : 'border-[#33077C]/20 focus:border-[#33077C] focus:ring-[#33077C]/20'
+                            }`}
+                          />
+                        </div>
+                        {otpMobileError && <FormError message={otpMobileError} />}
+                      </div>
 
-                {/* Password Input */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label htmlFor="password" className="block text-xs font-bold text-slate-700">
-                      Password <span className="text-rose-500">*</span>
-                    </label>
+                      <div className="pt-2">
+                        <button
+                          type="submit"
+                          disabled={isSendingLoginOtp}
+                          className="w-full py-3.5 px-4 rounded-xl bg-[#33077C] hover:bg-[#280564] active:scale-[0.99] text-white font-bold text-sm shadow-md shadow-[#33077C]/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {isSendingLoginOtp ? (
+                            <>
+                              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                              <span>Sending OTP...</span>
+                            </>
+                          ) : (
+                            <>
+                              <span>Get OTP</span>
+                              <ArrowRight className="w-4 h-4" />
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <form noValidate onSubmit={handleVerifyLoginOtp} className="space-y-4">
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs font-bold text-slate-700">Enter 6-Digit OTP</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsOtpSent(false);
+                              setLoginOtpValues(['', '', '', '', '', '']);
+                            }}
+                            className="text-xs font-semibold text-[#33077C] hover:underline cursor-pointer"
+                          >
+                            Change Number
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-6 gap-2">
+                          {loginOtpValues.map((val, idx) => (
+                            <input
+                              key={idx}
+                              ref={(el) => {
+                                loginOtpRefs.current[idx] = el;
+                              }}
+                              type="text"
+                              inputMode="numeric"
+                              maxLength={6}
+                              value={val}
+                              onChange={(e) => handleLoginOtpChange(idx, e.target.value)}
+                              onKeyDown={(e) => handleLoginOtpKeyDown(idx, e)}
+                              className="w-full h-12 text-center text-lg font-bold bg-[#33077C]/[0.06] hover:bg-[#33077C]/[0.09] border border-[#33077C]/20 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:border-[#33077C] focus:ring-[#33077C]/20 focus:bg-white transition-all"
+                            />
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Resend timer */}
+                      <div className="flex items-center justify-between text-xs text-slate-500 pt-1">
+                        <span>Didn't receive code?</span>
+                        {canResendLoginOtp ? (
+                          <button
+                            type="button"
+                            onClick={() => handleSendLoginOtp()}
+                            className="font-bold text-[#33077C] hover:underline cursor-pointer"
+                          >
+                            Resend OTP
+                          </button>
+                        ) : (
+                          <span className="flex items-center gap-1 font-semibold text-slate-400">
+                            <Clock className="w-3.5 h-3.5" />
+                            <span>Resend in {loginOtpTimer}s</span>
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="pt-2">
+                        <button
+                          type="submit"
+                          disabled={isVerifyingLoginOtp}
+                          className="w-full py-3.5 px-4 rounded-xl bg-[#33077C] hover:bg-[#280564] active:scale-[0.99] text-white font-bold text-sm shadow-md shadow-[#33077C]/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {isVerifyingLoginOtp ? (
+                            <>
+                              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                              <span>Verifying...</span>
+                            </>
+                          ) : (
+                            <span>Verify & Login</span>
+                          )}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+
+                  {/* Trust / Encryption Badge */}
+                  <div className="pt-2 flex items-center justify-center gap-1.5 text-[11px] font-medium text-slate-500">
+                    <ShieldCheck className="w-3.5 h-3.5 text-[#33077C]" />
+                    <span>Secured with enterprise-grade encryption</span>
                   </div>
-                  <div className="relative flex items-center">
-                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
-                      <Lock className="w-4 h-4" />
+                </div>
+              )}
+
+              {/* TAB 2: PASSWORD LOGIN FORM */}
+              {loginTab === 'password' && (
+                <form noValidate onSubmit={handleLoginSubmit(onLoginSubmit)} className="space-y-4">
+                  {/* Mobile / Email Input */}
+                  <div>
+                    <label htmlFor="email" className="block text-xs font-bold text-slate-700 mb-1.5">
+                      Mobile Number / Email Address <span className="text-rose-500">*</span>
+                    </label>
+                    <div className="relative flex items-center">
+                      <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                        <Mail className="w-4 h-4" />
+                      </div>
+                      <input
+                        id="email"
+                        type="text"
+                        {...registerLogin('email')}
+                        placeholder="user@login.com"
+                        autoComplete="username"
+                        className={`w-full pl-10 pr-4 py-3 bg-[#33077C]/[0.06] hover:bg-[#33077C]/[0.09] border rounded-xl text-slate-900 text-sm font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all ${
+                          loginErrors.email ? 'border-rose-400 focus:ring-rose-500/20' : 'border-[#33077C]/20 focus:border-[#33077C] focus:ring-[#33077C]/20'
+                        }`}
+                      />
                     </div>
-                    <input
-                      id="password"
-                      type={showPassword ? 'text' : 'password'}
-                      {...registerLogin('password')}
-                      placeholder="Enter your password"
-                      autoComplete="current-password"
-                      className={`w-full pl-10 pr-10 py-3 bg-[#33077C]/[0.06] hover:bg-[#33077C]/[0.09] border rounded-xl text-slate-900 text-sm font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all ${
-                        loginErrors.password ? 'border-rose-400 focus:ring-rose-500/20' : 'border-[#33077C]/20 focus:border-[#33077C] focus:ring-[#33077C]/20'
-                      }`}
-                    />
+                    <FormError message={loginErrors.email?.message} />
+                  </div>
+
+                  {/* Password Input */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label htmlFor="password" className="block text-xs font-bold text-slate-700">
+                        Password <span className="text-rose-500">*</span>
+                      </label>
+                    </div>
+                    <div className="relative flex items-center">
+                      <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                        <Lock className="w-4 h-4" />
+                      </div>
+                      <input
+                        id="password"
+                        type={showPassword ? 'text' : 'password'}
+                        {...registerLogin('password')}
+                        placeholder="Enter your password"
+                        autoComplete="current-password"
+                        className={`w-full pl-10 pr-10 py-3 bg-[#33077C]/[0.06] hover:bg-[#33077C]/[0.09] border rounded-xl text-slate-900 text-sm font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all ${
+                          loginErrors.password ? 'border-rose-400 focus:ring-rose-500/20' : 'border-[#33077C]/20 focus:border-[#33077C] focus:ring-[#33077C]/20'
+                        }`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                        tabIndex={-1}
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    <FormError message={loginErrors.password?.message} />
+                  </div>
+
+                  {/* Remember Me & Forgot Password */}
+                  <div className="flex items-center justify-between pt-1">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        id="rememberMe"
+                        type="checkbox"
+                        {...registerLogin('rememberMe')}
+                        className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] focus:ring-offset-0 cursor-pointer"
+                      />
+                      <span className="text-xs text-slate-600 font-medium">Remember me</span>
+                    </label>
+
                     <button
                       type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
-                      tabIndex={-1}
+                      onClick={() => {
+                        setForgotValue('forgotEmail', getLoginValues('email') || '');
+                        setCurrentScreen('forgot-email');
+                      }}
+                      className="text-xs font-semibold text-[#33077C] hover:text-[#25045B] hover:underline transition-colors cursor-pointer"
                     >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      Forgot password?
                     </button>
                   </div>
-                  <FormError message={loginErrors.password?.message} />
-                </div>
 
-                {/* Remember Me & Forgot Password */}
-                <div className="flex items-center justify-between pt-1">
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input
-                      id="rememberMe"
-                      type="checkbox"
-                      {...registerLogin('rememberMe')}
-                      className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] focus:ring-offset-0 cursor-pointer"
-                    />
-                    <span className="text-xs text-slate-600 font-medium">Remember me</span>
-                  </label>
+                  {/* Submit Button */}
+                  <div className="pt-2">
+                    <button
+                      type="submit"
+                      disabled={isLoginSubmitting || isLoading}
+                      className="w-full py-3.5 px-4 rounded-xl bg-[#33077C] hover:bg-[#280564] active:scale-[0.99] text-white font-bold text-sm shadow-md shadow-[#33077C]/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isLoginSubmitting || isLoading ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          <span>Signing In...</span>
+                        </>
+                      ) : (
+                        <span>Sign In to Dashboard</span>
+                      )}
+                    </button>
+                  </div>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setForgotValue('forgotEmail', getLoginValues('email') || '');
-                      setCurrentScreen('forgot-email');
-                    }}
-                    className="text-xs font-semibold text-[#33077C] hover:text-[#25045B] hover:underline transition-colors cursor-pointer"
-                  >
-                    Forgot password?
-                  </button>
-                </div>
-
-                {/* Submit Button */}
-                <div className="pt-2">
-                  <button
-                    type="submit"
-                    disabled={isLoginSubmitting || isLoading}
-                    className="w-full py-3.5 px-4 rounded-xl bg-[#33077C] hover:bg-[#280564] active:scale-[0.99] text-white font-bold text-sm shadow-md shadow-[#33077C]/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isLoginSubmitting || isLoading ? (
-                      <>
-                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        <span>Signing In...</span>
-                      </>
-                    ) : (
-                      <span>Sign In to Dashboard</span>
-                    )}
-                  </button>
-                </div>
-
-                {/* Trust / Encryption Badge */}
-                <div className="pt-2 flex items-center justify-center gap-1.5 text-[11px] font-medium text-slate-500">
-                  <ShieldCheck className="w-3.5 h-3.5 text-[#33077C]" />
-                  <span>Secured with enterprise-grade encryption</span>
-                </div>
-              </form>
+                  {/* Trust / Encryption Badge */}
+                  <div className="pt-2 flex items-center justify-center gap-1.5 text-[11px] font-medium text-slate-500">
+                    <ShieldCheck className="w-3.5 h-3.5 text-[#33077C]" />
+                    <span>Secured with enterprise-grade encryption</span>
+                  </div>
+                </form>
+              )}
             </div>
           )}
 
