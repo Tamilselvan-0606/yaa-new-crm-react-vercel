@@ -2152,7 +2152,7 @@ export const SupplierView: React.FC = () => {
                                 {p.purchaseNo}
                               </td>
                               <td className="py-3.5 px-4 text-slate-600 font-medium border border-slate-200 whitespace-nowrap">
-                                {p.purchaseDate}
+                                {formatDate(p.purchaseDate)}
                               </td>
                               <td className="py-3.5 px-4 text-right font-bold text-slate-900 border border-slate-200 whitespace-nowrap">
                                 ₹{p.grandTotal.toLocaleString("en-IN")}

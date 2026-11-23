@@ -48,13 +48,26 @@ export const ProductSearchableSelect: React.FC<ProductSearchableSelectProps> = (
           search: search || undefined,
         });
 
-        const data = (res?.data || []).filter(isProductActive);
+        let data = (res?.data || []).filter(isProductActive);
         const pagination = res?.pagination;
+
+        // The server may ignore symbols it cannot search (e.g. "@@$$%%") and then return every product.
+        // Keep only products that really contain the typed text in a searchable field.
+        const q = (search || '').trim().toLowerCase();
+        let narrowed = false;
+        if (q) {
+          const before = data.length;
+          data = data.filter((p: any) =>
+            [p.productName, p.productCode, p.sku, p.hsnCode, p.category, p.subcategory, p.barcode, p.batchNo]
+              .some((f) => String(f ?? '').toLowerCase().includes(q)),
+          );
+          narrowed = data.length < before;
+        }
 
         return {
           data,
-          hasNextPage: pagination?.hasNextPage ?? (data.length >= limit),
-          totalRecords: pagination?.totalRecords,
+          hasNextPage: narrowed ? false : pagination?.hasNextPage ?? (data.length >= limit),
+          totalRecords: narrowed ? data.length : pagination?.totalRecords,
         };
       } catch (err) {
         console.warn('ProductSearchableSelect fetch error:', err);

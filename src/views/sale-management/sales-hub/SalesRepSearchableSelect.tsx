@@ -24,10 +24,12 @@ import {
 import { Modal } from "../../../components/common/Modal";
 import { toast } from "../../../utils/toast";
 import { baseApi } from "../../../api/baseApi";
+import { PhoneField } from "../../../components/common/PhoneField";
 import { store } from "../../../store/store";
 import {
-  normalizeIndianPhoneTo10Digits,
-  isValidIndianPhone,
+  normalizeMobileForSave,
+  mobileKey,
+  isValidIntlPhone,
 } from "../../../utils/validation";
 import {
   checkRequiredText,
@@ -165,12 +167,12 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
       if (m && !errs[f]) errs[f] = { type: "validate", message: m };
     };
     add("name", checkRequiredText(values.name, "representative's full name", 2));
-    const mobileErr = checkPhone(values.mobile, isValidIndianPhone, true);
+    const mobileErr = checkPhone(values.mobile, isValidIntlPhone, true);
     add("mobile", mobileErr);
     if (!mobileErr) {
-      const clean = normalizeIndianPhoneTo10Digits(values.mobile || "");
+      const clean = mobileKey(values.mobile || "");
       const dup = availableRepsRef.current.some(
-        (r) => r.mobile && normalizeIndianPhoneTo10Digits(r.mobile) === clean,
+        (r) => r.mobile && mobileKey(r.mobile) === clean,
       );
       if (dup) add("mobile", "A sales representative with this mobile number already exists.");
     }
@@ -281,15 +283,15 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
   const onSubmitRep = (data: SalesRepFormData) =>
     runOnce(async () => {
     // Re-check on submit (trimmed values, duplicates among already-loaded reps) before any API call.
-    const cleanMobileCheck = normalizeIndianPhoneTo10Digits(data.mobile || "");
+    const cleanMobileCheck = mobileKey(data.mobile || "");
     const submitErrors: Array<["name" | "mobile" | "email", string | null]> = [
       ["name", checkRequiredText(data.name, "representative's full name", 2)],
-      ["mobile", checkPhone(data.mobile, isValidIndianPhone, true)],
+      ["mobile", checkPhone(data.mobile, isValidIntlPhone, true)],
       ["email", checkEmail(data.email, true)],
     ];
     if (!submitErrors[1][1]) {
       const dup = availableReps.some(
-        (r) => r.mobile && normalizeIndianPhoneTo10Digits(r.mobile) === cleanMobileCheck,
+        (r) => r.mobile && mobileKey(r.mobile) === cleanMobileCheck,
       );
       if (dup) {
         submitErrors[1][1] = "A sales representative with this mobile number already exists.";
@@ -301,10 +303,10 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
       return;
     }
     try {
-      const cleanMobile = normalizeIndianPhoneTo10Digits(data.mobile);
+      const cleanMobile = normalizeMobileForSave(data.mobile);
       const generatedEmail =
         data.email?.trim() ||
-        `rep_${cleanMobile}_${Date.now().toString(36)}@yaacrm.internal`;
+        `rep_${cleanMobile.replace(/\D/g, "")}_${Date.now().toString(36)}@yaacrm.internal`;
       const generatedPassword = generatePassword();
 
       const payload = {
@@ -623,117 +625,115 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
         </div>
       )}
 
-      {/* Quick Add Sales Representative Modal */}
+      {/* Quick Add Sales Representative Modal (same layout as the Sales Representative page) */}
       {isAddModalOpen && (
         <Modal
           isOpen={isAddModalOpen}
           onClose={() => setIsAddModalOpen(false)}
           title="Add Sales Representative"
-          subtitle="Register a new representative to assign customer accounts and sales"
-          maxWidth="md"
+          subtitle="Fill in the details to register a new sales representative"
+          maxWidth="lg"
+          headerGradient={true}
+          showBackIcon={true}
+          hideCloseButton={true}
+          onBack={() => setIsAddModalOpen(false)}
         >
-          <form onSubmit={handleSubmit(onSubmitRep)} className="space-y-4">
-            <div>
-              <FormLabel required>Full Name</FormLabel>
-              <input
-                type="text"
-                placeholder="e.g. John Doe"
-                className={getFormInputCls(!!formErrors.name)}
-                {...register("name")}
-              />
-              <FormError message={formErrors.name?.message} />
-            </div>
-
-            <div>
-              <FormLabel required>Mobile Number</FormLabel>
-              <div className="relative">
-                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-semibold select-none">
-                  +91
-                </span>
-                <input
-                  type="tel"
-                  maxLength={10}
-                  placeholder="9876543210"
-                  className={`${getFormInputCls(!!formErrors.mobile)} pl-11`}
-                  data-field="mobile"
-                  {...register("mobile")}
-                />
-              </div>
-              <FormError message={formErrors.mobile?.message} />
-            </div>
-
-            <div>
-              <FormLabel required>Email Address</FormLabel>
-              <input
-                type="email"
-                placeholder="e.g. rep@yaacrm.com"
-                className={getFormInputCls(!!formErrors.email)}
-                {...register("email")}
-              />
-              <FormError message={formErrors.email?.message} />
-            </div>
-
-            <div>
-              <FormLabel>Designation (Optional)</FormLabel>
-              <input
-                type="text"
-                placeholder="e.g. Senior Sales Executive"
-                className={getFormInputCls(!!formErrors.designation)}
-                {...register("designation")}
-              />
-              <FormError message={formErrors.designation?.message} />
-            </div>
-
-            <div className="flex items-center justify-between pt-1 pb-1">
+          <form onSubmit={handleSubmit(onSubmitRep)} noValidate>
+            <div className="space-y-4 p-2 sm:p-4 text-xs">
+              {/* Name */}
               <div>
-                <span className="text-xs font-bold text-slate-700 block">
-                  Status
-                </span>
-                <span className="text-[11px] text-slate-400">
-                  Allow rep to be assigned to sales and leads
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() =>
-                  setFormValue(
-                    "status",
-                    watchStatus === "Active" ? "Inactive" : "Active",
-                  )
-                }
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  watchStatus === "Active" ? "bg-[#33077C]" : "bg-slate-200"
-                }`}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                    watchStatus === "Active" ? "translate-x-5" : "translate-x-0"
-                  }`}
+                <FormLabel required>Full Name</FormLabel>
+                <input
+                  type="text"
+                  placeholder="e.g. Rajesh Kumar"
+                  className={getFormInputCls(!!formErrors.name)}
+                  {...register("name")}
                 />
-              </button>
+                <FormError message={formErrors.name?.message} />
+              </div>
+
+              {/* Mobile */}
+              <div data-field="mobile">
+                <PhoneField
+                  label="Mobile Number"
+                  required
+                  value={watchForm("mobile") || ""}
+                  error={formErrors.mobile?.message as string | undefined}
+                  placeholder="e.g. 9876543210"
+                  onChange={(v) => setFormValue("mobile", v, { shouldValidate: !!formErrors.mobile })}
+                />
+              </div>
+
+              {/* Email */}
+              <div>
+                <FormLabel required>Email Address</FormLabel>
+                <input
+                  type="email"
+                  placeholder="e.g. rajesh.kumar@example.com"
+                  className={getFormInputCls(!!formErrors.email)}
+                  {...register("email")}
+                />
+                <FormError message={formErrors.email?.message} />
+              </div>
+
+              {/* Designation */}
+              <div>
+                <FormLabel>Designation (Optional)</FormLabel>
+                <input
+                  type="text"
+                  placeholder="e.g. Senior Sales Executive"
+                  className={getFormInputCls(!!formErrors.designation)}
+                  {...register("designation")}
+                />
+                <FormError message={formErrors.designation?.message} />
+              </div>
+
+              {/* Status */}
+              <div>
+                <FormLabel required>Status</FormLabel>
+                <div className="grid grid-cols-2 gap-3">
+                  {(["Active", "Inactive"] as const).map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setFormValue("status", s)}
+                      className={`h-11 rounded-xl border flex items-center justify-center gap-2 font-bold text-xs sm:text-[13px] cursor-pointer transition-all ${
+                        watchStatus === s
+                          ? s === "Active"
+                            ? "bg-emerald-50 border-emerald-400 text-emerald-800 shadow-2xs ring-2 ring-emerald-500/20"
+                            : "bg-slate-100 border-slate-400 text-slate-800 shadow-2xs ring-2 ring-slate-400/20"
+                          : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                      }`}
+                    >
+                      <span
+                        className={`w-2 h-2 rounded-full ${s === "Active" ? "bg-emerald-600" : "bg-slate-400"}`}
+                      />
+                      <span>{s}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
+            <div className="pt-4 mt-2 flex justify-end items-center gap-3 border-t border-slate-100 px-2 sm:px-4 pb-2">
               <button
                 type="button"
                 onClick={() => setIsAddModalOpen(false)}
-                className="px-4 py-2 rounded-xl border border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={isSubmittingRep}
-                className="px-4 py-2 rounded-xl bg-[#33077C] hover:bg-[#26055d] text-white text-xs font-bold transition-all shadow-xs disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2 disabled:opacity-60"
               >
                 {isSubmittingRep ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>Saving...</span>
-                  </>
+                  <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
-                  <span>Save Representative</span>
+                  <Check className="w-4 h-4 stroke-[2.5]" />
                 )}
+                <span>{isSubmittingRep ? "Saving..." : "Create Representative"}</span>
               </button>
             </div>
           </form>

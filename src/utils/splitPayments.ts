@@ -13,7 +13,7 @@ import {
 export type SplitPaymentMethod = 'Cash' | 'Bank Transfer' | 'UPI' | 'Cheque' | 'Card' | 'Other' | 'Online Payment';
 
 /** Purchase bills (Payments Out). */
-export const SPLIT_PAYMENT_METHODS: SplitPaymentMethod[] = ['Cash', 'Bank Transfer', 'UPI', 'Cheque', 'Card', 'Other'];
+export const SPLIT_PAYMENT_METHODS: SplitPaymentMethod[] = ['Cash', 'Bank Transfer', 'UPI', 'Cheque', 'Card'];
 /** Sales invoices: the six types Payments In accepts. */
 export const SALES_SPLIT_PAYMENT_METHODS: SplitPaymentMethod[] = ['Cash', 'Bank Transfer', 'UPI', 'Cheque', 'Card', 'Online Payment'];
 

@@ -177,7 +177,7 @@ export const ProductBulkUploadModal: React.FC<Props> = ({ isOpen, onClose, onUpl
           </p>
           <p className="text-slate-600 mt-1">
             <span className="font-bold">Product:</span>{' '}
-            <code className="font-mono text-[11px] text-[#33077C]">itemType, productName, unit, baseUnitId, secondaryUnitId, category, subcategory, itemImage</code>
+            <code className="font-mono text-[11px] text-[#33077C]">productName, unit, baseUnitId, secondaryUnitId, category, subcategory, itemImage</code>
           </p>
           <p className="text-slate-600 mt-0.5">
             <span className="font-bold">Price and tax:</span>{' '}

@@ -2,7 +2,6 @@ import { z } from 'zod';
 import {
   alphabetsOnly,
   emailAddress,
-  indianMobile,
   indianPhoneAnyFormat,
   phoneNumber,
   required,
@@ -153,7 +152,7 @@ export type EmployeeFormData = z.infer<typeof EmployeeSchema>;
 
 export const SalesRepresentativeSchema = z.object({
   name: z.string().min(2, 'Full name must be at least 2 characters'),
-  mobile: z.string().superRefine(zodValidate([required('Mobile number is required'), indianMobile('Mobile number')])),
+  mobile: z.string().superRefine(zodValidate([required('Mobile number is required'), phoneNumber('Mobile number')])),
   email: z.string().superRefine(zodValidate([required('Email address is required'), emailAddress])),
   designation: z.string().optional(),
   status: z.enum(['Active', 'Inactive']),

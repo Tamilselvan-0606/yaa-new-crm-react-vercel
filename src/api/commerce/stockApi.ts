@@ -177,6 +177,19 @@ export const mapApiStockToInventoryStockItem = (item: ApiStockItem): InventorySt
 // RTK Query Injected Endpoints for Commerce Stock
 // =========================================================================
 
+/** True when a batch number is a real value (not null, "null", "undefined" or blank). */
+export const hasRealBatchNo = (batchNo: unknown): boolean => {
+  if (batchNo === null || batchNo === undefined) return false;
+  const t = String(batchNo).trim().toLowerCase();
+  return t !== '' && t !== 'null' && t !== 'undefined';
+};
+
+/** Batch lists must never contain rows without a real batch number (unbatched stock shows up as "null"). */
+const dropUnbatchedRows = (res: StockBatchesResponse): StockBatchesResponse =>
+  res && Array.isArray((res as any).data)
+    ? ({ ...res, data: (res as any).data.filter((b: any) => hasRealBatchNo(b?.batchNo)) } as StockBatchesResponse)
+    : res;
+
 export const stockEndpoints = baseApi.injectEndpoints({
   endpoints: (builder) => ({
     getCommerceStocks: builder.query<StockListResponse, StockFilterParams | void>({
@@ -299,6 +312,7 @@ export const stockEndpoints = baseApi.injectEndpoints({
           params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
+      transformResponse: (res: StockBatchesResponse) => dropUnbatchedRows(res),
       providesTags: [{ type: 'Batch', id: 'LIST' }],
       keepUnusedDataFor: 5, // live data: batch availability
     }),
@@ -461,7 +475,7 @@ export const stockApi = {
     const response = await baseClient.get<StockBatchesResponse>('/commerce/stocks/batches', {
       params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
     });
-    return response.data;
+    return dropUnbatchedRows(response.data);
   },
 
   /**

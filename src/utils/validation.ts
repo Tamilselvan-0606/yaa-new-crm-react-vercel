@@ -70,6 +70,28 @@ export const normalizeIndianPhoneTo10Digits = (val: string): string => {
   return digits.slice(0, 10);
 };
 
+/**
+ * Key used to compare two mobile numbers (duplicate checks). An Indian number matches whether it is stored as
+ * "9876543210", "919876543210" or "+919876543210"; a number with another country code keeps its code.
+ */
+export const mobileKey = (val?: string | null): string => {
+  const v = (val || "").trim();
+  if (v.startsWith("+") && !v.startsWith("+91")) return `+${v.replace(/\D/g, "")}`;
+  return normalizeIndianPhoneTo10Digits(v);
+};
+
+/**
+ * Mobile number as it is sent to the server for a sales representative: always with its country code,
+ * e.g. "+919876543210" for an Indian number and "+6598765432" for another country.
+ */
+export const normalizeMobileForSave = (val?: string | null): string => {
+  const v = (val || "").trim();
+  if (!v) return "";
+  if (v.startsWith("+") && !v.startsWith("+91")) return `+${v.replace(/\D/g, "")}`;
+  const national = normalizeIndianPhoneTo10Digits(v);
+  return national ? `+91${national}` : "";
+};
+
 // ==========================================
 // Centralized Numeric Validation Architecture
 // ==========================================

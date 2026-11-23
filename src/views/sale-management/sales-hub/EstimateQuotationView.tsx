@@ -1206,7 +1206,7 @@ export const EstimateQuotationView: React.FC = () => {
       const addBatch = (b: any) => {
         if (!b) return;
         const batchNo = String(b.batchNo || b.batch || "").trim();
-        if (!batchNo || seenBatchNos.has(batchNo.toLowerCase())) return;
+        if (!batchNo || /^(null|undefined)$/i.test(batchNo) || seenBatchNos.has(batchNo.toLowerCase())) return;
         seenBatchNos.add(batchNo.toLowerCase());
         resultBatches.push({
           id: b.id || `bat_${batchNo}`,

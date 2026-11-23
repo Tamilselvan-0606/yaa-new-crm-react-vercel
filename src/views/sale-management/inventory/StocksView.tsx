@@ -1,3 +1,4 @@
+import { hasRealBatchNo } from '../../../api/commerce/stockApi';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, {
   useState,
@@ -1640,11 +1641,12 @@ export const StocksView: React.FC = () => {
                   const catalogItem = catalogProducts.find(
                     (p) => p.id === stk.productId || p.sku === stk.sku,
                   );
+                  const realStkBatches = (stk.batches || []).filter((b) => hasRealBatchNo(b.batchNo));
                   const activeBatches =
-                    (stk.batches && stk.batches.length > 0)
-                      ? (stk.batches.filter((b) => b.quantity > 0).length > 0
-                          ? stk.batches.filter((b) => b.quantity > 0)
-                          : stk.batches)
+                    (realStkBatches.length > 0)
+                      ? (realStkBatches.filter((b) => b.quantity > 0).length > 0
+                          ? realStkBatches.filter((b) => b.quantity > 0)
+                          : realStkBatches)
                       : (catalogItem?.batchNo || catalogItem?.initialBatchNo)
                       ? [
                           {
@@ -2490,7 +2492,7 @@ export const StocksView: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-xs">
                       {!selectedStock.batches ||
-                      selectedStock.batches.length === 0 ? (
+                      selectedStock.batches.filter((b) => hasRealBatchNo(b.batchNo)).length === 0 ? (
                         <tr>
                           <td
                             colSpan={7}
@@ -2501,7 +2503,7 @@ export const StocksView: React.FC = () => {
                           </td>
                         </tr>
                       ) : (
-                        selectedStock.batches.map((batch) => (
+                        selectedStock.batches.filter((b) => hasRealBatchNo(b.batchNo)).map((batch) => (
                           <tr
                             key={batch.id || batch.batchNo}
                             className="hover:bg-slate-50 transition-colors"

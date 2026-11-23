@@ -5,6 +5,7 @@ import { BusinessPDFDocument } from '../components/common/pdf/BusinessPDFDocumen
 import { TableReportPDF } from '../components/common/pdf/TableReportPDF';
 import { PaymentReceiptPDF, PaymentReceiptOptions } from '../components/common/pdf/PaymentReceiptPDF';
 import { fetchOrganizationDocumentProfile } from '../hooks/useCompanyDocumentProfile';
+import { displayUnit } from './unitDisplay';
 
 /**
  * Universal Printing & PDF Export Utility for YAA CRM
@@ -672,7 +673,7 @@ export async function printBusinessDocument(rawOptions: DocumentPrintOptions): P
       </td>
       ${items.some(i => i.batch) ? `<td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: center; color: #33077C; font-family: monospace; font-weight: 700;">${it.batch || '—'}</td>` : ''}
       <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11.5px; text-align: center; font-weight: 700; color: #0f172a;">
-        ${it.quantity ?? 1} ${it.unit ? `<span style="font-size: 10px; font-weight: normal; color: #64748b;">${it.unit}</span>` : ''}
+        ${it.quantity ?? 1} ${displayUnit(it.unit) ? `<span style="font-size: 10px; font-weight: normal; color: #64748b;">${displayUnit(it.unit)}</span>` : ''}
       </td>
       ${it.unitPrice !== undefined ? `<td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11.5px; text-align: right; color: #0f172a;">₹${Number(it.unitPrice).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>` : ''}
       ${items.some(i => i.discountPercent !== undefined) ? `<td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: center; color: #0f172a;">${it.discountPercent || 0}%</td>` : ''}

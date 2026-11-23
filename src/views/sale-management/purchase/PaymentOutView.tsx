@@ -1806,8 +1806,8 @@ export const PaymentOutView: React.FC = () => {
                       { value: 'Cash', label: 'Cash' },
                       { value: 'Cheque', label: 'Cheque' },
                       { value: 'Card', label: 'Debit / Credit Card' },
-                      { value: 'Net Banking', label: 'Net Banking' },
-                      { value: 'Other', label: 'Other' },
+                      // "Net Banking" and "Other" are rejected by the server ("Payment type is not valid"),
+                      // so they are not offered for new payments. Old records that use them still display.
                     ]}
                   />
                 )}

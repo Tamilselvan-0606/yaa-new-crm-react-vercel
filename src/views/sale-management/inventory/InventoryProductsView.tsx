@@ -1,3 +1,4 @@
+import { hasRealBatchNo } from '../../../api/commerce/stockApi';
 import {
   CommonTableHead,
   CommonTableTh,
@@ -6167,7 +6168,7 @@ export const InventoryProductsView: React.FC = () => {
                           Stock Batches
                         </h5>
                         <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                          {selectedProductDetail.stockBatches.map((b) => (
+                          {selectedProductDetail.stockBatches.filter((b) => hasRealBatchNo(b.batchNo)).map((b) => (
                             <div
                               key={b.id}
                               className="p-2.5 rounded-lg bg-white border border-slate-200 flex items-center justify-between text-xs"

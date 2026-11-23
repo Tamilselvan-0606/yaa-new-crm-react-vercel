@@ -1690,14 +1690,16 @@ export const ExpenseView: React.FC = () => {
                         <span>{exp.referenceNo || '—'}</span>
                         <button
                           type="button"
-                          title="View attached bill / receipt"
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                          title={exp.receiptImage ? 'View attached bill / receipt' : 'No bill attached'}
+                          disabled={!exp.receiptImage}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
                             exp.receiptImage
-                              ? 'bg-purple-50 text-[#4309A2] hover:bg-purple-100 border border-purple-200'
-                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200'
+                              ? 'bg-purple-50 text-[#4309A2] hover:bg-purple-100 border border-purple-200 cursor-pointer'
+                              : 'bg-slate-100 text-slate-400 border border-slate-200 opacity-60 cursor-not-allowed'
                           }`}
                           onClick={(e) => {
                             e.stopPropagation();
+                            if (!exp.receiptImage) return;
                             handleOpenBillModal(exp);
                           }}
                         >
@@ -1770,6 +1772,7 @@ export const ExpenseView: React.FC = () => {
                             {
                               label: 'View Attached Bill',
                               variant: 'preview',
+                              disabled: !exp.receiptImage,
                               onClick: () => handleOpenBillModal(exp),
                             },
                             {

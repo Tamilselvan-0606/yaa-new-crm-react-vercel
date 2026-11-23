@@ -8,6 +8,7 @@ import {
 } from '@react-pdf/renderer';
 import { DocumentPrintOptions, numberToWordsIndian, pdfToday } from '../../../utils/printUtils';
 import { formatPhoneNumber } from '../../../utils/fieldValidators';
+import { displayUnit } from '../../../utils/unitDisplay';
 
 const styles = StyleSheet.create({
   page: {
@@ -486,7 +487,7 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
                   ) : null}
                 </View>
                 <Text style={[styles.tableCell, { width: '10%', textAlign: 'center' }]}>
-                  {it.quantity ?? 1} {it.unit || ''}
+                  {it.quantity ?? 1} {displayUnit(it.unit)}
                 </Text>
                 <Text style={[styles.tableCell, { width: '14%', textAlign: 'right' }]}>
                   ₹{(Number(it.unitPrice) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}

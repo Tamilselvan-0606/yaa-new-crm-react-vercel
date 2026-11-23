@@ -2291,7 +2291,7 @@ export const PurchaseReturnView: React.FC = () => {
                       </td>
 
                       {/* Batch No */}
-                      <td className="py-2 px-3 text-center">
+                      <td className="py-2 px-3 text-center align-top">
                         <input
                           type="text"
                           value={it.batch || ''}
@@ -2309,7 +2309,7 @@ export const PurchaseReturnView: React.FC = () => {
                       </td>
 
                       {/* Purchased Qty */}
-                      <td className="py-2 px-3 text-center">
+                      <td className="py-2 px-3 text-center align-top">
                         <input
                           type="number"
                           min="0"
@@ -2356,7 +2356,7 @@ export const PurchaseReturnView: React.FC = () => {
                       </td>
 
                       {/* Reason */}
-                      <td className="py-2 px-3">
+                      <td className="py-2 px-3 align-top">
                         <select
                           value={it.reason}
                           onChange={(e) => handleReasonChange(idx, e.target.value)}
@@ -2372,7 +2372,7 @@ export const PurchaseReturnView: React.FC = () => {
                       </td>
 
                       {/* Remarks */}
-                      <td className="py-2 px-3">
+                      <td className="py-2 px-3 align-top">
                         <input
                           type="text"
                           value={it.remarks || ''}
@@ -2383,22 +2383,26 @@ export const PurchaseReturnView: React.FC = () => {
                       </td>
 
                       {/* Total */}
-                      <td className="py-2 px-3 text-right font-bold text-slate-900 whitespace-nowrap">
-                        ₹{(Number(it.returnAmount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                        <FormError message={retErr.errors[`items.${idx}.total`]} className="justify-end whitespace-normal" />
+                      <td className="py-2 px-3 min-w-[130px] align-top text-right font-bold text-slate-900">
+                        <div className="h-8 flex items-center justify-end whitespace-nowrap">
+                          ₹{(Number(it.returnAmount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </div>
+                        <FormError message={retErr.errors[`items.${idx}.total`]} className="justify-end text-right whitespace-normal" />
                       </td>
 
                       {/* Delete Row */}
-                      <td className="py-2 px-2 text-center">
-                        {returnItems.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveReturnItem(idx)}
-                            className="w-7 h-7 text-slate-400 hover:text-rose-600 flex items-center justify-center rounded-md hover:bg-rose-50 transition-colors"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
+                      <td className="py-2 px-2 text-center align-top">
+                        <div className="h-8 flex items-center justify-center">
+                          {returnItems.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveReturnItem(idx)}
+                              className="w-7 h-7 text-slate-400 hover:text-rose-600 flex items-center justify-center rounded-md hover:bg-rose-50 transition-colors"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}

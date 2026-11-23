@@ -4220,10 +4220,15 @@ export const PurchaseOrderView: React.FC = () => {
                   <input
                     type="text"
                     value={formData.purchaseBillManualNo}
+                    maxLength={50}
                     onChange={(e) =>
                       setFormData((prev) => ({
                         ...prev,
-                        purchaseBillManualNo: e.target.value,
+                        // letters, numbers and hyphens only (typing and pasting)
+                        purchaseBillManualNo: e.target.value.replace(
+                          /[^a-zA-Z0-9-]/g,
+                          "",
+                        ),
                       }))
                     }
                     placeholder="Enter Purchase Bill No"
@@ -5445,6 +5450,32 @@ export const PurchaseOrderView: React.FC = () => {
                               </div>
                             </div>
 
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-semibold text-slate-600">
+                                Payment Mode:
+                              </span>
+                              <select
+                                value={formData.paymentMethod || "Cash"}
+                                disabled={isSubmitting}
+                                aria-label="Payment mode"
+                                {...fieldAttr("paymentMethod")}
+                                onChange={(e) => {
+                                  formErr.clearError("paymentMethod");
+                                  setFormData((prev) => ({
+                                    ...prev,
+                                    paymentMethod: e.target.value,
+                                  }));
+                                }}
+                                className="w-44 h-8.5 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-[6px] text-xs font-semibold text-slate-700 outline-none transition-all"
+                              >
+                                <option value="Cash">Cash</option>
+                                <option value="Bank Transfer">Bank Transfer</option>
+                                <option value="UPI">UPI</option>
+                                <option value="Card">Card</option>
+                                <option value="Cheque">Cheque</option>
+                              </select>
+                            </div>
+
                             <div className="text-right">
                               <FormError
                                 message={formErr.errors.paidAmount}
@@ -5729,7 +5760,6 @@ export const PurchaseOrderView: React.FC = () => {
                             { value: "UPI", label: "UPI / GPay / PhonePe" },
                             { value: "Card", label: "Debit / Corporate Card" },
                             { value: "Credit", label: "Supplier Credit" },
-                            { value: "Other", label: "Other" },
                           ]}
                           placeholder="Select Payment Mode"
                         />
@@ -6463,7 +6493,7 @@ export const PurchaseOrderView: React.FC = () => {
                                   {po.purchaseNo}
                                 </span>
                                 <div className="text-xs text-slate-400 mt-0.5 flex items-center gap-1.5 font-medium">
-                                  <span>{po.purchaseDate}</span>
+                                  <span>{formatDate(po.purchaseDate)}</span>
                                   {po.purchaseInvoiceNo && (
                                     <>
                                       <span className="text-slate-300">

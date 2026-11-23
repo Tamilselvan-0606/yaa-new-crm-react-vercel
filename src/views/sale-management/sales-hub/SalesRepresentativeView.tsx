@@ -52,11 +52,13 @@ import { DeleteConfirmationModal } from "../../../components/common/DeleteConfir
 import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FormError } from "../../../components/common/FormError";
+import { PhoneField } from "../../../components/common/PhoneField";
 import { toast } from "../../../utils/toast";
 
 import {
-  normalizeIndianPhoneTo10Digits,
-  isValidIndianPhone,
+  isValidIntlPhone,
+  normalizeMobileForSave,
+  mobileKey,
 } from "../../../utils/validation";
 import {
   checkRequiredText,
@@ -164,7 +166,7 @@ export const SalesRepresentativeView: React.FC = () => {
       if (m && !errs[f]) errs[f] = { type: "validate", message: m };
     };
     add("name", checkRequiredText(values.name, "representative's full name", 2));
-    const mobileErr = checkPhone(values.mobile, isValidIndianPhone, true);
+    const mobileErr = checkPhone(values.mobile, isValidIntlPhone, true);
     add("mobile", mobileErr);
     if (!mobileErr) add("mobile", dupCheckRef.current.mobile(values.mobile || ""));
     const emailErr = checkEmail(values.email, true);
@@ -209,20 +211,20 @@ export const SalesRepresentativeView: React.FC = () => {
 
   const findDuplicateRepByMobile = useCallback(
     (mobileInput: string, excludeRepId?: string) => {
-      const clean = normalizeIndianPhoneTo10Digits(mobileInput);
+      const clean = mobileKey(mobileInput);
       if (!clean || clean.length < 10) return null;
 
       const fromCache = allRepsCacheRef.current.find(
         (r) =>
           r.id !== excludeRepId &&
-          normalizeIndianPhoneTo10Digits(r.mobile) === clean,
+          mobileKey(r.mobile) === clean,
       );
       if (fromCache) return fromCache;
 
       const fromCurrent = reps.find(
         (r) =>
           r.id !== excludeRepId &&
-          normalizeIndianPhoneTo10Digits(r.mobile) === clean,
+          mobileKey(r.mobile) === clean,
       );
       if (fromCurrent) return fromCurrent;
 
@@ -291,7 +293,7 @@ export const SalesRepresentativeView: React.FC = () => {
   }, []);
 
   // ── load list (fetches Active + Inactive when ALL so inactive reps always appear) ──
-  const loadReps = useCallback(async (overrides?: { search?: string; status?: string }) => {
+  const loadReps = useCallback(async (overrides?: { search?: string; status?: string; skipInactiveFetch?: boolean }) => {
     const currentReqId = ++requestIdRef.current;
     setIsListLoading(true);
     setListError(null);
@@ -307,11 +309,15 @@ export const SalesRepresentativeView: React.FC = () => {
             limit: 200,
             search: targetSearch || undefined,
           }),
-          salesRepresentativeApi.getList({
-            limit: 200,
-            search: targetSearch || undefined,
-            status: "Inactive",
-          }),
+          // After a create / edit the inactive reps are already remembered (inactiveRepsRef), so that
+          // second request is skipped and only one list request is made.
+          overrides?.skipInactiveFetch
+            ? Promise.resolve({ success: true, data: [] } as any)
+            : salesRepresentativeApi.getList({
+                limit: 200,
+                search: targetSearch || undefined,
+                status: "Inactive",
+              }),
         ]);
 
         if (currentReqId !== requestIdRef.current) return;
@@ -523,7 +529,7 @@ export const SalesRepresentativeView: React.FC = () => {
 
   dupCheckRef.current = {
     mobile: (m) => {
-      const clean = normalizeIndianPhoneTo10Digits(m) || m.trim();
+      const clean = mobileKey(m) || m.trim();
       const dup = findDuplicateRepByMobile(clean, editingRep?.id);
       return dup
         ? `Phone number is already used by ${dup.name || "another sales representative"}. Each representative must have a unique mobile number.`
@@ -567,7 +573,7 @@ export const SalesRepresentativeView: React.FC = () => {
     clearErrors();
     reset({
       name: rep.name,
-      mobile: normalizeIndianPhoneTo10Digits(rep.mobile) || rep.mobile,
+      mobile: normalizeMobileForSave(rep.mobile) || rep.mobile,
       email: rep.email || "",
       designation: rep.designation || "",
       status: rep.status,
@@ -581,7 +587,7 @@ export const SalesRepresentativeView: React.FC = () => {
   const deleteGuard = useSubmitGuard();
 
   const onSubmit = (data: SalesRepFormData) => submitGuard.runOnce(async () => {
-    const cleanMobile = normalizeIndianPhoneTo10Digits(data.mobile) || data.mobile.trim();
+    const cleanMobile = normalizeMobileForSave(data.mobile) || data.mobile.trim();
 
     // Field rules, duplicate-mobile and duplicate-email checks all live in repFormResolver, so by
     // the time we get here every one of them has already passed.
@@ -632,8 +638,8 @@ export const SalesRepresentativeView: React.FC = () => {
             inactiveRepsRef.current.delete(editingRep.id);
           }
 
-          // Reload fresh list & metrics from API
-          loadReps();
+          // Reload fresh list & metrics from API (one request: inactive reps are already remembered)
+          loadReps({ skipInactiveFetch: true });
         }
       } else {
         const autoPassword = generatePassword();
@@ -656,7 +662,12 @@ export const SalesRepresentativeView: React.FC = () => {
               'Dashboard',
             ])
           );
-          loadReps();
+          // A rep created as Inactive is not in the default list: remember it so it still shows.
+          const created = res.data ? normalizeApiRep(res.data as any) : null;
+          if (created?.id && data.status === "Inactive") {
+            inactiveRepsRef.current.set(created.id, { ...created, status: "Inactive" });
+          }
+          loadReps({ skipInactiveFetch: true });
         }
       }
     } catch (err: any) {
@@ -748,7 +759,7 @@ export const SalesRepresentativeView: React.FC = () => {
     }
     try {
       const cleanMobile =
-        normalizeIndianPhoneTo10Digits(rep.mobile) || rep.mobile?.trim() || "";
+        normalizeMobileForSave(rep.mobile) || rep.mobile?.trim() || "";
       const updatePayload: UpdateSalesRepPayload = {
         name: rep.name.trim(),
         email: rep.email?.trim() || "",
@@ -1615,33 +1626,15 @@ export const SalesRepresentativeView: React.FC = () => {
             </div>
 
             {/* Mobile */}
-            <div>
-              <FormLabel required>Mobile Number</FormLabel>
-              <input
-                type="tel"
-                {...register("mobile")}
+            <div data-field="mobile">
+              <PhoneField
+                label="Mobile Number"
+                required
+                value={watch("mobile") || ""}
+                error={errors.mobile?.message as string | undefined}
                 placeholder="e.g. 9876543210"
-                maxLength={10}
-                data-field="mobile"
-                onKeyDown={(e) => {
-                  if (
-                    !/[0-9]/.test(e.key) &&
-                    e.key !== "Backspace" &&
-                    e.key !== "Delete" &&
-                    e.key !== "ArrowLeft" &&
-                    e.key !== "ArrowRight" &&
-                    e.key !== "Tab"
-                  ) {
-                    e.preventDefault();
-                  }
-                }}
-                onChange={(e) => {
-                  const clean = e.target.value.replace(/\D/g, "").slice(0, 10);
-                  setValue("mobile", clean, { shouldValidate: isSubmitted });
-                }}
-                className={getFormInputCls(Boolean(errors.mobile))}
+                onChange={(v) => setValue("mobile", v, { shouldValidate: isSubmitted })}
               />
-              <FormError error={errors.mobile} />
             </div>
 
             {/* Email */}
