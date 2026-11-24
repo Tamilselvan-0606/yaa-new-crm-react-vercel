@@ -1086,8 +1086,8 @@ export const Header: React.FC<HeaderProps> = ({
                         type="button"
                         onClick={() => handleSelectSubOrg(sub.name)}
                         className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-lg ${isActive
-                            ? 'bg-[#33077C]/10 text-[#33077C]'
-                            : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                          ? 'bg-[#33077C]/10 text-[#33077C]'
+                          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                           }`}
                       >
                         <span className="truncate">{sub.name}</span>
@@ -1134,8 +1134,8 @@ export const Header: React.FC<HeaderProps> = ({
                         type="button"
                         onClick={() => handleSelectBranch(b.name)}
                         className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-lg ${isActive
-                            ? 'bg-[#33077C]/10 text-[#33077C]'
-                            : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                          ? 'bg-[#33077C]/10 text-[#33077C]'
+                          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                           }`}
                       >
                         <span className="truncate">{b.name}</span>
@@ -1182,8 +1182,8 @@ export const Header: React.FC<HeaderProps> = ({
                           type="button"
                           onClick={() => handleSelectProduct(prod.name)}
                           className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-lg ${isActive
-                              ? 'bg-[#33077C]/10 text-[#33077C]'
-                              : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                            ? 'bg-[#33077C]/10 text-[#33077C]'
+                            : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                             }`}
                         >
                           <span className="truncate">{prod.name}</span>
@@ -1236,8 +1236,8 @@ export const Header: React.FC<HeaderProps> = ({
                           type="button"
                           onClick={() => handleSelectBranch(b.name)}
                           className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-lg ${isActive
-                              ? 'bg-[#33077C]/10 text-[#33077C]'
-                              : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                            ? 'bg-[#33077C]/10 text-[#33077C]'
+                            : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                             }`}
                         >
                           <span className="truncate">{b.name}</span>
@@ -1285,8 +1285,8 @@ export const Header: React.FC<HeaderProps> = ({
                           type="button"
                           onClick={() => handleSelectProduct(prod.name)}
                           className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-xs ${isActive
-                              ? 'bg-[#33077C]/10 text-[#33077C]'
-                              : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                            ? 'bg-[#33077C]/10 text-[#33077C]'
+                            : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                             }`}
                         >
                           <span className="truncate">{prod.name}</span>
@@ -1436,28 +1436,6 @@ export const Header: React.FC<HeaderProps> = ({
               <div className="py-1.5 space-y-1">
                 {isSuperAdmin ? (
                   <>
-                    <button
-                      onClick={() => {
-                        setIsUserSwitcherOpen(false);
-                        navigate('/organization');
-                      }}
-                      className="w-full flex items-center gap-3 px-3.5 py-2.5 text-sm font-semibold text-slate-800 hover:text-slate-900 hover:bg-slate-50 rounded-xl transition-colors cursor-pointer text-left"
-                    >
-                      <Building2 className="w-4.5 h-4.5 text-slate-600" strokeWidth={1.8} />
-                      <span>Organizations</span>
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        setIsUserSwitcherOpen(false);
-                        navigate('/subscription-plans');
-                      }}
-                      className="w-full flex items-center gap-3 px-3.5 py-2.5 text-sm font-semibold text-slate-800 hover:text-slate-900 hover:bg-slate-50 rounded-xl transition-colors cursor-pointer text-left"
-                    >
-                      <Repeat className="w-4.5 h-4.5 text-slate-600" strokeWidth={1.8} />
-                      <span>Subscription Plans</span>
-                    </button>
-
                     <button
                       onClick={() => {
                         setIsUserSwitcherOpen(false);

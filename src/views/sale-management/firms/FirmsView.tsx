@@ -1,13 +1,14 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Building2,
   Plus,
   Search,
   Eye,
-  Edit2,
+  Pencil,
   Trash2,
-  CheckCircle,
-  XCircle,
+  CheckCircle2,
+  Ban,
+  PauseCircle,
   MoreVertical,
   Mail,
   Phone,
@@ -18,6 +19,10 @@ import {
   User,
   ShieldCheck,
   RotateCcw,
+  Upload,
+  X,
+  Check,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { Button } from '../../../components/common/Button';
 import { SearchBar } from '../../../components/common/SearchBar';
@@ -25,8 +30,12 @@ import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { Pagination } from '../../../components/common/Pagination';
 import { StatusBadge } from '../../../components/common/StatusBadge';
 import { Modal } from '../../../components/common/Modal';
+import { CustomSelect } from '../../../components/common/CustomSelect';
 import { DeleteConfirmationModal } from '../../../components/common/DeleteConfirmationModal';
 import { StatusChangeModal } from '../../../components/common/StatusChangeModal';
+import { PhoneField } from '../../../components/common/PhoneField';
+import { LocationFields, LocationMeta } from '../../../components/common/LocationFields';
+import { TextField, ReadOnlyField } from '../../../components/common/FormField';
 import { useAuth } from '../../../context/AuthContext';
 import { toast } from '../../../utils/toast';
 import { useRowActionMenu, ROW_MENU_TRIGGER_ATTR, ROW_MENU_ATTR } from '../../../hooks/useRowActionMenu';
@@ -132,16 +141,24 @@ export const FirmsView: React.FC = () => {
   };
 
   // Branch & Sub-Org options for modal dropdowns
-  const [branches, setBranches] = useState<Array<{ id: string; name: string }>>([]);
-  const [subOrgs, setSubOrgs] = useState<Array<{ id: string; name: string }>>([]);
+  const [branches, setBranches] = useState<Array<{ id: string; name: string; code?: string; subOrganizationId?: string }>>([]);
+  const [subOrgs, setSubOrgs] = useState<Array<{ id: string; name: string; code?: string }>>([]);
+  const [defaultOrgName] = useState<string>(() => {
+    return (
+      localStorage.getItem('active_organization_orgsuperadmin') ||
+      localStorage.getItem('active_organization') ||
+      currentUser?.name ||
+      'Yaa Creations'
+    );
+  });
 
   useEffect(() => {
     let alive = true;
     branchApi
-      .getBranches(1, 100)
+      .getBranches({ page_no: 1, page_size: 100, pagination_required: 'false' })
       .then((res) => {
         if (alive && res?.data && Array.isArray(res.data)) {
-          setBranches(res.data.map((b: any) => ({ id: b.id, name: b.name })));
+          setBranches(res.data.map((b: any) => ({ id: b.id, name: b.name, code: b.code, subOrganizationId: b.subOrganizationId })));
         }
       })
       .catch(() => {});
@@ -150,7 +167,7 @@ export const FirmsView: React.FC = () => {
       .getSubOrganizations({ page_no: 1, page_size: 100, pagination_required: 'false' })
       .then((res) => {
         if (alive && res?.data && Array.isArray(res.data)) {
-          setSubOrgs(res.data.map((s: any) => ({ id: s.id, name: s.name })));
+          setSubOrgs(res.data.map((s: any) => ({ id: s.id, name: s.name, code: s.code })));
         }
       })
       .catch(() => {});
@@ -177,27 +194,50 @@ export const FirmsView: React.FC = () => {
   const [viewingFirm, setViewingFirm] = useState<FirmItem | null>(null);
   const [deletingFirm, setDeletingFirm] = useState<FirmItem | null>(null);
   const [statusConfirmFirm, setStatusConfirmFirm] = useState<FirmItem | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement>(null);
 
   // Form Fields
   const [formData, setFormData] = useState({
+    subOrganizationId: '',
+    branchId: '',
     name: '',
     code: '',
-    registrationType: 'Proprietorship',
+    logo: '',
+    mobileNumber: '',
+    email: '',
     gstNumber: '',
     panNumber: '',
-    contactPerson: '',
-    email: '',
-    phone: '',
-    whatsapp: '',
-    branchId: '',
-    subOrganizationId: '',
-    city: '',
+    country: 'India',
     state: '',
+    district: '',
+    city: '',
     pincode: '',
     address: '',
     status: 'Active' as 'Active' | 'Inactive',
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  const updateField = (field: string, value: any) => {
+    setFormData((prev) => ({ ...prev, [field]: value }));
+    if (formErrors[field]) {
+      setFormErrors((prev) => ({ ...prev, [field]: '' }));
+    }
+  };
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('Logo file size must be less than 2MB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      updateField('logo', reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
 
   // Filtered & Paginated records
   const filteredFirms = useMemo(() => {
@@ -214,7 +254,8 @@ export const FirmsView: React.FC = () => {
           (f.contactPerson && f.contactPerson.toLowerCase().includes(q)) ||
           (f.gstNumber && f.gstNumber.toLowerCase().includes(q)) ||
           (f.city && f.city.toLowerCase().includes(q)) ||
-          (f.phone && f.phone.includes(q))
+          (f.phone && f.phone.includes(q)) ||
+          (f.email && f.email.toLowerCase().includes(q))
       );
     }
     return result;
@@ -230,21 +271,21 @@ export const FirmsView: React.FC = () => {
   const handleOpenAdd = () => {
     setEditingFirm(null);
     setFormErrors({});
-    const nextCode = `FRM-${String(firms.length + 1).padStart(3, '0')}`;
+    const generatedCode = `FRM-${String(firms.length + 1).padStart(3, '0')}`;
     setFormData({
+      subOrganizationId: '',
+      branchId: '',
       name: '',
-      code: nextCode,
-      registrationType: 'Proprietorship',
+      code: generatedCode,
+      logo: '',
+      mobileNumber: '',
+      email: '',
       gstNumber: '',
       panNumber: '',
-      contactPerson: '',
-      email: '',
-      phone: '',
-      whatsapp: '',
-      branchId: branches[0]?.id || '',
-      subOrganizationId: '',
-      city: '',
+      country: 'India',
       state: '',
+      district: '',
+      city: '',
       pincode: '',
       address: '',
       status: 'Active',
@@ -256,19 +297,19 @@ export const FirmsView: React.FC = () => {
     setEditingFirm(firm);
     setFormErrors({});
     setFormData({
+      subOrganizationId: firm.subOrganizationId || '',
+      branchId: firm.branchId || '',
       name: firm.name,
-      code: firm.code,
-      registrationType: firm.registrationType || 'Proprietorship',
+      code: firm.code || '',
+      logo: firm.logo || '',
+      mobileNumber: firm.phone || '',
+      email: firm.email || '',
       gstNumber: firm.gstNumber || '',
       panNumber: firm.panNumber || '',
-      contactPerson: firm.contactPerson || '',
-      email: firm.email || '',
-      phone: firm.phone || '',
-      whatsapp: firm.whatsapp || '',
-      branchId: firm.branchId || '',
-      subOrganizationId: firm.subOrganizationId || '',
-      city: firm.city || '',
+      country: firm.country || 'India',
       state: firm.state || '',
+      district: firm.district || '',
+      city: firm.city || '',
       pincode: firm.pincode || '',
       address: firm.address || '',
       status: firm.status,
@@ -279,19 +320,10 @@ export const FirmsView: React.FC = () => {
   const validateForm = () => {
     const errs: Record<string, string> = {};
     if (!formData.name.trim()) errs.name = 'Firm name is required';
-    if (!formData.code.trim()) errs.code = 'Firm code is required';
-    if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
-      errs.email = 'Please enter a valid email address';
+    if (!formData.mobileNumber.trim()) {
+      errs.mobileNumber = 'Mobile number is required';
     }
-    if (formData.phone && !/^[0-9+-\s]{7,15}$/.test(formData.phone.trim())) {
-      errs.phone = 'Please enter a valid contact phone number';
-    }
-    if (formData.gstNumber && formData.gstNumber.trim().length !== 15) {
-      errs.gstNumber = 'GSTIN must be 15 characters';
-    }
-    if (formData.panNumber && formData.panNumber.trim().length !== 10) {
-      errs.panNumber = 'PAN must be 10 characters';
-    }
+
     setFormErrors(errs);
     return Object.keys(errs).length === 0;
   };
@@ -299,36 +331,74 @@ export const FirmsView: React.FC = () => {
   const handleSaveFirm = (e: React.FormEvent) => {
     e.preventDefault();
     if (!validateForm()) return;
+    setSubmitting(true);
 
-    const matchedBranch = branches.find((b) => b.id === formData.branchId);
-    const matchedSub = subOrgs.find((s) => s.id === formData.subOrganizationId);
-    const locationStr = [formData.city, formData.state].filter(Boolean).join(', ');
+    try {
+      const matchedBranch = branches.find((b) => b.id === formData.branchId);
+      const matchedSub = formData.subOrganizationId === '__PARENT_ORG__'
+      ? { id: '__PARENT_ORG__', name: defaultOrgName ? `${defaultOrgName} (Main Organization)` : 'Main Organization' }
+      : subOrgs.find((s) => s.id === formData.subOrganizationId);
+      const locationStr = [formData.city, formData.state].filter(Boolean).join(', ');
 
-    if (editingFirm) {
-      const updated: FirmItem = {
-        ...editingFirm,
-        ...formData,
-        branchName: matchedBranch?.name || editingFirm.branchName,
-        subOrganizationName: matchedSub?.name || editingFirm.subOrganizationName,
-        location: locationStr || editingFirm.location,
-        updatedAt: new Date().toISOString(),
-      };
-      const nextList = firms.map((f) => (f.id === editingFirm.id ? updated : f));
-      saveFirms(nextList);
-      toast.success(`Firm "${formData.name}" updated successfully.`);
-    } else {
-      const newFirm: FirmItem = {
-        id: `frm_${Date.now()}`,
-        ...formData,
-        branchName: matchedBranch?.name,
-        subOrganizationName: matchedSub?.name,
-        location: locationStr,
-        createdAt: new Date().toISOString(),
-      };
-      saveFirms([newFirm, ...firms]);
-      toast.success(`Firm "${formData.name}" created successfully.`);
+      if (editingFirm) {
+        const updated: FirmItem = {
+          ...editingFirm,
+          name: formData.name,
+          code: formData.code || editingFirm.code,
+          logo: formData.logo,
+          subOrganizationId: formData.subOrganizationId,
+          subOrganizationName: matchedSub?.name || editingFirm.subOrganizationName,
+          branchId: formData.branchId,
+          branchName: matchedBranch?.name || editingFirm.branchName,
+          phone: formData.mobileNumber,
+          email: formData.email,
+          gstNumber: formData.gstNumber,
+          panNumber: formData.panNumber,
+          country: formData.country,
+          state: formData.state,
+          district: formData.district,
+          city: formData.city,
+          pincode: formData.pincode,
+          address: formData.address,
+          status: formData.status,
+          location: locationStr || editingFirm.location,
+          updatedAt: new Date().toISOString(),
+        };
+        const nextList = firms.map((f) => (f.id === editingFirm.id ? updated : f));
+        saveFirms(nextList);
+        toast.success(`Firm "${formData.name}" updated successfully.`);
+      } else {
+        const nextCode = formData.code || `FRM-${String(firms.length + 1).padStart(3, '0')}`;
+        const newFirm: FirmItem = {
+          id: `frm_${Date.now()}`,
+          name: formData.name,
+          code: nextCode,
+          logo: formData.logo,
+          subOrganizationId: formData.subOrganizationId,
+          subOrganizationName: matchedSub?.name,
+          branchId: formData.branchId,
+          branchName: matchedBranch?.name,
+          phone: formData.mobileNumber,
+          email: formData.email,
+          gstNumber: formData.gstNumber,
+          panNumber: formData.panNumber,
+          country: formData.country,
+          state: formData.state,
+          district: formData.district,
+          city: formData.city,
+          pincode: formData.pincode,
+          address: formData.address,
+          status: formData.status,
+          location: locationStr,
+          createdAt: new Date().toISOString(),
+        };
+        saveFirms([newFirm, ...firms]);
+        toast.success(`Firm "${formData.name}" created successfully.`);
+      }
+      setIsFormModalOpen(false);
+    } finally {
+      setSubmitting(false);
     }
-    setIsFormModalOpen(false);
   };
 
   const handleConfirmDelete = () => {
@@ -424,162 +494,231 @@ export const FirmsView: React.FC = () => {
 
       {/* 3. Firms Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-        <div className="overflow-x-auto min-h-[300px]">
-          <table className="w-full text-left border-collapse min-w-[950px]">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse border border-slate-200 min-w-[1100px]">
             <thead>
-              <tr className="bg-[#33077C] text-white text-[11px] font-bold uppercase tracking-wider">
-                <th className="py-4 px-5 border border-[#33077C]/30">FIRM NAME & CODE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30">REGISTRATION TYPE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30">CONTACT PERSON</th>
-                <th className="py-4 px-5 border border-[#33077C]/30">GSTIN / PAN</th>
-                <th className="py-4 px-5 border border-[#33077C]/30">LOCATION</th>
-                <th className="py-4 px-5 border border-[#33077C]/30">STATUS</th>
-                <th className="py-4 px-5 border border-[#33077C]/30">CREATED DATE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 text-center w-24">ACTIONS</th>
+              <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">FIRM NAME & CODE</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">REGISTRATION TYPE</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CONTACT PERSON</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">GSTIN / PAN</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">LOCATION</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CREATED DATE</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-24">ACTIONS</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
+            <tbody className="text-sm">
               {paginatedFirms.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-16 text-center text-slate-400 font-medium">
+                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <Building2 className="w-10 h-10 mx-auto text-slate-300 mb-2" />
                     No firms found matching your search.
                   </td>
                 </tr>
               ) : (
                 paginatedFirms.map((firm) => (
-                  <tr key={firm.id} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="py-3.5 px-5 border-b border-slate-100">
+                  <tr key={firm.id} className="hover:bg-slate-50/80 transition-colors border-b border-slate-200 font-sans">
+                    <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-xl bg-purple-100 text-[#33077C] flex items-center justify-center font-bold text-xs shrink-0">
-                          {firm.name.slice(0, 2).toUpperCase()}
+                        {firm.logo ? (
+                          <div className="w-10 h-10 rounded-full border border-slate-200 overflow-hidden shadow-xs shrink-0 select-none">
+                            <img src={firm.logo} alt={firm.name} className="w-full h-full object-cover" />
+                          </div>
+                        ) : (
+                          <div className="w-10 h-10 rounded-full bg-[#33077C] text-white flex items-center justify-center font-medium text-xs tracking-wider shadow-xs shrink-0 select-none">
+                            {firm.name.slice(0, 2).toUpperCase()}
+                          </div>
+                        )}
+                        <div className="flex flex-col">
+                          <span className="font-bold text-slate-900 text-xs sm:text-[14px]">{firm.name}</span>
+                          <span className="text-[11px] font-bold text-[#33077C] tracking-wide mt-0.5">{firm.code}</span>
+                        </div>
+                      </div>
+                    </td>
+
+                    <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
+                      <div className="flex flex-col">
+                        <span className="font-bold text-slate-900 text-xs sm:text-[13px]">{firm.registrationType || '-'}</span>
+                        <span className="text-[11px] text-slate-500 font-medium mt-0.5">Registration Type</span>
+                      </div>
+                    </td>
+
+                    <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center shrink-0">
+                          <User className="w-4 h-4 text-[#33077C]" />
                         </div>
                         <div>
-                          <div className="font-bold text-slate-900 text-sm">{firm.name}</div>
-                          <div className="text-[11px] font-semibold text-[#33077C]">{firm.code}</div>
+                          <span className="font-bold text-slate-900 text-xs sm:text-[13px] block">{firm.contactPerson || '-'}</span>
+                          <span className="text-[10px] text-slate-400 font-medium block">
+                            {firm.phone || firm.email || 'Contact Person'}
+                          </span>
                         </div>
                       </div>
                     </td>
 
-                    <td className="py-3.5 px-5 border-b border-slate-100">
-                      <span className="font-medium text-slate-700">{firm.registrationType || '-'}</span>
-                    </td>
-
-                    <td className="py-3.5 px-5 border-b border-slate-100">
+                    <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
                       <div>
-                        <div className="font-semibold text-slate-900">{firm.contactPerson || '-'}</div>
-                        <div className="text-[11px] text-slate-500">{firm.phone || firm.email || '-'}</div>
-                      </div>
-                    </td>
-
-                    <td className="py-3.5 px-5 border-b border-slate-100">
-                      <div>
-                        <div className="font-mono text-slate-800 text-[11px] font-semibold">
+                        <div className="text-slate-800 text-[11px] sm:text-xs font-semibold">
                           {firm.gstNumber ? `GST: ${firm.gstNumber}` : '-'}
                         </div>
                         {firm.panNumber && (
-                          <div className="font-mono text-slate-500 text-[10px]">PAN: {firm.panNumber}</div>
+                          <div className="text-slate-500 text-[10px] sm:text-[11px] font-medium mt-0.5">PAN: {firm.panNumber}</div>
                         )}
                       </div>
                     </td>
 
-                    <td className="py-3.5 px-5 border-b border-slate-100">
-                      <span className="font-medium text-slate-600">
-                        {firm.city ? `${firm.city}${firm.state ? `, ${firm.state}` : ''}` : '-'}
-                      </span>
+                    <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
+                      <div className="flex items-center gap-1.5 text-xs text-slate-700 font-medium">
+                        <MapPin className="w-3.5 h-3.5 text-[#33077C] shrink-0" />
+                        <span>{firm.city ? `${firm.city}${firm.state ? `, ${firm.state}` : ''}` : '-'}</span>
+                      </div>
                     </td>
 
-                    <td className="py-3.5 px-5 border-b border-slate-100">
+                    <td className="py-4 px-5 border border-slate-200 whitespace-nowrap text-center">
                       <StatusBadge status={firm.status} />
                     </td>
 
-                    <td className="py-3.5 px-5 border-b border-slate-100">
-                      <span className="text-slate-600 font-medium">{formatDate(firm.createdAt)}</span>
+                    <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
+                      <div>
+                        <span className="font-bold text-slate-900 text-xs sm:text-[13px] block">
+                          {formatDate(firm.createdAt)}
+                        </span>
+                        <span className="text-[11px] text-slate-400 font-medium block mt-0.5">
+                          {firm.status === 'Active' ? 'Active Firm' : 'Inactive Firm'}
+                        </span>
+                      </div>
                     </td>
 
-                    <td className="py-3.5 px-5 border-b border-slate-100 text-center relative">
-                      <div {...{ [ROW_MENU_TRIGGER_ATTR]: '' }} className="inline-block">
+                    <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
+                      <div className="relative inline-block text-left" {...{ [ROW_MENU_TRIGGER_ATTR]: '' }}>
                         <button
                           type="button"
                           onClick={(e) => rowMenu.toggle(e, firm.id)}
-                          className="p-1.5 rounded-lg hover:bg-slate-200/60 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+                          className="w-8 h-8 rounded-lg bg-[#33077C] hover:bg-[#432fb3] flex items-center justify-center text-white shadow-xs transition-all hover:scale-105 active:scale-95 mx-auto cursor-pointer"
                           title="Actions"
                         >
-                          <MoreVertical className="w-4 h-4" />
+                          <MoreVertical className="w-4 h-4 fill-white text-white" />
                         </button>
+
+                        {rowMenu.activeId === firm.id && rowMenu.pos && (
+                          <div
+                            {...{ [ROW_MENU_ATTR]: '' }}
+                            className="fixed z-[9999] w-48 bg-white rounded-2xl shadow-xl border border-slate-200/90 p-1.5 space-y-0.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
+                            style={{
+                              top: rowMenu.pos.top !== undefined ? `${rowMenu.pos.top}px` : 'auto',
+                              bottom: rowMenu.pos.bottom !== undefined ? `${rowMenu.pos.bottom}px` : 'auto',
+                              right: `${rowMenu.pos.right}px`,
+                            }}
+                          >
+                            {/* Edit */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                rowMenu.close();
+                                handleOpenEdit(firm);
+                              }}
+                              className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
+                            >
+                              <span
+                                style={{ width: '26px', height: '26px' }}
+                                className="rounded-full bg-[#3B82F6] flex items-center justify-center shrink-0 shadow-2xs"
+                              >
+                                <Pencil style={{ width: '13px', height: '13px' }} className="text-white stroke-[2.2]" />
+                              </span>
+                              <span>Edit</span>
+                            </button>
+
+                            {/* View */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                rowMenu.close();
+                                setViewingFirm(firm);
+                              }}
+                              className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
+                            >
+                              <span
+                                style={{ width: '26px', height: '26px' }}
+                                className="rounded-full bg-[#33077C] flex items-center justify-center shrink-0 shadow-2xs"
+                              >
+                                <Eye style={{ width: '13px', height: '13px' }} className="text-white stroke-[2.2]" />
+                              </span>
+                              <span>View</span>
+                            </button>
+
+                            {/* Inactive / Active Toggle */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                rowMenu.close();
+                                setStatusConfirmFirm(firm);
+                              }}
+                              className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-700 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
+                            >
+                              <span
+                                style={{ width: '26px', height: '26px' }}
+                                className="rounded-full bg-slate-500 flex items-center justify-center shrink-0 shadow-2xs"
+                              >
+                                {firm.status === 'Inactive' ? (
+                                  <CheckCircle2 style={{ width: '13px', height: '13px' }} className="text-white stroke-[2.2]" />
+                                ) : (
+                                  <Ban style={{ width: '13px', height: '13px' }} className="text-white stroke-[2.2]" />
+                                )}
+                              </span>
+                              <span>{firm.status === 'Inactive' ? 'Active' : 'Inactive'}</span>
+                            </button>
+
+                            {/* Suspend / Resume */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                rowMenu.close();
+                                const nextState = (firm as any).status === 'Suspended' ? 'Active' : 'Suspended';
+                                const nextList = firms.map((f) =>
+                                  f.id === firm.id ? { ...f, status: nextState as any, updatedAt: new Date().toISOString() } : f
+                                );
+                                saveFirms(nextList);
+                                toast.success(`Firm marked as ${nextState}.`);
+                              }}
+                              className="w-full px-3 py-2 text-left text-[13px] font-bold text-amber-800 hover:bg-amber-50/60 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
+                            >
+                              <span
+                                style={{ width: '26px', height: '26px' }}
+                                className="rounded-full bg-amber-500 flex items-center justify-center shrink-0 shadow-2xs"
+                              >
+                                {(firm as any).status === 'Suspended' ? (
+                                  <CheckCircle2 style={{ width: '13px', height: '13px' }} className="text-white stroke-[2.2]" />
+                                ) : (
+                                  <PauseCircle style={{ width: '13px', height: '13px' }} className="text-white stroke-[2.2]" />
+                                )}
+                              </span>
+                              <span>{(firm as any).status === 'Suspended' ? 'Resume' : 'Suspend'}</span>
+                            </button>
+
+                            <div className="my-1 mx-2 border-t border-slate-100" />
+
+                            {/* Delete */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                rowMenu.close();
+                                setDeletingFirm(firm);
+                              }}
+                              className="w-full px-3 py-2 text-left text-[13px] font-bold text-[#E11D48] hover:bg-rose-50/70 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
+                            >
+                              <span
+                                style={{ width: '26px', height: '26px' }}
+                                className="rounded-full bg-[#E11D48] flex items-center justify-center shrink-0 shadow-2xs"
+                              >
+                                <Trash2 style={{ width: '13px', height: '13px' }} className="text-white stroke-[2.2]" />
+                              </span>
+                              <span>Delete</span>
+                            </button>
+                          </div>
+                        )}
                       </div>
-
-                      {rowMenu.activeId === firm.id && rowMenu.pos && (
-                        <div
-                          {...{ [ROW_MENU_ATTR]: '' }}
-                          style={{
-                            position: 'fixed',
-                            top: rowMenu.pos.top !== undefined ? `${rowMenu.pos.top}px` : 'auto',
-                            bottom: rowMenu.pos.bottom !== undefined ? `${rowMenu.pos.bottom}px` : 'auto',
-                            right: `${rowMenu.pos.right}px`,
-                          }}
-                          className="w-44 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-left text-xs font-semibold animate-in fade-in zoom-in-95 duration-100"
-                        >
-                          <button
-                            type="button"
-                            onClick={() => {
-                              rowMenu.close();
-                              setViewingFirm(firm);
-                            }}
-                            className="w-full flex items-center gap-2.5 px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer"
-                          >
-                            <Eye className="w-3.5 h-3.5 text-purple-600" />
-                            <span>View Details</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              rowMenu.close();
-                              handleOpenEdit(firm);
-                            }}
-                            className="w-full flex items-center gap-2.5 px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer"
-                          >
-                            <Edit2 className="w-3.5 h-3.5 text-blue-600" />
-                            <span>Edit Firm</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              rowMenu.close();
-                              setStatusConfirmFirm(firm);
-                            }}
-                            className="w-full flex items-center gap-2.5 px-3 py-2 text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer"
-                          >
-                            {firm.status === 'Active' ? (
-                              <>
-                                <XCircle className="w-3.5 h-3.5 text-amber-500" />
-                                <span>Mark Inactive</span>
-                              </>
-                            ) : (
-                              <>
-                                <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                                <span>Mark Active</span>
-                              </>
-                            )}
-                          </button>
-
-                          <div className="my-1 border-t border-slate-100" />
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              rowMenu.close();
-                              setDeletingFirm(firm);
-                            }}
-                            className="w-full flex items-center gap-2.5 px-3 py-2 text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5 text-rose-500" />
-                            <span>Delete Firm</span>
-                          </button>
-                        </div>
-                      )}
                     </td>
                   </tr>
                 ))
@@ -587,206 +726,165 @@ export const FirmsView: React.FC = () => {
             </tbody>
           </table>
         </div>
-
-        {/* Pagination Footer */}
-        <div className="border-t border-slate-200 px-5 py-3">
-          <Pagination
-            currentPage={page}
-            totalRecords={totalRecords}
-            pageSize={pageSize}
-            onPageChange={(p) => setPage(p)}
-            onPageSizeChange={(ps) => {
-              setPageSize(ps);
-              setPage(1);
-            }}
-          />
-        </div>
       </div>
+
+      {/* Pagination */}
+      <Pagination
+        total={totalRecords}
+        currentPage={page}
+        pageSize={pageSize}
+        pageSizeOptions={[5, 10, 20, 50]}
+        onPageChange={(p) => setPage(p)}
+        onPageSizeChange={(ps) => {
+          setPageSize(ps);
+          setPage(1);
+        }}
+      />
 
       {/* 4. Add / Edit Firm Modal */}
       <Modal
         isOpen={isFormModalOpen}
         onClose={() => setIsFormModalOpen(false)}
         title={editingFirm ? 'Edit Firm' : 'Add New Firm'}
-        subtitle={editingFirm ? 'Update firm profile and legal details' : 'Register a new business firm profile'}
-        maxWidth="max-w-3xl"
+        subtitle={
+          editingFirm
+            ? 'Update firm profile and assignment details'
+            : 'Register a new business firm under your organization'
+        }
+        maxWidth="4xl"
+        headerGradient={true}
+        showBackIcon={true}
+        hideCloseButton={true}
+        onBack={() => setIsFormModalOpen(false)}
       >
-        <form noValidate onSubmit={handleSaveFirm} className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <form noValidate onSubmit={handleSaveFirm} className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
+          {/* Form Fields: 3 fields per row */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Field 1: Select Sub-Organization */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                Firm Name <span className="text-rose-500">*</span>
+              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                Select Sub-Organization
               </label>
-              <input
-                type="text"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                placeholder="e.g. Apex Trading Co."
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-[#33077C] focus:bg-white"
+              <CustomSelect
+                value={formData.subOrganizationId}
+                onChange={(val) => {
+                  updateField('subOrganizationId', val);
+                  // Auto-reset or select valid branch under this sub-org
+                  const availableBranches = branches.filter((b) => !val || val === '__PARENT_ORG__' || !b.subOrganizationId || b.subOrganizationId === val);
+                  if (availableBranches.length > 0 && !availableBranches.some((b) => b.id === formData.branchId)) {
+                    updateField('branchId', availableBranches[0].id);
+                  }
+                }}
+                options={(() => {
+                  const parentOrgLabel = defaultOrgName ? `${defaultOrgName} (Main Organization)` : 'Main Organization';
+                  const list: { value: string; label: string }[] = [];
+                  if (defaultOrgName) {
+                    list.push({ value: '__PARENT_ORG__', label: parentOrgLabel });
+                  }
+                  if (subOrgs.length > 0) {
+                    subOrgs.forEach((sub) => {
+                      list.push({
+                        value: sub.id,
+                        label: `${sub.name}${sub.code ? ` (${sub.code})` : ''}`,
+                      });
+                    });
+                  }
+                  return list;
+                })()}
+                placeholder="Select Sub-Organization"
+                optionVariant="strong"
+                activeColor="brand"
               />
-              {formErrors.name && <span className="text-[11px] text-rose-500 font-semibold">{formErrors.name}</span>}
             </div>
 
+            {/* Field 2: Select Branch */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                Firm Code <span className="text-rose-500">*</span>
+              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                Select Branch
               </label>
-              <input
-                type="text"
-                value={formData.code}
-                onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-                placeholder="e.g. FRM-001"
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-[#33077C] focus:bg-white"
-              />
-              {formErrors.code && <span className="text-[11px] text-rose-500 font-semibold">{formErrors.code}</span>}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">Registration Type</label>
-              <select
-                value={formData.registrationType}
-                onChange={(e) => setFormData({ ...formData, registrationType: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-[#33077C] focus:bg-white cursor-pointer"
-              >
-                {REGISTRATION_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">GSTIN</label>
-              <input
-                type="text"
-                maxLength={15}
-                value={formData.gstNumber}
-                onChange={(e) => setFormData({ ...formData, gstNumber: e.target.value.toUpperCase() })}
-                placeholder="15-digit GSTIN"
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-[#33077C] focus:bg-white font-mono"
-              />
-              {formErrors.gstNumber && (
-                <span className="text-[11px] text-rose-500 font-semibold">{formErrors.gstNumber}</span>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">PAN Number</label>
-              <input
-                type="text"
-                maxLength={10}
-                value={formData.panNumber}
-                onChange={(e) => setFormData({ ...formData, panNumber: e.target.value.toUpperCase() })}
-                placeholder="10-digit PAN"
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-[#33077C] focus:bg-white font-mono"
-              />
-              {formErrors.panNumber && (
-                <span className="text-[11px] text-rose-500 font-semibold">{formErrors.panNumber}</span>
-              )}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">Contact Person</label>
-              <input
-                type="text"
-                value={formData.contactPerson}
-                onChange={(e) => setFormData({ ...formData, contactPerson: e.target.value })}
-                placeholder="e.g. Suresh Kumar"
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-[#33077C] focus:bg-white"
+              <CustomSelect
+                value={formData.branchId}
+                onChange={(val) => updateField('branchId', val)}
+                options={branches
+                  .filter((b) => !formData.subOrganizationId || formData.subOrganizationId === '__PARENT_ORG__' || !b.subOrganizationId || b.subOrganizationId === formData.subOrganizationId)
+                  .map((b) => ({
+                    value: b.id,
+                    label: `${b.name}${b.code ? ` (${b.code})` : ''}`,
+                  }))}
+                placeholder="Select Branch"
+                optionVariant="strong"
+                activeColor="brand"
               />
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">Phone Number</label>
-              <input
-                type="tel"
-                value={formData.phone}
-                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                placeholder="10-digit phone"
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-[#33077C] focus:bg-white"
-              />
-              {formErrors.phone && <span className="text-[11px] text-rose-500 font-semibold">{formErrors.phone}</span>}
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">Official Email</label>
-              <input
-                type="email"
-                value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                placeholder="firm@example.com"
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-[#33077C] focus:bg-white"
-              />
-              {formErrors.email && <span className="text-[11px] text-rose-500 font-semibold">{formErrors.email}</span>}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">City</label>
-              <input
-                type="text"
-                value={formData.city}
-                onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                placeholder="e.g. Chennai"
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-[#33077C] focus:bg-white"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">State</label>
-              <input
-                type="text"
-                value={formData.state}
-                onChange={(e) => setFormData({ ...formData, state: e.target.value })}
-                placeholder="e.g. Tamil Nadu"
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-[#33077C] focus:bg-white"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">Pincode</label>
-              <input
-                type="text"
-                maxLength={6}
-                value={formData.pincode}
-                onChange={(e) => setFormData({ ...formData, pincode: e.target.value })}
-                placeholder="6-digit pincode"
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-[#33077C] focus:bg-white"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1.5">Address</label>
-            <textarea
-              rows={2}
-              value={formData.address}
-              onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-              placeholder="Registered street address"
-              className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-[#33077C] focus:bg-white"
+            {/* Field 3: Firm Name */}
+            <TextField
+              label="Firm Name"
+              required
+              value={formData.name}
+              error={formErrors.name}
+              placeholder="Enter firm name"
+              onValueChange={(v) => updateField('name', v)}
             />
+
+            {/* Field 4: Firm Code (Next to Firm Name) */}
+            <ReadOnlyField
+              label="Firm Code"
+              value={formData.code}
+              placeholder="Auto-generated"
+            />
+
+            {/* Field 5: Mobile Number */}
+            <PhoneField
+              label="Mobile Number"
+              required
+              placeholder="e.g. 9876543210"
+              value={formData.mobileNumber}
+              error={formErrors.mobileNumber}
+              onChange={(v) => updateField('mobileNumber', v)}
+            />
+
+            {/* Field 6: Status (Next to Mobile Number) */}
+            <div>
+              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                Status <span className="text-rose-500 font-bold">*</span>
+              </label>
+              <CustomSelect
+                value={formData.status}
+                onChange={(val) => updateField('status', val as 'Active' | 'Inactive')}
+                options={[
+                  { label: 'Active', value: 'Active' },
+                  { label: 'Inactive', value: 'Inactive' },
+                ]}
+                placeholder="Select Status"
+                optionVariant="strong"
+                activeColor="brand"
+              />
+            </div>
           </div>
 
-          <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-            <button
+          {/* Footer Submit Buttons */}
+          <div className="pt-4 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3 border-t border-slate-100">
+            <Button
               type="button"
+              variant="secondary"
+              size="md"
+              icon={<X className="w-4 h-4 text-slate-500" />}
               onClick={() => setIsFormModalOpen(false)}
-              className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 cursor-pointer"
+              className="w-full sm:w-auto justify-center"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
-              className="px-5 py-2.5 rounded-xl bg-[#33077C] hover:bg-[#270560] text-white text-xs font-bold shadow-md cursor-pointer transition-all"
+              variant="primary"
+              size="md"
+              disabled={submitting}
+              icon={<Check className="w-4 h-4 stroke-[2.5]" />}
+              className="w-full sm:w-auto justify-center"
             >
-              {editingFirm ? 'Save Changes' : 'Create Firm'}
-            </button>
+              {submitting ? 'Saving...' : editingFirm ? 'Save Changes' : 'Save'}
+            </Button>
           </div>
         </form>
       </Modal>
@@ -802,9 +900,15 @@ export const FirmsView: React.FC = () => {
         {viewingFirm && (
           <div className="space-y-5 text-xs text-slate-700">
             <div className="p-4 rounded-xl bg-purple-50/50 border border-purple-100 flex items-center gap-3.5">
-              <div className="w-12 h-12 rounded-2xl bg-[#33077C] text-white flex items-center justify-center font-bold text-base shadow-sm">
-                {viewingFirm.name.slice(0, 2).toUpperCase()}
-              </div>
+              {viewingFirm.logo ? (
+                <div className="w-12 h-12 rounded-2xl border border-slate-200 overflow-hidden shadow-sm shrink-0">
+                  <img src={viewingFirm.logo} alt={viewingFirm.name} className="w-full h-full object-cover" />
+                </div>
+              ) : (
+                <div className="w-12 h-12 rounded-2xl bg-[#33077C] text-white flex items-center justify-center font-bold text-base shadow-sm shrink-0">
+                  {viewingFirm.name.slice(0, 2).toUpperCase()}
+                </div>
+              )}
               <div>
                 <h3 className="text-base font-extrabold text-slate-900">{viewingFirm.name}</h3>
                 <div className="text-xs font-semibold text-[#33077C] flex items-center gap-2">

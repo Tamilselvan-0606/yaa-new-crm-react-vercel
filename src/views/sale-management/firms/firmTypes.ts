@@ -2,6 +2,7 @@ export interface FirmItem {
   id: string;
   name: string;
   code: string;
+  logo?: string;
   registrationType?: string;
   gstNumber?: string;
   panNumber?: string;
