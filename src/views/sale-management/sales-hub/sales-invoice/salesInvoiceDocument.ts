@@ -22,7 +22,6 @@ export const mapSaleToDocumentPrintOptions = (
         : sale.paymentStatus === "Partial"
           ? "amber"
           : "rose",
-    referenceNo: sale.referenceNo,
     companyName: companyProfile.companyName,
     companySubtitle: companyProfile.companySubtitle,
     companyAddress: companyProfile.companyAddress,

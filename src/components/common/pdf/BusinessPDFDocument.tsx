@@ -10,6 +10,12 @@ import { DocumentPrintOptions, numberToWordsIndian, pdfToday } from '../../../ut
 import { formatPhoneNumber } from '../../../utils/fieldValidators';
 import { displayUnit } from '../../../utils/unitDisplay';
 
+const pdfSafeText = (value?: string | number | null): string =>
+  value == null ? '' : String(value).replace(/₹\s*/g, 'Rs. ');
+
+const pdfCurrency = (amount: number): string =>
+  `Rs. ${(Number(amount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+
 const styles = StyleSheet.create({
   page: {
     paddingTop: 32,
@@ -336,9 +342,8 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
     docNo,
     docDate,
     dueDate,
-    status = 'Active',
+    status = '',
     statusColor = 'purple',
-    referenceNo,
     companyName = '',
     companySubtitle = '',
     companyAddress = '',
@@ -371,6 +376,16 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
     primarySignatoryLabel = 'Authorized Signatory',
     secondarySignatoryLabel,
   } = options;
+
+  const displayStatus = /^converted$/i.test(String(status || '').trim()) ? '' : status;
+  const displayExtraMeta = (extraMeta || []).filter(
+    (em) =>
+      !/^converted$/i.test(String(em.value || '').trim()) &&
+      !/^converted(\s+(ref|invoice|to|status))?$/i.test(String(em.label || '').trim()) &&
+      !/^(ref(\.|erence)?(\s*(#|no\.?|id|\/.*))?|(utr|txn)\s*\/\s*ref(\s*no\.?)?)$/i.test(
+        String(em.label || '').trim(),
+      ),
+  );
 
   const resolvedInWords = amountInWords || numberToWordsIndian(grandTotal);
 
@@ -410,10 +425,9 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
           <View style={styles.docMetaCol}>
             <Text style={styles.docTitle}>{docTypeTitle}</Text>
             <Text style={styles.docNumber}># {docNo}</Text>
-            {status ? <Text style={[styles.badge, getBadgeStyle()]}>{status}</Text> : null}
+            {displayStatus ? <Text style={[styles.badge, getBadgeStyle()]}>{displayStatus}</Text> : null}
             <Text style={styles.metaSmallText}>Date: {docDate}</Text>
             {dueDate ? <Text style={styles.metaSmallText}>Due Date: {dueDate}</Text> : null}
-            {referenceNo ? <Text style={styles.metaSmallText}>Ref #: {referenceNo}</Text> : null}
           </View>
         </View>
 
@@ -447,10 +461,10 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
                 <Text style={styles.metaItemValue}>{dueDate}</Text>
               </View>
             ) : null}
-            {extraMeta.map((em, i) => (
+            {displayExtraMeta.map((em, i) => (
               <View style={styles.metaItemRow} key={i}>
                 <Text style={styles.metaItemLabel}>{em.label}:</Text>
-                <Text style={styles.metaItemValue}>{em.value}</Text>
+                <Text style={styles.metaItemValue}>{pdfSafeText(em.value)}</Text>
               </View>
             ))}
           </View>
@@ -490,7 +504,7 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
                   {it.quantity ?? 1} {displayUnit(it.unit)}
                 </Text>
                 <Text style={[styles.tableCell, { width: '14%', textAlign: 'right' }]}>
-                  ₹{(Number(it.unitPrice) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  {pdfCurrency(Number(it.unitPrice) || 0)}
                 </Text>
                 <Text style={[styles.tableCell, { width: '10%', textAlign: 'right' }]}>
                   {it.discountPercent ? `${it.discountPercent}%` : '-'}
@@ -499,7 +513,7 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
                   {it.taxPercent ? `${it.taxPercent}%` : '-'}
                 </Text>
                 <Text style={[styles.tableCellBold, { width: '12%', textAlign: 'right' }]}>
-                  ₹{(Number(it.total) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  {pdfCurrency(Number(it.total) || 0)}
                 </Text>
               </View>
             ))}
@@ -512,19 +526,19 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
             {resolvedInWords && (
               <View style={styles.notesBox}>
                 <Text style={styles.notesTitle}>Amount In Words</Text>
-                <Text style={styles.inWordsText}>{resolvedInWords}</Text>
+                <Text style={styles.inWordsText}>{pdfSafeText(resolvedInWords)}</Text>
               </View>
             )}
             {notes ? (
               <View style={styles.notesBox}>
                 <Text style={styles.notesTitle}>Notes / Instructions</Text>
-                <Text style={styles.notesBody}>{notes}</Text>
+                <Text style={styles.notesBody}>{pdfSafeText(notes)}</Text>
               </View>
             ) : null}
             {terms ? (
               <View style={styles.notesBox}>
                 <Text style={styles.notesTitle}>Terms & Conditions</Text>
-                <Text style={styles.notesBody}>{terms}</Text>
+                <Text style={styles.notesBody}>{pdfSafeText(terms)}</Text>
               </View>
             ) : null}
           </View>
@@ -534,7 +548,7 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
               <View style={styles.totalsRow}>
                 <Text style={styles.totalsLabel}>Sub Total:</Text>
                 <Text style={styles.totalsValue}>
-                  ₹{subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  {pdfCurrency(subtotal)}
                 </Text>
               </View>
             )}
@@ -542,51 +556,60 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
               <View style={styles.totalsRow}>
                 <Text style={styles.totalsLabel}>Discount:</Text>
                 <Text style={[styles.totalsValue, { color: '#EA580C' }]}>
-                  -₹{discount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  -{pdfCurrency(discount)}
                 </Text>
               </View>
             ) : null}
             {tax && (
               <>
-                {tax.cgst ? (
+                {tax.withGst === false ? (
                   <View style={styles.totalsRow}>
-                    <Text style={styles.totalsLabel}>CGST:</Text>
-                    <Text style={styles.totalsValue}>
-                      ₹{tax.cgst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </Text>
+                    <Text style={styles.totalsLabel}>Tax (GST Exempt):</Text>
+                    <Text style={styles.totalsValue}>Rs. 0.00</Text>
                   </View>
-                ) : null}
-                {tax.sgst ? (
-                  <View style={styles.totalsRow}>
-                    <Text style={styles.totalsLabel}>SGST:</Text>
-                    <Text style={styles.totalsValue}>
-                      ₹{tax.sgst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </Text>
-                  </View>
-                ) : null}
-                {tax.igst ? (
-                  <View style={styles.totalsRow}>
-                    <Text style={styles.totalsLabel}>IGST:</Text>
-                    <Text style={styles.totalsValue}>
-                      ₹{tax.igst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </Text>
-                  </View>
-                ) : null}
-                {!tax.cgst && !tax.sgst && !tax.igst && tax.taxAmount ? (
-                  <View style={styles.totalsRow}>
-                    <Text style={styles.totalsLabel}>Total Tax / GST:</Text>
-                    <Text style={styles.totalsValue}>
-                      ₹{tax.taxAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </Text>
-                  </View>
-                ) : null}
+                ) : (
+                  <>
+                    {tax.cgst ? (
+                      <View style={styles.totalsRow}>
+                        <Text style={styles.totalsLabel}>CGST:</Text>
+                        <Text style={styles.totalsValue}>
+                          {pdfCurrency(tax.cgst)}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {tax.sgst ? (
+                      <View style={styles.totalsRow}>
+                        <Text style={styles.totalsLabel}>SGST:</Text>
+                        <Text style={styles.totalsValue}>
+                          {pdfCurrency(tax.sgst)}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {tax.igst ? (
+                      <View style={styles.totalsRow}>
+                        <Text style={styles.totalsLabel}>IGST:</Text>
+                        <Text style={styles.totalsValue}>
+                          {pdfCurrency(tax.igst)}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {!tax.cgst && !tax.sgst && !tax.igst && tax.taxAmount ? (
+                      <View style={styles.totalsRow}>
+                        <Text style={styles.totalsLabel}>Total Tax / GST:</Text>
+                        <Text style={styles.totalsValue}>
+                          {pdfCurrency(tax.taxAmount)}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </>
+                )}
               </>
             )}
             {shipping ? (
               <View style={styles.totalsRow}>
                 <Text style={styles.totalsLabel}>Shipping / Freight:</Text>
                 <Text style={styles.totalsValue}>
-                  ₹{shipping.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  {pdfCurrency(shipping)}
                 </Text>
               </View>
             ) : null}
@@ -594,7 +617,7 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
               <View style={styles.totalsRow}>
                 <Text style={styles.totalsLabel}>Other Charges:</Text>
                 <Text style={styles.totalsValue}>
-                  ₹{otherCharges.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  {pdfCurrency(otherCharges)}
                 </Text>
               </View>
             ) : null}
@@ -602,7 +625,7 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
               <View style={styles.totalsRow}>
                 <Text style={styles.totalsLabel}>Round Off:</Text>
                 <Text style={styles.totalsValue}>
-                  ₹{roundOff.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  {roundOff < 0 ? '-' : ''}{pdfCurrency(Math.abs(roundOff))}
                 </Text>
               </View>
             ) : null}
@@ -610,7 +633,7 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
             <View style={styles.grandTotalRow}>
               <Text style={styles.grandTotalLabel}>Grand Total:</Text>
               <Text style={styles.grandTotalValue}>
-                ₹{grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                {pdfCurrency(grandTotal)}
               </Text>
             </View>
 
@@ -618,7 +641,7 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
               <View style={styles.paidRow}>
                 <Text style={styles.paidLabel}>{paidAmountLabel}:</Text>
                 <Text style={styles.paidValue}>
-                  ₹{paidAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  {pdfCurrency(paidAmount)}
                 </Text>
               </View>
             )}
@@ -626,7 +649,7 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
               <View style={styles.paidRow}>
                 <Text style={styles.balanceLabel}>{balanceLabel}:</Text>
                 <Text style={styles.balanceValue}>
-                  ₹{balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  {pdfCurrency(balance)}
                 </Text>
               </View>
             )}

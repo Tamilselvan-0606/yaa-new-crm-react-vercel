@@ -1324,7 +1324,12 @@ export const SalesView: React.FC = () => {
       try {
         const fresh = await commerceInvoiceApi.getInvoiceById(sale.id);
         if (fresh && fresh.data) {
-          targetSale = mapApiInvoiceToSaleTransaction(fresh.data);
+          const mapped = mapApiInvoiceToSaleTransaction(fresh.data);
+          targetSale = {
+            ...mapped,
+            salesInvoiceManualNo:
+              mapped.salesInvoiceManualNo || sale.salesInvoiceManualNo || "",
+          };
         }
       } catch (err) {
         console.warn("Could not fetch fresh invoice details:", err);
@@ -1343,7 +1348,12 @@ export const SalesView: React.FC = () => {
       try {
         const fresh = await commerceInvoiceApi.getInvoiceById(sale.id);
         if (fresh && fresh.data) {
-          targetSale = mapApiInvoiceToSaleTransaction(fresh.data);
+          const mapped = mapApiInvoiceToSaleTransaction(fresh.data);
+          targetSale = {
+            ...mapped,
+            salesInvoiceManualNo:
+              mapped.salesInvoiceManualNo || sale.salesInvoiceManualNo || "",
+          };
         }
       } catch (err) {
         console.warn("Could not fetch fresh invoice details for editing:", err);
@@ -1499,7 +1509,14 @@ export const SalesView: React.FC = () => {
     if (!UUID_REGEX.test(sale.id)) return sale;
     try {
       const res = await commerceInvoiceApi.getInvoiceById(sale.id);
-      if (res?.data) return withSalesReturns(mapApiInvoiceToSaleTransaction(res.data));
+      if (res?.data) {
+        const mapped = mapApiInvoiceToSaleTransaction(res.data);
+        return withSalesReturns({
+          ...mapped,
+          salesInvoiceManualNo:
+            mapped.salesInvoiceManualNo || sale.salesInvoiceManualNo || "",
+        });
+      }
     } catch (err) {
       console.warn("Could not fetch latest invoice for print/download:", err);
     }
@@ -1544,20 +1561,26 @@ export const SalesView: React.FC = () => {
         docTypeTitle: "PAYMENT IN RECEIPT",
         docNo: record.referenceNo || record.id,
         docDate: record.paymentDate,
-        status: "Received",
+        status: record.status || "",
         statusColor: "emerald",
         partyTitle: "Received From (Customer)",
         partyName:
           (record as any).customerName ||
           parentSale?.customerName ||
-          "Customer",
+          "",
         extraMeta: [
           { label: "Invoice No", value: record.invoiceNo },
-          {
-            label: "Payment Mode",
-            value: (record as any).paymentMode || record.method || "Cash",
-          },
-          { label: "Recorded By", value: record.recordedBy || "Cashier" },
+          ...((record as any).paymentMode || record.method
+            ? [
+                {
+                  label: "Payment Mode",
+                  value: (record as any).paymentMode || record.method,
+                },
+              ]
+            : []),
+          ...(record.recordedBy
+            ? [{ label: "Recorded By", value: record.recordedBy }]
+            : []),
         ],
         items: [
           {
@@ -1565,15 +1588,15 @@ export const SalesView: React.FC = () => {
             quantity: 1,
             unitPrice: record.amount,
             total: record.amount,
-            remarks: record.notes || "Payment received in full/part",
+            remarks: record.notes || undefined,
           },
         ],
         grandTotal: record.amount,
         paidAmount: record.amount,
         balance: 0,
         paidAmountLabel: "Amount Received",
-        notes: record.notes || "Thank you for your business!",
-        primarySignatoryLabel: "Cashier / Accounts",
+        notes: record.notes || undefined,
+        primarySignatoryLabel: "Authorized Signatory",
       };
       await downloadBusinessDocument(
         receiptOptions,

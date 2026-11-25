@@ -191,19 +191,22 @@ export const mapSaleQuotationToPayload = (
       if (it.batch && String(it.batch).trim()) {
         item.batch = String(it.batch).trim();
       }
-      if (
-        typeof it.discountPercent === "number" &&
-        !isNaN(it.discountPercent) &&
+      const gross = item.quantity * item.unitPrice;
+      const resolvedDiscountPercent =
+        typeof item.discountPercent === "number" &&
+        !isNaN(item.discountPercent) &&
         it.discountPercent > 0
-      ) {
-        item.discountPercent = Number(it.discountPercent);
+          ? Number(it.discountPercent)
+          : Number(it.discountAmount) > 0 && gross > 0
+            ? Math.min(100, Math.round((Number(it.discountAmount) / gross) * 10000) / 100)
+            : 0;
+      if (resolvedDiscountPercent > 0) {
+        item.discountPercent = resolvedDiscountPercent;
       }
-      if (
-        typeof it.taxPercent === "number" &&
-        !isNaN(it.taxPercent) &&
-        it.taxPercent >= 0
-      ) {
-        item.taxPercent = Number(it.taxPercent);
+      const effectiveTaxPercent =
+        quotation.withGst === false ? 0 : Number(it.taxPercent);
+      if (!isNaN(effectiveTaxPercent) && effectiveTaxPercent >= 0) {
+        item.taxPercent = effectiveTaxPercent;
       }
       // Strictly omit 'unit' or any unrecognized fields
       return item;
@@ -255,6 +258,9 @@ export const mapSaleQuotationToPayload = (
   }
   if (typeof quotation.withGst === "boolean") {
     payload.withGst = quotation.withGst;
+  }
+  if (quotation.gstType) {
+    payload.gstType = quotation.gstType;
   }
   if (quotation.notes && quotation.notes.trim()) {
     payload.notes = quotation.notes.trim();

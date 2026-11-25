@@ -12,7 +12,7 @@ import React, {
   useCallback,
   useRef,
 } from "react";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   UsersRound,
@@ -279,6 +279,7 @@ export const SupplierView: React.FC = () => {
 
   const {
     register,
+    control,
     handleSubmit,
     reset,
     watch,
@@ -393,11 +394,9 @@ export const SupplierView: React.FC = () => {
 
   useEffect(() => {
     register("country");
-    register("phone");
-    register("whatsappNumber");
     register("state");
     register("city");
-  }, [register]);
+  }, [register, isFormModalOpen, editingSupplier]);
 
   useEffect(() => {
     if (!isFormModalOpen) {
@@ -1531,21 +1530,35 @@ export const SupplierView: React.FC = () => {
 
           {/* Row 2: Phone Number | WhatsApp Number | Email Address */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
-            <PhoneField
-              label="Phone Number"
-              required
-              value={watch("phone") || ""}
-              error={errors.phone?.message as string | undefined}
-              placeholder="e.g. 9988776655"
-              onChange={(v) => setValue("phone" as any, v as any, { shouldDirty: true, shouldValidate: true })}
+            <Controller
+              name="phone"
+              control={control}
+              render={({ field }) => (
+                <PhoneField
+                  label="Phone Number"
+                  required
+                  dataField="phone"
+                  value={field.value || ""}
+                  error={errors.phone?.message as string | undefined}
+                  placeholder="e.g. 9988776655"
+                  onChange={(v) => field.onChange(v)}
+                />
+              )}
             />
-            <PhoneField
-              label="WhatsApp Number"
-              required
-              value={watch("whatsappNumber") || ""}
-              error={errors.whatsappNumber?.message as string | undefined}
-              placeholder="e.g. 9988776655"
-              onChange={(v) => setValue("whatsappNumber" as any, v as any, { shouldDirty: true, shouldValidate: true })}
+            <Controller
+              name="whatsappNumber"
+              control={control}
+              render={({ field }) => (
+                <PhoneField
+                  label="WhatsApp Number"
+                  required
+                  dataField="whatsappNumber"
+                  value={field.value || ""}
+                  error={errors.whatsappNumber?.message as string | undefined}
+                  placeholder="e.g. 9988776655"
+                  onChange={(v) => field.onChange(v)}
+                />
+              )}
             />
             <div>
               <FormLabel required>Email Address</FormLabel>

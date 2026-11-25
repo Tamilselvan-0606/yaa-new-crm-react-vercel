@@ -1136,16 +1136,15 @@ export const ExpenseView: React.FC = () => {
       docTypeTitle: 'EXPENSE VOUCHER',
       docNo: exp.expenseNo,
       docDate: exp.expenseDate,
-      status: exp.status || 'Paid',
+      status: exp.status || '',
       statusColor: 'emerald',
-      referenceNo: exp.referenceNo,
       partyTitle: 'Paid To / Vendor',
-      partyName: exp.payee || exp.supplierName || 'General Payee',
+      partyName: exp.payee || exp.supplierName || '',
       partyCompany: exp.supplierName ? `Linked Supplier: ${exp.supplierName}` : undefined,
       extraMeta: [
-        { label: 'Category', value: exp.category },
-        { label: 'Payment Mode', value: exp.paymentMode },
-        ...(exp.referenceNo ? [{ label: 'Ref / Bill No', value: exp.referenceNo }] : []),
+        { label: 'Expense ID', value: exp.expenseNo },
+        ...(exp.category ? [{ label: 'Category', value: exp.category }] : []),
+        ...(exp.paymentMode ? [{ label: 'Payment Mode', value: exp.paymentMode }] : []),
       ],
       columns: [
         { header: 'Expense Description & Purpose', width: '50%' },
@@ -1155,7 +1154,7 @@ export const ExpenseView: React.FC = () => {
       items: [
         {
           name: exp.title,
-          remarks: exp.notes ? `Remarks: ${exp.notes}` : `Payee: ${exp.payee}`,
+          remarks: exp.notes ? `Remarks: ${exp.notes}` : exp.payee ? `Payee: ${exp.payee}` : undefined,
           quantity: 1,
           unitPrice: Number(exp.amount || 0),
           taxPercent: exp.taxPercent,
@@ -1172,7 +1171,7 @@ export const ExpenseView: React.FC = () => {
       balance: 0,
       paidAmountLabel: 'Amount Disbursed',
       balanceLabel: 'Balance',
-      notes: exp.notes || 'Operating expense processed and verified.',
+      notes: exp.notes || undefined,
     };
   };
 

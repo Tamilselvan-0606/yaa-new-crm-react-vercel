@@ -1201,7 +1201,9 @@ export const StocksView: React.FC = () => {
       statusColor: computedStatus === 'In Stock' ? 'emerald' : computedStatus === 'Low Stock' ? 'amber' : 'rose',
       partyTitle: 'Inventory Classification',
       partyName: stk.productName,
-      partyCompany: `Category: ${stk.category} / ${stk.subcategory || 'General'}`,
+      partyCompany: stk.category
+        ? `Category: ${stk.category}${stk.subcategory ? ` / ${stk.subcategory}` : ''}`
+        : undefined,
       extraMeta: [
         { label: 'Reorder Level', value: `${stk.reorderLevel} ${stk.unit}` },
         { label: 'Current In-Stock', value: `${stk.inStock} ${stk.unit}` },
@@ -1216,14 +1218,21 @@ export const StocksView: React.FC = () => {
         { header: 'Batch Cost (₹)', align: 'right', width: '20%' },
       ],
       items: (stk.batches && stk.batches.length > 0)
-        ? stk.batches.map((b) => ({
-            name: b.batchNo || 'Primary Batch',
-            remarks: `Exp: ${b.expDate || (b as any).expiryDate || 'N/A'} | Cost: ₹${b.costPrice || stk.unitCost || (stk as any).costPrice}`,
-            quantity: b.quantity,
-            unit: stk.unit,
-            unitPrice: b.costPrice || stk.unitCost || (stk as any).costPrice,
-            total: (b.quantity || 0) * (b.costPrice || stk.unitCost || (stk as any).costPrice || 0),
-          }))
+        ? stk.batches.map((b) => {
+            const expVal = b.expDate || (b as any).expiryDate;
+            const costVal = b.costPrice || stk.unitCost || (stk as any).costPrice;
+            return {
+              name: b.batchNo || stk.productName,
+              remarks: [
+                expVal ? `Exp: ${expVal}` : '',
+                costVal !== undefined ? `Cost: ₹${costVal}` : '',
+              ].filter(Boolean).join(' | ') || undefined,
+              quantity: b.quantity,
+              unit: stk.unit,
+              unitPrice: costVal,
+              total: (b.quantity || 0) * (costVal || 0),
+            };
+          })
         : [
             {
               name: stk.productName,
@@ -1238,7 +1247,7 @@ export const StocksView: React.FC = () => {
       grandTotal: (stk.inStock || 0) * (stk.unitCost || (stk as any).costPrice || 0),
       paidAmountLabel: 'Retail Potential (Selling)',
       paidAmount: (stk.inStock || 0) * (stk.unitPrice || (stk as any).sellingPrice || 0),
-      notes: `Product SKU: ${stk.sku || 'N/A'}. Tracked in warehouse inventory catalog.`,
+      notes: stk.sku ? `Product SKU: ${stk.sku}` : undefined,
     };
   };
 

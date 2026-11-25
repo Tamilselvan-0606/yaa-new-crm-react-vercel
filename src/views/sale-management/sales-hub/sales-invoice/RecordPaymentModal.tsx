@@ -1,5 +1,5 @@
 import React from "react";
-import { Calendar, Check, Eye, Plus, Receipt, Trash2 } from "lucide-react";
+import { Check, Eye, Plus, Receipt, Trash2 } from "lucide-react";
 import { formatDate } from "../../utils/dateUtils";
 import type {
   SaleTransaction,
@@ -10,7 +10,6 @@ import { FormError } from "../../../../components/common/FormError";
 import { DateInput } from "../../../../components/common/DateInput";
 import { type FieldErrors, fieldAttr } from "../../../../utils/formValidation";
 import { FormLabel, FORM_INPUT_CLS } from "../../utils/formUtils";
-import { isoToDdmmyyyy, ddmmyyyyToIso } from "./salesInvoiceFormat";
 
 interface RecordPaymentModalProps {
   sale: SaleTransaction | null;
@@ -60,6 +59,10 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       title="Add Payment"
       subtitle={`Record a payment against invoice ${selectedSale.invoiceNo}.`}
       maxWidth="5xl"
+      headerGradient={true}
+      showBackIcon={true}
+      hideCloseButton={true}
+      onBack={() => onClose()}
     >
       <form
         noValidate
@@ -223,29 +226,14 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
               <div>
                 <FormLabel required>Payment Date</FormLabel>
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="dd/mm/yyyy"
-                    value={isoToDdmmyyyy(paymentModalDate)}
-                    {...fieldAttr("paymentDate")}
-                    onChange={(e) => {
-                      const iso = ddmmyyyyToIso(e.target.value);
-                      onDateChange(iso || e.target.value);
-                    }}
-                    required
-                    className={`${FORM_INPUT_CLS} pr-10`}
-                  />
-                  <label className="absolute right-2.5 top-2.5 text-slate-400 hover:text-[#33077C] cursor-pointer transition-colors p-1">
-                    <Calendar className="w-4 h-4" />
-                    <DateInput
-                      value={paymentModalDate}
-                      onChange={(v) => {
-                        if (v) onDateChange(v);
-                      }}
-                    />
-                  </label>
-                </div>
+                <DateInput
+                  value={paymentModalDate}
+                  error={Boolean(paymentFormErrors.paymentDate)}
+                  {...fieldAttr("paymentDate")}
+                  onChange={(v) => {
+                    if (v) onDateChange(v);
+                  }}
+                />
                 <FormError message={paymentFormErrors.paymentDate} />
               </div>
 
@@ -473,14 +461,14 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
           <button
             type="button"
             onClick={() => onClose()}
-            className="h-10 px-5 rounded-lg border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs sm:text-[13px] font-bold transition-all cursor-pointer shadow-2xs"
+            className="h-10 px-5 rounded-xl border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs sm:text-[13px] font-bold transition-all cursor-pointer shadow-2xs"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={isSubmitting}
-            className="h-10 px-6 rounded-lg bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md shadow-[#33077C]/20 hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+            className="h-10 px-6 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md shadow-[#33077C]/20 hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
           >
             <Check className="w-4 h-4 stroke-[2.5]" />
             <span>Confirm Payment</span>

@@ -71,6 +71,7 @@ import { useCompanyDocumentProfile } from "../../../hooks/useCompanyDocumentProf
 import { exportTableToExcel } from "../../../utils/excelExport";
 import {
   printTableReport,
+  printBusinessDocument,
   downloadBusinessDocument,
   downloadTableReport,
   DocumentPrintOptions,
@@ -155,6 +156,12 @@ import {
 } from "../../../utils/formValidation";
 import { useBatchStock } from "../../../hooks/useBatchStock";
 import { DateInput } from "../../../components/common/DateInput";
+import { GstConfigurationBar } from "./sales-invoice/GstConfigurationBar";
+import {
+  SalesDocumentItemsTable,
+  type SalesDocumentLineItem,
+} from "./SalesDocumentItemsTable";
+import { SalesDocumentSummaryPanel } from "./SalesDocumentSummaryPanel";
 
 const PRODUCT_PICK_MSG = "Please choose the product from the list.";
 const STOCK_REJECTED_MSG =
@@ -232,6 +239,8 @@ const validateSaleOrderForm = (
     customerId?: string | null;
     orderDate: string;
     dueDate?: string;
+    withGst?: boolean;
+    gstType?: "intra_state" | "inter_state";
     items: ExtendedSaleOrderItem[];
   },
   ctx: {
@@ -305,18 +314,24 @@ const validateSaleOrderForm = (
   if (Object.keys(errors).length === 0) {
     const expected = round2(
       realRows.reduce(
-        (s, it) =>
-          s +
-          calculateLineItem(
-            {
-              quantity: it.quantity,
-              unitPrice: it.unitPrice,
-              discountPercent: it.discountPercent,
-              discountAmount: it.discountAmount,
-              taxPercent: it.taxPercent,
-            },
-            { withGst: true },
-          ).lineTotal,
+        (s, it) => {
+          const useAmt =
+            it.discountType === "amount" ||
+            (Number(it.discountAmount) > 0 && Number(it.discountPercent) === 0);
+          return (
+            s +
+            calculateLineItem(
+              {
+                quantity: it.quantity,
+                unitPrice: it.unitPrice,
+                discountPercent: useAmt ? 0 : it.discountPercent,
+                discountAmount: useAmt ? it.discountAmount : 0,
+                taxPercent: it.taxPercent,
+              },
+              { withGst: form.withGst !== false, gstType: form.gstType },
+            ).lineTotal
+          );
+        },
         0,
       ),
     );
@@ -423,22 +438,6 @@ const STATE_OPTIONS = [
   "Other",
 ];
 
-const UNIT_OPTIONS = [
-  "NONE",
-  "PCS",
-  "KG",
-  "BOX",
-  "LTR",
-  "BAG",
-  "PACK",
-  "DOZEN",
-  "CARTON",
-  "CAN",
-  "SET",
-  "QUINTAL",
-  "MTR",
-];
-
 const TAX_RATE_OPTIONS = [
   { label: "Select Tax", rate: 0 },
   { label: "Exempted (0%)", rate: 0 },
@@ -500,6 +499,8 @@ export interface SaleOrderTabItem {
     orderDate: string;
     dueDate: string;
     stateOfSupply: string;
+    withGst: boolean;
+    gstType: "intra_state" | "inter_state";
     paymentType: string;
     items: ExtendedSaleOrderItem[];
     notes: string;
@@ -1170,25 +1171,46 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     const newProductId = product.productId || product.id;
     const currentRows = activeTab.formData.items;
     const oldProductId = currentRows[index]?.productId;
-    if (oldProductId !== newProductId) {
-      // Batch belongs to the previous product: reset it and drop that product's stale stock state.
-      handleItemChange(index, "batch", "");
-      if (
-        oldProductId &&
-        !currentRows.some((r, i) => i !== index && r.productId === oldProductId)
-      ) {
-        forgetBatchStock(oldProductId);
-      }
+    if (
+      oldProductId &&
+      oldProductId !== newProductId &&
+      !currentRows.some((r, i) => i !== index && r.productId === oldProductId)
+    ) {
+      forgetBatchStock(oldProductId);
     }
     loadBatchStock(newProductId);
-    handleItemChange(index, "productId", newProductId);
-    handleItemChange(index, "productName", product.productName);
-    handleItemChange(index, "sku", product.sku || "");
-    handleItemChange(index, "unit", product.unit || "PCS");
-    handleItemChange(index, "category", product.category || "");
-    handleItemChange(index, "hsnCode", product.hsnCode || "");
-    handleItemChange(index, "unitPrice", Number(product.unitPrice || 0));
-    // GST is applied only when the user picks a GST rate for the line; a product's own tax rate is not copied onto the line.
+    updateActiveTabFormData((prev) => {
+      const updatedItems = [...prev.items];
+      const existing = updatedItems[index];
+      const target: ExtendedSaleOrderItem = {
+        ...existing,
+        productId: newProductId,
+        productName: product.productName || product.name || "",
+        sku: product.sku || product.productCode || "",
+        unit: product.unit && product.unit !== "NONE" ? product.unit : "PCS",
+        category: product.category || "",
+        hsnCode: product.hsnCode || "",
+        unitPrice: Number(product.unitPrice ?? product.price ?? product.salePrice ?? 0),
+        batch: oldProductId !== newProductId ? "" : existing.batch,
+      };
+      const useAmt =
+        target.discountType === "amount" ||
+        (Number(target.discountAmount) > 0 && Number(target.discountPercent) === 0);
+      const lineRes = calculateLineItem(
+        {
+          quantity: Number(target.quantity) || 1,
+          unitPrice: target.unitPrice,
+          discountPercent: useAmt ? 0 : target.discountPercent,
+          discountAmount: useAmt ? target.discountAmount : 0,
+          taxPercent: target.taxPercent,
+        },
+        { withGst: prev.withGst, gstType: prev.gstType },
+      );
+      target.taxAmount = lineRes.taxAmount;
+      target.total = lineRes.lineTotal;
+      updatedItems[index] = target;
+      return { ...prev, items: updatedItems };
+    });
     setOpenProductDropdownRow(null);
   };
 
@@ -1207,6 +1229,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       orderDate: new Date().toISOString().split("T")[0],
       dueDate: new Date(Date.now() + 14 * 86400000).toISOString().split("T")[0],
       stateOfSupply: "33-Tamil Nadu",
+      withGst: true,
+      gstType: "intra_state" as "intra_state" | "inter_state",
       paymentType: "Credit",
       items: [
         {
@@ -1315,9 +1339,10 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     const nextNum = tabs.length;
     const nextPreviewNo = computedPreviewNo;
     const newForm = createEmptyFormData(nextNum, nextPreviewNo);
+    const newTabId = `tab-${Date.now()}`;
     setTabs([
       {
-        id: `tab-${Date.now()}`,
+        id: newTabId,
         title: "New Sale Order",
         num: nextNum,
         formData: newForm,
@@ -1325,7 +1350,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         enableRoundOff: true,
       },
     ]);
-    setActiveTabId(`tab-${Date.now()}`);
+    setActiveTabId(newTabId);
     setViewMode("form");
   };
 
@@ -1352,8 +1377,14 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     let order = listOrder;
     try {
       const res = await commerceSaleOrderApi.getOrderById(listOrder.id);
-      if (res?.success && res.data)
-        order = mapApiSaleOrderToSaleOrderRecord(res.data);
+      if (res?.success && res.data) {
+        const mapped = mapApiSaleOrderToSaleOrderRecord(res.data);
+        order = {
+          ...mapped,
+          salesOrderManualNo:
+            mapped.salesOrderManualNo || listOrder.salesOrderManualNo || "",
+        };
+      }
     } catch (err) {
       console.warn("Could not fetch sale order details:", err);
     }
@@ -1376,9 +1407,45 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         orderDate: order.orderDate,
         dueDate: order.dueDate,
         stateOfSupply: order.stateOfSupply || "33-Tamil Nadu",
+        withGst: order.withGst !== false,
+        gstType: (order.gstType === "inter_state"
+          ? "inter_state"
+          : order.gstType === "intra_state"
+            ? "intra_state"
+            : determineGstType(order.stateOfSupply)) as "intra_state" | "inter_state",
         paymentType: order.paymentType || "Credit",
-        items:
-          order.items.length > 0 ? order.items : createEmptyFormData().items,
+        items: (() => {
+          const editWithGst = order.withGst !== false;
+          const editGstType: "intra_state" | "inter_state" =
+            order.gstType === "inter_state"
+              ? "inter_state"
+              : order.gstType === "intra_state"
+                ? "intra_state"
+                : determineGstType(order.stateOfSupply);
+          if (order.items.length === 0) return createEmptyFormData().items;
+          return order.items.map((it) => {
+            const useAmt =
+              Number((it as any).discountAmount) > 0 &&
+              Number(it.discountPercent) === 0;
+            const lineRes = calculateLineItem(
+              {
+                quantity: Number(it.quantity) || 0,
+                unitPrice: Number(it.unitPrice) || 0,
+                discountPercent: useAmt ? 0 : Number(it.discountPercent) || 0,
+                discountAmount: useAmt ? Number((it as any).discountAmount) : 0,
+                taxPercent: Number(it.taxPercent) || 0,
+              },
+              { withGst: editWithGst, gstType: editGstType },
+            );
+            return {
+              ...it,
+              discountType: useAmt ? "amount" : "percent",
+              discountAmount: useAmt ? lineRes.discountAmount : 0,
+              taxAmount: lineRes.taxAmount,
+              total: lineRes.lineTotal,
+            };
+          });
+        })(),
         notes: order.notes || "",
         terms: order.terms || "",
       },
@@ -1404,6 +1471,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       customerCompany: customer.company || "",
       billingAddress: customer.billingAddress || customer.address || "",
       stateOfSupply: customer.state ? `${customer.state}` : prev.stateOfSupply,
+      gstType: customer.state
+        ? determineGstType(`${customer.state}`)
+        : prev.gstType,
     }));
     setPartySearchQuery(customer.name);
     setIsPartyDropdownOpen(false);
@@ -1440,10 +1510,27 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         }
       }
 
-      const rawDiscPct =
-        field === "discountPercent" ? Number(value) : target.discountPercent;
-      const rawDiscAmt =
-        field === "discountAmount" ? Number(value) : target.discountAmount;
+      let rawDiscPct = Number(target.discountPercent) || 0;
+      let rawDiscAmt = Number(target.discountAmount) || 0;
+      if (field === "discountPercent") {
+        target.discountType = "percent";
+        rawDiscPct = Math.min(100, Math.max(0, Number(value) || 0));
+        rawDiscAmt = 0;
+        target.discountPercent = rawDiscPct;
+        target.discountAmount = 0;
+      } else if (field === "discountAmount") {
+        target.discountType = "amount";
+        rawDiscPct = 0;
+        rawDiscAmt = Math.max(0, Number(value) || 0);
+        target.discountPercent = 0;
+      } else if (
+        target.discountType === "amount" ||
+        (Number(target.discountAmount) > 0 && Number(target.discountPercent) === 0)
+      ) {
+        rawDiscPct = 0;
+      } else {
+        rawDiscAmt = 0;
+      }
 
       const lineRes = calculateLineItem(
         {
@@ -1454,20 +1541,75 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           taxPercent: target.taxPercent,
         },
         {
-          withGst: true,
-          gstType: determineGstType(prev.stateOfSupply),
+          withGst: prev.withGst,
+          gstType: prev.gstType,
         },
       );
 
       target.quantity = lineRes.quantity;
       target.unitPrice = lineRes.unitPrice;
-      target.discountPercent = lineRes.discountPercent;
-      target.discountAmount = lineRes.discountAmount;
+      if (target.discountType === "amount") {
+        target.discountPercent = 0;
+        target.discountAmount = lineRes.discountAmount;
+      } else {
+        target.discountPercent = lineRes.discountPercent;
+        target.discountAmount = 0;
+      }
       target.taxPercent = lineRes.taxPercent;
       target.taxAmount = lineRes.taxAmount;
       target.total = lineRes.lineTotal;
 
       updatedItems[index] = target;
+      return { ...prev, items: updatedItems };
+    });
+  };
+
+  const handleToggleWithGst = (enableGst: boolean) => {
+    updateActiveTabFormData((prev) => {
+      const updatedItems = prev.items.map((it) => {
+        const useAmt =
+          it.discountType === "amount" ||
+          (Number(it.discountAmount) > 0 && Number(it.discountPercent) === 0);
+        const lineRes = calculateLineItem(
+          {
+            quantity: it.quantity,
+            unitPrice: it.unitPrice,
+            discountPercent: useAmt ? 0 : it.discountPercent,
+            discountAmount: useAmt ? it.discountAmount : 0,
+            taxPercent: it.taxPercent,
+          },
+          { withGst: enableGst, gstType: prev.gstType },
+        );
+        return {
+          ...it,
+          taxAmount: lineRes.taxAmount,
+          total: lineRes.lineTotal,
+        };
+      });
+      return { ...prev, withGst: enableGst, items: updatedItems };
+    });
+  };
+
+  const handleSetGstType = (type: "intra_state" | "inter_state") => {
+    updateActiveTabFormData((prev) => ({ ...prev, gstType: type }));
+  };
+
+  const handleClearProductRow = (index: number) => {
+    updateActiveTabFormData((prev) => {
+      const updatedItems = [...prev.items];
+      updatedItems[index] = {
+        ...updatedItems[index],
+        productId: "",
+        productName: "",
+        sku: "",
+        batch: "",
+        unitPrice: 0,
+        taxPercent: 0,
+        discountPercent: 0,
+        discountAmount: 0,
+        taxAmount: 0,
+        total: 0,
+      };
       return { ...prev, items: updatedItems };
     });
   };
@@ -1486,6 +1628,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           unit: "PCS",
           unitPrice: 0,
           discountPercent: 0,
+          discountAmount: 0,
           taxPercent: 0,
           total: 0,
         },
@@ -1507,14 +1650,20 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   // Computed Totals for Current Form using Centralized Financial Engine
   const currentCalculations = useMemo(() => {
     const docTotals = calculateDocumentTotals({
-      items: (activeTab.formData.items || []).map((it) => ({
-        quantity: it.quantity,
-        unitPrice: it.unitPrice,
-        discountPercent: it.discountPercent,
-        discountAmount: it.discountAmount,
-        taxPercent: it.taxPercent,
-      })),
-      withGst: true,
+      items: (activeTab.formData.items || []).map((it) => {
+        const useAmt =
+          it.discountType === "amount" ||
+          (Number(it.discountAmount) > 0 && Number(it.discountPercent) === 0);
+        return {
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          discountPercent: useAmt ? 0 : it.discountPercent,
+          discountAmount: useAmt ? it.discountAmount : 0,
+          taxPercent: it.taxPercent,
+        };
+      }),
+      withGst: activeTab.formData.withGst,
+      gstType: activeTab.formData.gstType,
       stateOfSupply: activeTab.formData.stateOfSupply,
       roundMode: enableRoundOff ? "auto" : "none",
       manualRoundOff: manualRoundOff,
@@ -1526,12 +1675,17 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       totalDiscount: docTotals.totalDiscount,
       netTaxable: docTotals.taxableAmount,
       totalTax: docTotals.totalTax,
+      cgst: docTotals.cgst,
+      sgst: docTotals.sgst,
+      igst: docTotals.igst,
       roundOff: docTotals.roundOff,
       finalAmount: docTotals.grandTotal,
     };
   }, [
     activeTab.formData.items,
     activeTab.formData.stateOfSupply,
+    activeTab.formData.withGst,
+    activeTab.formData.gstType,
     enableRoundOff,
     manualRoundOff,
   ]);
@@ -1556,9 +1710,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         loadDraftProducts(restored.lines.map((l) => l.productId)),
         loadDraftCustomer(restored.draft.customer_id),
       ]);
-      const gstType = determineGstType(
-        customer?.state ? `${customer.state}` : activeTab.formData.stateOfSupply,
-      );
+      const gstType = customer?.state
+        ? determineGstType(`${customer.state}`)
+        : activeTab.formData.gstType;
       const rows = restored.lines.map((l, i) => {
         const prod = productMap.get(l.productId);
         const lineRes = calculateLineItem(
@@ -1568,7 +1722,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             discountPercent: l.discountPercent,
             taxPercent: l.taxPercent,
           },
-          { withGst: true, gstType },
+          { withGst: activeTab.formData.withGst, gstType },
         );
         const lineDiscountAmount = lineRes.discountAmount;
         const lineTaxAmount = lineRes.taxAmount;
@@ -1603,6 +1757,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               customerCompany: customer.company || "",
               billingAddress: customer.billingAddress || customer.address || "",
               stateOfSupply: customer.state ? `${customer.state}` : prev.stateOfSupply,
+              gstType: customer.state
+                ? determineGstType(`${customer.state}`)
+                : prev.gstType,
             }
           : {}),
         items: rows.length > 0 ? rows : prev.items,
@@ -1748,7 +1905,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           billingAddress: form.billingAddress,
           stateOfSupply: form.stateOfSupply,
           items: resolvedItems,
-          withGst: currentCalculations.totalTax > 0,
+          withGst: form.withGst,
+          gstType: form.gstType,
           roundOff: currentCalculations.roundOff,
           notes: form.notes,
           terms: form.terms,
@@ -1806,25 +1964,11 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                 shippingAddress: form.billingAddress,
                 items: form.items,
                 subtotal: currentCalculations.subtotalGross,
-                withGst: currentCalculations.totalTax > 0,
-                gstType: form.stateOfSupply?.includes("Tamil Nadu")
-                  ? ("intra_state" as const)
-                  : ("inter_state" as const),
-                cgst:
-                  currentCalculations.totalTax > 0 &&
-                  form.stateOfSupply?.includes("Tamil Nadu")
-                    ? currentCalculations.totalTax / 2
-                    : 0,
-                sgst:
-                  currentCalculations.totalTax > 0 &&
-                  form.stateOfSupply?.includes("Tamil Nadu")
-                    ? currentCalculations.totalTax / 2
-                    : 0,
-                igst:
-                  currentCalculations.totalTax > 0 &&
-                  !form.stateOfSupply?.includes("Tamil Nadu")
-                    ? currentCalculations.totalTax
-                    : 0,
+                withGst: form.withGst,
+                gstType: form.gstType,
+                cgst: currentCalculations.cgst,
+                sgst: currentCalculations.sgst,
+                igst: currentCalculations.igst,
                 discount: currentCalculations.totalDiscount || 0,
                 totalDiscount: currentCalculations.totalDiscount || 0,
                 taxAmount: currentCalculations.totalTax || 0,
@@ -2216,6 +2360,12 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           .toISOString()
           .split("T")[0],
         stateOfSupply: item.stateOfSupply || "33-Tamil Nadu",
+        withGst: item.withGst !== false,
+        gstType: (item.gstType === "inter_state"
+          ? "inter_state"
+          : item.gstType === "intra_state"
+            ? "intra_state"
+            : determineGstType(item.stateOfSupply)) as "intra_state" | "inter_state",
         paymentType: item.paymentType || "Credit",
         items: item.items.length > 0 ? item.items : createEmptyFormData().items,
         notes: item.notes || "",
@@ -2351,7 +2501,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       docNo: order.orderNo,
       docDate: isoToDdmmyyyy(order.orderDate),
       dueDate: order.dueDate ? isoToDdmmyyyy(order.dueDate) : undefined,
-      status: order.status,
+      status: /^converted$/i.test(String(order.status || "").trim()) ? "" : order.status,
       statusColor:
         order.status === "Converted" || order.status === "Completed"
           ? "emerald"
@@ -2360,7 +2510,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             : order.status === "Cancelled"
               ? "rose"
               : "purple",
-      referenceNo: order.referenceNo,
       companyName: companyProfile.companyName,
       companySubtitle: companyProfile.companySubtitle,
       companyAddress: companyProfile.companyAddress,
@@ -2371,19 +2520,22 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       partyName: order.partyName,
       partyCompany: order.customerCompany,
       partyPhone: order.customerPhone,
+      partyEmail: order.customerEmail,
       partyAddress: order.billingAddress,
       extraMeta: [
         { label: "Order ID", value: order.orderNo },
         ...(order.salesOrderManualNo
           ? [{ label: "Order No", value: order.salesOrderManualNo }]
           : []),
-        { label: "Payment Type", value: order.paymentType || "Credit" },
-        {
-          label: "State of Supply",
-          value: order.stateOfSupply || "Tamil Nadu",
-        },
-        ...(order.convertedToInvoiceNo
-          ? [{ label: "Converted Invoice", value: order.convertedToInvoiceNo }]
+        ...(order.paymentType
+          ? [{ label: "Payment Type", value: order.paymentType }]
+          : []),
+        ...(order.stateOfSupply
+          ? [{ label: "State of Supply", value: order.stateOfSupply }]
+          : []),
+        ...(!/^converted$/i.test(String(order.status || "").trim()) &&
+        order.status
+          ? [{ label: "Order Status", value: order.status }]
           : []),
       ],
       items: (order.items || []).map((it) => ({
@@ -2393,6 +2545,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         unit: it.unit,
         quantity: it.quantity,
         unitPrice: it.unitPrice,
+        discountPercent: it.discountPercent,
         taxPercent: isGstActive ? it.taxPercent || 0 : 0,
         total: it.total,
       })),
@@ -2400,10 +2553,22 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       discount: order.discount,
       tax: {
         withGst: isGstActive,
+        gstType: order.gstType,
         taxAmount: order.taxAmount,
+        cgst: order.cgst || undefined,
+        sgst: order.sgst || undefined,
+        igst: order.igst || undefined,
       },
       roundOff: order.roundOff,
       grandTotal: order.amount,
+      ...(Number(order.advanceAmount || 0) > 0
+        ? {
+            paidAmount: order.advanceAmount,
+            paidAmountLabel: "Advance Paid",
+          }
+        : {}),
+      balance: order.balance,
+      notes: order.notes,
       terms: order.terms,
       primarySignatoryLabel: "Authorized Signatory",
     };
@@ -2416,7 +2581,14 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     if (!UUID_REGEX.test(order.id)) return order;
     try {
       const res = await commerceSaleOrderApi.getOrderById(order.id);
-      if (res?.success && res.data) return mapApiSaleOrderToSaleOrderRecord(res.data);
+      if (res?.success && res.data) {
+        const mapped = mapApiSaleOrderToSaleOrderRecord(res.data);
+        return {
+          ...mapped,
+          salesOrderManualNo:
+            mapped.salesOrderManualNo || order.salesOrderManualNo || "",
+        };
+      }
     } catch (err) {
       console.warn("Could not fetch latest sale order for print/download:", err);
     }
@@ -2448,180 +2620,10 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     }
   };
 
-  // Print Sale Order Document
+  // Print Sale Order Document (standardized via printBusinessDocument)
   const handlePrintOrder = async (listOrder: SaleOrderRecord) => {
     const order = await fetchLatestOrder(listOrder);
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) {
-      toast.error("Unable to open print preview. Please allow popups.");
-      return;
-    }
-
-    const isGstActive =
-      order.withGst !== false && Number(order.taxAmount || 0) > 0;
-
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Sale Order - ${order.orderNo}</title>
-          <style>
-            * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-            body { padding: 32px; color: #1e293b; background: #fff; line-height: 1.5; font-size: 13px; }
-            .header { display: flex; justify-content: space-between; border-bottom: 2px solid #33077C; padding-bottom: 16px; margin-bottom: 20px; }
-            .brand-name { font-size: 22px; font-weight: 800; color: #33077C; }
-            .doc-title { font-size: 20px; font-weight: 800; color: #0f172a; text-align: right; text-transform: uppercase; letter-spacing: 0.5px; }
-            .badge { display: inline-block; padding: 3px 10px; border-radius: 9999px; font-size: 11px; font-weight: 700; background: #FEF3C7; color: #B45309; }
-            .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 20px; }
-            .meta-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px; }
-            .meta-title { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 6px; }
-            .meta-text { font-size: 13px; font-weight: 600; color: #0f172a; }
-            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-            th { background: #33077C; color: #fff; font-size: 11px; font-weight: 700; text-transform: uppercase; text-align: left; padding: 10px 12px; border: 1px solid #33077C; }
-            td { padding: 10px 12px; border: 1px solid #e2e8f0; font-size: 12px; }
-            .text-right { text-align: right; }
-            .text-center { text-align: center; }
-            .total-section { display: flex; justify-content: flex-end; margin-bottom: 24px; }
-            .total-table { width: 320px; }
-            .total-table td { border: none; padding: 4px 8px; }
-            .grand-total { font-size: 15px; font-weight: 800; color: #33077C; border-top: 2px solid #33077C !important; padding-top: 8px !important; }
-            .terms-box { border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px; background: #fafafa; margin-bottom: 30px; }
-            .footer { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 40px; padding-top: 20px; border-top: 1px dashed #cbd5e1; }
-            .sign-box { text-align: center; width: 180px; border-top: 1px solid #64748b; padding-top: 6px; font-weight: 700; font-size: 12px; }
-            @media print {
-              body { padding: 0; }
-              @page { margin: 15mm; }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <div>
-              <div class="brand-name">${companyProfile.companyName}</div>
-              <div style="color: #64748b; font-size: 12px; margin-top: 2px;">${companyProfile.companySubtitle}</div>
-              <div style="color: #475569; font-size: 11px;">GSTIN: ${companyProfile.companyGstin} • Phone: ${companyProfile.companyPhone}</div>
-            </div>
-            <div>
-              <div class="doc-title">SALE ORDER</div>
-              <div style="font-size: 12px; color: #64748b; text-align: right; margin-top: 4px;">
-                Order ID: <strong>${order.orderNo}</strong> (Ref: ${order.referenceNo || "1"})
-              </div>
-              ${order.salesOrderManualNo ? `<div style="font-size: 12px; color: #64748b; text-align: right; margin-top: 2px;">Order No: <strong>${order.salesOrderManualNo}</strong></div>` : ""}
-              <div style="text-align: right; margin-top: 4px;">
-                <span class="badge">${order.status.toUpperCase()}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="grid-2">
-            <div class="meta-box">
-              <div class="meta-title">Bill To (Customer Details)</div>
-              <div class="meta-text">${order.partyName}</div>
-              ${order.customerCompany ? `<div style="font-size: 12px; color: #475569;">${order.customerCompany}</div>` : ""}
-              ${order.customerPhone ? `<div style="font-size: 12px; color: #475569;">Phone: ${order.customerPhone}</div>` : ""}
-              <div style="font-size: 12px; color: #64748b; margin-top: 4px;">${order.billingAddress}</div>
-            </div>
-            <div class="meta-box">
-              <div class="meta-title">Order Summary</div>
-              <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                <span style="color: #64748b;">Order Date:</span>
-                <strong>${isoToDdmmyyyy(order.orderDate)}</strong>
-              </div>
-              <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                <span style="color: #64748b;">Delivery Due Date:</span>
-                <strong>${isoToDdmmyyyy(order.dueDate)}</strong>
-              </div>
-              <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                <span style="color: #64748b;">Payment Mode:</span>
-                <strong>${order.paymentType || "Credit"}</strong>
-              </div>
-              <div style="display: flex; justify-content: space-between;">
-                <span style="color: #64748b;">Order Status:</span>
-                <strong>${order.status}</strong>
-              </div>
-            </div>
-          </div>
-
-          <table>
-            <thead>
-              <tr>
-                <th class="text-center" style="width: 40px;">#</th>
-                <th>Item Description</th>
-                <th class="text-center" style="width: 100px;">Batch No</th>
-                <th class="text-center" style="width: 70px;">Qty</th>
-                <th class="text-right" style="width: 100px;">Rate (₹)</th>
-                ${isGstActive ? '<th class="text-right" style="width: 80px;">GST %</th>' : ""}
-                <th class="text-right" style="width: 110px;">Amount (₹)</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${order.items
-                .map(
-                  (item, idx) => `
-                <tr>
-                  <td class="text-center font-bold">${idx + 1}</td>
-                  <td>
-                    <strong>${item.productName}</strong>
-                    ${item.sku ? `<div style="font-size: 10.5px; color: #64748b;">SKU: ${item.sku}</div>` : ""}
-                  </td>
-                  <td class="text-center" style="font-family: monospace; font-weight: 700; color: #33077C;">${item.batch || "—"}</td>
-                  <td class="text-center">${item.quantity} ${item.unit || ""}</td>
-                  <td class="text-right">₹${Number(item.unitPrice).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-                  ${isGstActive ? `<td class="text-right">${item.taxPercent || 0}%</td>` : ""}
-                  <td class="text-right font-bold">₹${Number(item.total).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-                </tr>
-              `,
-                )
-                .join("")}
-            </tbody>
-          </table>
-
-          <div class="total-section">
-            <table class="total-table">
-              <tr>
-                <td style="color: #64748b;">Subtotal:</td>
-                <td class="text-right font-semibold">₹${Number(order.subtotal || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-              </tr>
-              ${
-                order.discount
-                  ? `<tr><td style="color: #64748b;">Discount:</td><td class="text-right font-semibold">-₹${Number(order.discount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>`
-                  : ""
-              }
-              ${
-                order.taxAmount
-                  ? `
-                <tr>
-                  <td style="color: #64748b;">GST Tax:</td>
-                  <td class="text-right font-semibold">₹${Number(order.taxAmount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-                </tr>
-              `
-                  : ""
-              }
-              <tr>
-                <td class="grand-total">Total Amount:</td>
-                <td class="text-right grand-total">₹${Number(order.amount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-              </tr>
-            </table>
-          </div>
-
-          <div class="footer">
-            <div>
-              <div style="font-size: 11px; color: #94a3b8;">This is a computer-generated sale order document.</div>
-            </div>
-            <div class="sign-box">
-              Authorized Signatory
-            </div>
-          </div>
-
-          <script>
-            window.onload = function() {
-              window.print();
-            }
-          </script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
+    await printBusinessDocument(mapSaleOrderToDocumentPrintOptions(order));
   };
 
   // Delete / Cancel Sale Order (DELETE /commerce/orders/{id}) with confirmation modal
@@ -3102,6 +3104,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                       updateActiveTabFormData((prev) => ({
                         ...prev,
                         stateOfSupply: e.target.value,
+                        gstType: determineGstType(e.target.value),
                       }))
                     }
                     className="w-40 sm:w-48 h-9 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none cursor-pointer transition-colors"
@@ -3116,814 +3119,57 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               </div>
             </div>
 
-            {/* 4. BILLING TABLE (THE GRID - CRM THEME) */}
-            {(fe.errors.items || fe.errors.total) && (
-              <div className="mt-4" {...fieldAttr("items")}>
-                <FormError message={fe.errors.items || fe.errors.total} />
-              </div>
-            )}
-            <div className="mt-6 overflow-x-auto border border-slate-200 rounded-xl min-h-[380px] pb-36">
-              <table className="w-full min-w-[1250px] text-xs border-collapse">
-                {/* Table Header */}
-                <thead>
-                  <tr className="bg-[#33077C] text-white font-bold uppercase text-[10.5px] border-b border-[#4309A2] tracking-wider select-none">
-                    <th className="py-2.5 px-2.5 text-center border-r border-[#4309A2]/70 w-10 text-white/80 font-extrabold">
-                      +
-                    </th>
-                    <th className="py-2.5 px-3 text-left border-r border-[#4309A2]/70 min-w-[200px] text-white">
-                      ITEM
-                    </th>
-                    {columnSettings.showItemCategory && (
-                      <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 min-w-[130px] text-white">
-                        ITEM CATEGORY
-                      </th>
-                    )}
-                    {columnSettings.showItemCode && (
-                      <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 w-28 text-white">
-                        ITEM CODE
-                      </th>
-                    )}
-                    {columnSettings.showHsnSac && (
-                      <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 w-28 text-white">
-                        HSN/SAC CODE
-                      </th>
-                    )}
-                    {columnSettings.showDescription && (
-                      <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 min-w-[160px] text-white">
-                        DESCRIPTION
-                      </th>
-                    )}
-                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 min-w-[160px] text-white">
-                      BATCH NO
-                    </th>
-                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-28 min-w-[112px] text-white">
-                      QTY
-                    </th>
-                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-24 min-w-[96px] text-white">
-                      UNIT
-                    </th>
-                    <th className="py-2.5 px-3 text-right border-r border-[#4309A2]/70 w-36 text-white">
-                      <div>PRICE/UNIT</div>
-                      <div className="text-[9.5px] text-purple-200 font-normal lowercase">
-                        ({priceTaxMode.toLowerCase()})
-                      </div>
-                    </th>
-                    {columnSettings.showDiscount && (
-                      <th
-                        colSpan={2}
-                        className="py-2 px-2 text-center border-r border-[#4309A2]/70 text-white"
-                      >
-                        <div className="text-[10px]">DISCOUNT</div>
-                        <div className="grid grid-cols-2 text-[9.5px] text-purple-200 font-semibold mt-0.5 border-t border-[#4309A2]/70 pt-1">
-                          <span>%</span>
-                          <span className="text-right pr-1">AMOUNT</span>
-                        </div>
-                      </th>
-                    )}
-                    <th
-                      colSpan={2}
-                      className="py-2 px-2 text-center border-r border-[#4309A2]/70 text-white"
-                    >
-                      <div className="text-[10px]">TAX</div>
-                      <div className="grid grid-cols-2 text-[9.5px] text-purple-200 font-semibold mt-0.5 border-t border-[#4309A2]/70 pt-1">
-                        <span>%</span>
-                        <span className="text-right pr-1">AMOUNT</span>
-                      </div>
-                    </th>
-                    <th className="py-2.5 px-3 text-right border-r border-[#4309A2]/70 w-36 relative text-white">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <span>AMOUNT</span>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setShowColumnCustomizePopover(
-                              !showColumnCustomizePopover,
-                            );
-                          }}
-                          className="table-column-customize-btn inline-flex items-center justify-center w-5 h-5 rounded-full text-white hover:bg-white/20 transition-colors cursor-pointer"
-                          title="Customize table columns"
-                        >
-                          <PlusCircle className="w-4 h-4 text-white stroke-[2.2]" />
-                        </button>
-                      </div>
+            {/* 4. TAXATION & GST CONFIGURATION BAR + ITEMS TABLE */}
+            <div className="mt-6 space-y-4">
+              <GstConfigurationBar
+                withGst={activeTab.formData.withGst}
+                gstType={activeTab.formData.gstType}
+                onToggleWithGst={handleToggleWithGst}
+                onSetGstType={handleSetGstType}
+                documentLabel="sale order"
+              />
 
-                      {/* Customization Dropdown Popover */}
-                      {showColumnCustomizePopover && (
-                        <div
-                          onClick={(e) => e.stopPropagation()}
-                          className="table-column-customize-popover absolute right-0 top-full mt-1.5 w-52 bg-white rounded-xl shadow-2xl border border-slate-200 p-2.5 z-50 text-left normal-case tracking-normal animate-in fade-in zoom-in-95 duration-100"
-                        >
-                          <div className="space-y-1">
-                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
-                              <input
-                                type="checkbox"
-                                checked={columnSettings.showItemCategory}
-                                onChange={(e) =>
-                                  setColumnSettings((prev) => ({
-                                    ...prev,
-                                    showItemCategory: e.target.checked,
-                                  }))
-                                }
-                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
-                              />
-                              <span className="text-xs font-semibold text-slate-700">
-                                Item Category
-                              </span>
-                            </label>
-
-                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
-                              <input
-                                type="checkbox"
-                                checked={columnSettings.showItemCode}
-                                onChange={(e) =>
-                                  setColumnSettings((prev) => ({
-                                    ...prev,
-                                    showItemCode: e.target.checked,
-                                  }))
-                                }
-                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
-                              />
-                              <span className="text-xs font-semibold text-slate-700">
-                                Item Code
-                              </span>
-                            </label>
-
-                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
-                              <input
-                                type="checkbox"
-                                checked={columnSettings.showHsnSac}
-                                onChange={(e) =>
-                                  setColumnSettings((prev) => ({
-                                    ...prev,
-                                    showHsnSac: e.target.checked,
-                                  }))
-                                }
-                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
-                              />
-                              <span className="text-xs font-semibold text-slate-700">
-                                HSN/SAC Code
-                              </span>
-                            </label>
-
-                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
-                              <input
-                                type="checkbox"
-                                checked={columnSettings.showDescription}
-                                onChange={(e) =>
-                                  setColumnSettings((prev) => ({
-                                    ...prev,
-                                    showDescription: e.target.checked,
-                                  }))
-                                }
-                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
-                              />
-                              <span className="text-xs font-semibold text-slate-700">
-                                Description
-                              </span>
-                            </label>
-
-                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
-                              <input
-                                type="checkbox"
-                                checked={columnSettings.showDiscount}
-                                onChange={(e) =>
-                                  setColumnSettings((prev) => ({
-                                    ...prev,
-                                    showDiscount: e.target.checked,
-                                  }))
-                                }
-                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
-                              />
-                              <span className="text-xs font-semibold text-slate-700">
-                                Discount
-                              </span>
-                            </label>
-                          </div>
-                        </div>
-                      )}
-                    </th>
-                    <th className="py-2.5 px-2 text-center w-10 text-slate-400"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 bg-white">
-                  {activeTab.formData.items.map((rowItem, idx) => (
-                    <tr
-                      key={rowItem.id || idx}
-                      className="align-top hover:bg-slate-50/70 transition-colors"
-                    >
-                      <td className="py-3 px-3 text-center text-slate-400 font-semibold">
-                        {idx + 1}
-                      </td>
-                      <td className="so-product-cell py-2.5 px-3 min-w-[200px] relative">
-                        <div className="relative">
-                          <div
-                            onClick={() => {
-                              if (openProductDropdownRow === idx) {
-                                setOpenProductDropdownRow(null);
-                              } else {
-                                setOpenProductDropdownRow(idx);
-                                setProductSearchQuery(
-                                  rowItem.productName || "",
-                                );
-                                if (liveProducts.length === 0) {
-                                  fetchLiveProducts();
-                                }
-                              }
-                            }}
-                            className={`w-full h-9 px-3 bg-white border rounded-xl flex items-center justify-between text-xs font-semibold cursor-pointer transition-all ${
-                              openProductDropdownRow === idx
-                                ? "border-[#4309A2] ring-2 ring-[#4309A2]/10"
-                                : rowItem.productName
-                                  ? "border-slate-300 hover:border-slate-400"
-                                  : "border-slate-200 hover:border-slate-300"
-                            }`}
-                          >
-                            <input
-                              type="text"
-                              placeholder="Type or select product item..."
-                              value={rowItem.productName || ""}
-                              {...fieldAttr(`items.${idx}.product`)}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenProductDropdownRow(idx);
-                                setProductSearchQuery(
-                                  rowItem.productName || "",
-                                );
-                                if (liveProducts.length === 0) {
-                                  fetchLiveProducts();
-                                }
-                              }}
-                              onFocus={() => {
-                                setOpenProductDropdownRow(idx);
-                                setProductSearchQuery(
-                                  rowItem.productName || "",
-                                );
-                                if (liveProducts.length === 0) {
-                                  fetchLiveProducts();
-                                }
-                              }}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                fe.clearError(`items.${idx}.product`);
-                                handleItemChange(idx, "productName", val);
-                                setProductSearchQuery(val);
-                                setOpenProductDropdownRow(idx);
-                                if (productSearchTimerRef.current) {
-                                  clearTimeout(productSearchTimerRef.current);
-                                }
-                                if (val.trim()) {
-                                  productSearchTimerRef.current = setTimeout(
-                                    () => {
-                                      fetchLiveProducts(val.trim());
-                                    },
-                                    300,
-                                  );
-                                }
-                              }}
-                              className="w-full bg-transparent text-xs font-semibold text-slate-800 outline-none cursor-pointer"
-                            />
-                            {isLoadingProducts ? (
-                              <Loader2 className="w-3.5 h-3.5 text-[#33077C] animate-spin shrink-0 ml-1" />
-                            ) : (
-                              <div
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (openProductDropdownRow === idx) {
-                                    setOpenProductDropdownRow(null);
-                                  } else {
-                                    setOpenProductDropdownRow(idx);
-                                    setProductSearchQuery(
-                                      rowItem.productName || "",
-                                    );
-                                    if (liveProducts.length === 0) {
-                                      fetchLiveProducts();
-                                    }
-                                  }
-                                }}
-                                className="p-0.5 hover:bg-slate-100 rounded cursor-pointer shrink-0 ml-1"
-                              >
-                                <ChevronDown
-                                  className={`w-3.5 h-3.5 text-slate-400 transition-transform ${
-                                    openProductDropdownRow === idx
-                                      ? "rotate-180 text-[#33077C]"
-                                      : ""
-                                  }`}
-                                />
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Searchable Dropdown Popover */}
-                          {openProductDropdownRow === idx && (
-                            <div
-                              ref={productDropdownRef}
-                              className="product-dropdown-popover absolute left-0 top-full mt-1.5 w-80 sm:w-96 max-w-[90vw] bg-white rounded-2xl shadow-2xl shadow-purple-900/15 border border-purple-100 z-50 p-2 text-xs animate-in fade-in zoom-in-95 duration-100 overflow-hidden text-left"
-                            >
-                              {/* Search Bar matching Customer Dropdown */}
-                              <div className="relative mb-2">
-                                <div className="flex items-center w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-xl focus-within:border-[#33077C] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#33077C]/10 transition-all">
-                                  <Search className="w-3.5 h-3.5 text-slate-400 shrink-0 mr-2" />
-                                  <input
-                                    type="text"
-                                    placeholder="Search product by name, SKU or category..."
-                                    value={productSearchQuery}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      setProductSearchQuery(val);
-                                      if (productSearchTimerRef.current) {
-                                        clearTimeout(
-                                          productSearchTimerRef.current,
-                                        );
-                                      }
-                                      if (val.trim().length >= 1) {
-                                        productSearchTimerRef.current =
-                                          setTimeout(() => {
-                                            fetchLiveProducts(val.trim());
-                                          }, 300);
-                                      }
-                                    }}
-                                    autoFocus
-                                    className="w-full bg-transparent text-xs font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                                  />
-                                  {productSearchQuery && (
-                                    <button
-                                      type="button"
-                                      onClick={() => setProductSearchQuery("")}
-                                      className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
-                                    >
-                                      <X className="w-3.5 h-3.5" />
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-
-                              {/* 1. Add New Product Button */}
-                              <div className="pb-1.5 mb-1 border-b border-slate-100">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setActiveItemRowIndex(idx);
-                                    setOpenProductDropdownRow(null);
-                                    setIsAddItemModalOpen(true);
-                                  }}
-                                  className="w-full py-1.5 px-2.5 rounded-xl bg-purple-50 hover:bg-purple-100/80 text-[#33077C] font-bold text-xs flex items-center justify-center gap-1.5 transition-colors border border-purple-200/80 cursor-pointer"
-                                >
-                                  <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                                  <span>Add New Product</span>
-                                </button>
-                              </div>
-
-                              {/* 2. Options List */}
-                              <div className="max-h-64 overflow-y-auto p-0.5 space-y-0.5 divide-y divide-slate-100/60 custom-scrollbar">
-                                {/* Option: Clear / None */}
-                                <div
-                                  onClick={() => {
-                                    handleItemChange(idx, "productId", "");
-                                    handleItemChange(idx, "productName", "");
-                                    setOpenProductDropdownRow(null);
-                                  }}
-                                  className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between text-xs transition-colors cursor-pointer ${
-                                    !rowItem.productName
-                                      ? "bg-purple-50 text-[#33077C] font-bold"
-                                      : "hover:bg-slate-50 text-slate-600"
-                                  }`}
-                                >
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-slate-400 italic">
-                                      None / Clear Product
-                                    </span>
-                                  </div>
-                                  {!rowItem.productName && (
-                                    <Check className="w-4 h-4 text-[#33077C]" />
-                                  )}
-                                </div>
-
-                                {isLoadingProducts &&
-                                matchingProducts.length === 0 ? (
-                                  <div className="py-6 text-center text-slate-400 text-xs flex items-center justify-center gap-2">
-                                    <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
-                                    <span>Loading products...</span>
-                                  </div>
-                                ) : matchingProducts.length === 0 ? (
-                                  <div className="py-6 px-3 text-center text-slate-400">
-                                    <p className="text-xs font-semibold text-slate-600">
-                                      No products found
-                                    </p>
-                                    <p className="text-[11px] text-slate-400 mt-0.5">
-                                      Try typing a different name, category, or
-                                      SKU
-                                    </p>
-                                    {productSearchQuery.trim() && (
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setActiveItemRowIndex(idx);
-                                          setOpenProductDropdownRow(null);
-                                          setIsAddItemModalOpen(true);
-                                        }}
-                                        className="mt-2.5 inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-[#33077C] text-white text-[11px] font-bold hover:bg-[#4309A2] transition-colors"
-                                      >
-                                        <Plus className="w-3 h-3" />
-                                        <span>
-                                          Add "{productSearchQuery.trim()}"
-                                        </span>
-                                      </button>
-                                    )}
-                                  </div>
-                                ) : (
-                                  matchingProducts.map((p: any) => {
-                                    const isSelected =
-                                      rowItem.productId === p.productId ||
-                                      (rowItem.productName &&
-                                        rowItem.productName === p.productName);
-                                    const imgUrl = p.imageUrl || p.image;
-                                    return (
-                                      <div
-                                        key={p.productId || p.id}
-                                        onClick={() =>
-                                          handleSelectProduct(idx, p)
-                                        }
-                                        className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-3 text-xs transition-colors cursor-pointer text-left ${
-                                          isSelected
-                                            ? "bg-purple-50 text-[#33077C] font-semibold border border-purple-200/60"
-                                            : "hover:bg-slate-50/80 text-slate-800"
-                                        }`}
-                                      >
-                                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                          <div className="w-8 h-8 rounded-full bg-purple-100 text-[#33077C] font-bold text-xs flex items-center justify-center shrink-0 border border-purple-200/60 overflow-hidden">
-                                            {imgUrl ? (
-                                              <img
-                                                src={imgUrl}
-                                                alt={p.productName}
-                                                className="w-full h-full object-cover"
-                                              />
-                                            ) : (
-                                              <span>
-                                                {getInitials(
-                                                  p.productName,
-                                                  "PR",
-                                                )}
-                                              </span>
-                                            )}
-                                          </div>
-
-                                          <div className="min-w-0 flex-1">
-                                            <div className="flex items-center gap-2 flex-wrap">
-                                              <span className="font-bold text-slate-900 truncate">
-                                                {p.productName}
-                                              </span>
-                                              {p.category && (
-                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium truncate max-w-[120px]">
-                                                  {p.category}
-                                                </span>
-                                              )}
-                                              {(p as any).status ? (
-                                                <span
-                                                  className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
-                                                    String((p as any).status).toLowerCase() === "inactive"
-                                                      ? "bg-rose-50 text-rose-700 border-rose-200/60"
-                                                      : "bg-emerald-50 text-emerald-700 border-emerald-200/60"
-                                                  }`}
-                                                >
-                                                  {(p as any).status}
-                                                </span>
-                                              ) : (
-                                                <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
-                                                  Active
-                                                </span>
-                                              )}
-                                            </div>
-                                            <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5 flex-wrap">
-                                              <span className="font-mono text-slate-600">
-                                                SKU:{" "}
-                                                {p.sku ||
-                                                  p.productCode ||
-                                                  "PRD"}
-                                              </span>
-                                              <ProductStockLabel
-                                                qty={p.stockQty}
-                                                unit={p.unit}
-                                              />
-                                              {p.hsnCode && (
-                                                <span className="text-slate-400 font-mono text-[10px]">
-                                                  • HSN: {p.hsnCode}
-                                                </span>
-                                              )}
-                                            </div>
-                                          </div>
-                                        </div>
-
-                                        <div className="flex items-center gap-2 shrink-0">
-                                          <span className="font-bold text-[#33077C] text-xs">
-                                            ₹
-                                            {Number(
-                                              p.unitPrice || 0,
-                                            ).toLocaleString("en-IN")}
-                                          </span>
-                                          {isSelected && (
-                                            <Check className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
-                                          )}
-                                        </div>
-                                      </div>
-                                    );
-                                  })
-                                )}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                        <FormError
-                          message={fe.errors[`items.${idx}.product`]}
-                        />
-                      </td>
-                      {/* Batch No */}
-                      <td className="py-2.5 px-2">
-                        {(() => {
-                          // Batches of THIS product only, with backend stock (useBatchStock).
-                          const resolvedBatches: any[] = getStockBatches(
-                            rowItem.productId,
-                          );
-                          const rowAvailable = getBatchAvailable(
-                            rowItem.productId,
-                            rowItem.batch,
-                          );
-                          if (rowItem.productId) {
-                            return (
-                              <div>
-                                <select
-                                  value={rowItem.batch || ""}
-                                  onChange={(e) =>
-                                    handleItemChange(
-                                      idx,
-                                      "batch",
-                                      e.target.value,
-                                    )
-                                  }
-                                  className="w-full h-9 px-2 bg-purple-50/60 hover:bg-purple-50 text-[#33077C] border border-purple-200 rounded-lg text-xs font-bold outline-none cursor-pointer focus:border-[#4309A2]"
-                                >
-                                  <option value="">Select Batch...</option>
-                                  {resolvedBatches.map((b: any) => (
-                                    <option
-                                      key={b.batchNo || b.id}
-                                      value={b.batchNo}
-                                    >
-                                      {b.batchNo}{" "}
-                                      {b.quantity !== undefined
-                                        ? `(${b.quantity} in stock)`
-                                        : ""}
-                                    </option>
-                                  ))}
-                                  {rowItem.batch &&
-                                    !resolvedBatches.some(
-                                      (b: any) => b.batchNo === rowItem.batch,
-                                    ) && (
-                                      <option value={rowItem.batch}>
-                                        {rowItem.batch}
-                                      </option>
-                                    )}
-                                </select>
-                                {rowAvailable !== null && (
-                                  <div className="mt-1 text-[10px] font-semibold text-slate-500 text-center">
-                                    Available: {rowAvailable}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          }
-                          return (
-                            <input
-                              type="text"
-                              placeholder="Batch No"
-                              value={rowItem.batch || ""}
-                              onChange={(e) =>
-                                handleItemChange(idx, "batch", e.target.value)
-                              }
-                              className="w-full h-9 px-2 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold font-mono text-[#33077C] outline-none focus:border-[#4309A2]"
-                            />
-                          );
-                        })()}
-                      </td>
-                      <td className="py-2.5 px-2">
-                        <input
-                          type="number"
-                          min="1"
-                          value={rowItem.quantity || ""}
-                          {...fieldAttr(`items.${idx}.quantity`)}
-                          onKeyDown={handleNonNegativeKeyDown}
-                          onChange={(e) => {
-                            fe.clearError(`items.${idx}.quantity`);
-                            handleItemChange(
-                              idx,
-                              "quantity",
-                              Number(e.target.value),
-                            );
-                          }}
-                          className={`w-full h-9 px-2 text-center bg-white border hover:border-slate-300 rounded-lg text-xs font-bold text-slate-800 outline-none focus:border-[#4309A2] ${fe.errors[`items.${idx}.quantity`] || liveStockErrors[`items.${idx}.quantity`] ? "border-rose-400" : "border-slate-200"}`}
-                        />
-                        <FormError
-                          message={
-                            fe.errors[`items.${idx}.quantity`] ||
-                            liveStockErrors[`items.${idx}.quantity`]
-                          }
-                        />
-                      </td>
-                      <td className="py-2.5 px-2">
-                        <select
-                          value={rowItem.unit || "NONE"}
-                          onChange={(e) =>
-                            handleItemChange(idx, "unit", e.target.value)
-                          }
-                          className="w-full h-9 px-2 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-[#4309A2]"
-                        >
-                          {UNIT_OPTIONS.map((u) => (
-                            <option key={u} value={u}>
-                              {u}
-                            </option>
-                          ))}
-                          {rowItem.unit &&
-                            !UNIT_OPTIONS.includes(rowItem.unit) && (
-                              <option value={rowItem.unit}>
-                                {rowItem.unit}
-                              </option>
-                            )}
-                        </select>
-                      </td>
-                      <td className="py-2.5 px-2 min-w-[120px]">
-                        <input
-                          type="number"
-                          min="0"
-                          placeholder="0.00"
-                          value={rowItem.unitPrice || ""}
-                          {...fieldAttr(`items.${idx}.price`)}
-                          onKeyDown={handleNonNegativeKeyDown}
-                          onChange={(e) => {
-                            fe.clearError(`items.${idx}.price`);
-                            handleItemChange(
-                              idx,
-                              "unitPrice",
-                              Number(e.target.value),
-                            );
-                          }}
-                          className={`w-full h-9 px-2.5 text-right bg-white border hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2] ${fe.errors[`items.${idx}.price`] ? "border-rose-400" : "border-slate-200"}`}
-                        />
-                        <FormError message={fe.errors[`items.${idx}.price`]} />
-                      </td>
-                      {columnSettings.showDiscount && (
-                        <td className="py-2.5 px-2 min-w-[200px]">
-                          <div className="flex items-center gap-1">
-                            <input
-                              type="number"
-                              min="0"
-                              max="100"
-                              placeholder="%"
-                              value={rowItem.discountPercent || ""}
-                              {...fieldAttr(`items.${idx}.discountPercent`)}
-                              onKeyDown={handleNonNegativeKeyDown}
-                              onChange={(e) => {
-                                fe.clearError(`items.${idx}.discountPercent`);
-                                handleItemChange(
-                                  idx,
-                                  "discountPercent",
-                                  Number(e.target.value),
-                                );
-                              }}
-                              className={`w-16 h-9 px-1.5 text-center bg-white border hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2] ${fe.errors[`items.${idx}.discountPercent`] ? "border-rose-400" : "border-slate-200"}`}
-                            />
-                            <span className="text-[11px] text-slate-400">
-                              ₹{rowItem.discountAmount?.toFixed(0) || 0}
-                            </span>
-                          </div>
-                          <FormError
-                            message={
-                              fe.errors[`items.${idx}.discountPercent`] ||
-                              fe.errors[`items.${idx}.discountAmount`]
-                            }
-                          />
-                        </td>
-                      )}
-                      <td className="py-2.5 px-2 min-w-[150px]">
-                        <select
-                          value={rowItem.taxPercent || 0}
-                          {...fieldAttr(`items.${idx}.taxPercent`)}
-                          onChange={(e) => {
-                            fe.clearError(`items.${idx}.taxPercent`);
-                            handleItemChange(
-                              idx,
-                              "taxPercent",
-                              Number(e.target.value),
-                            );
-                          }}
-                          className="w-full h-9 px-2 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-[#4309A2]"
-                        >
-                          {TAX_RATE_OPTIONS.map((tx) => (
-                            <option key={tx.label} value={tx.rate}>
-                              {tx.label}
-                            </option>
-                          ))}
-                          {!TAX_RATE_OPTIONS.some((tx) => tx.rate === Number(rowItem.taxPercent || 0)) && (
-                            <option value={rowItem.taxPercent}>
-                              GST @ {rowItem.taxPercent}% (old slab)
-                            </option>
-                          )}
-                        </select>
-                        <FormError
-                          message={fe.errors[`items.${idx}.taxPercent`]}
-                        />
-                      </td>
-                      <td className="py-2.5 px-4 min-w-[130px] text-right font-bold text-slate-900">
-                        ₹
-                        {rowItem.total?.toLocaleString("en-IN", {
-                          minimumFractionDigits: 2,
-                        }) || "0.00"}
-                      </td>
-                      <td className="py-2.5 px-2 text-center">
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveRow(idx)}
-                          className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                          title="Delete Row"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-                {/* Totals Summary Footer Row */}
-                <tfoot>
-                  <tr className="bg-slate-50/90 border-t border-slate-200 font-bold text-slate-800 text-xs">
-                    {/* Add Row Button Column */}
-                    <td
-                      colSpan={
-                        2 +
-                        (columnSettings.showItemCategory ? 1 : 0) +
-                        (columnSettings.showItemCode ? 1 : 0) +
-                        (columnSettings.showHsnSac ? 1 : 0) +
-                        (columnSettings.showDescription ? 1 : 0) +
-                        1
-                      }
-                      className="py-2.5 px-3 border-r border-slate-200"
-                    >
-                      <button
-                        type="button"
-                        onClick={handleAddRow}
-                        className="px-3 py-1.5 rounded-lg border border-[#33077C] text-[#33077C] hover:bg-purple-50 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-                      >
-                        <Plus className="w-3.5 h-3.5 stroke-[3]" />
-                        <span>ADD ROW</span>
-                      </button>
-                    </td>
-
-                    {/* Total QTY */}
-                    <td className="py-2.5 px-2 text-center border-r border-slate-200 font-extrabold text-[#33077C]">
-                      {currentCalculations.totalQty}
-                    </td>
-
-                    {/* Total label */}
-                    <td className="py-2.5 px-2 text-center border-r border-slate-200 text-slate-500 uppercase text-[11px]">
-                      TOTAL
-                    </td>
-
-                    {/* Price total placeholder */}
-                    <td className="border-r border-slate-200"></td>
-
-                    {/* Discount total placeholder & amount */}
-                    {columnSettings.showDiscount && (
-                      <>
-                        <td className="border-r border-slate-200"></td>
-                        <td className="py-2.5 px-2 text-right border-r border-slate-200 pr-3 font-semibold text-slate-700">
-                          {currentCalculations.totalDiscount > 0
-                            ? currentCalculations.totalDiscount.toFixed(2)
-                            : "0"}
-                        </td>
-                      </>
-                    )}
-
-                    {/* Tax placeholder */}
-                    <td className="border-r border-slate-200"></td>
-
-                    {/* Total Tax Amount */}
-                    <td className="py-2.5 px-2 text-right border-r border-slate-200 pr-3 font-semibold text-slate-700">
-                      {currentCalculations.totalTax > 0
-                        ? currentCalculations.totalTax.toFixed(2)
-                        : "0"}
-                    </td>
-
-                    {/* Total Line Amount */}
-                    <td className="py-2.5 px-3 text-right border-r border-slate-200 font-extrabold text-[#33077C]">
-                      ₹
-                      {currentCalculations.finalAmount.toLocaleString("en-IN", {
-                        minimumFractionDigits: 2,
-                      })}
-                    </td>
-
-                    <td></td>
-                  </tr>
-                </tfoot>
-              </table>
+              <SalesDocumentItemsTable
+                items={activeTab.formData.items as SalesDocumentLineItem[]}
+                withGst={activeTab.formData.withGst}
+                formErrors={fe.errors}
+                liveStockErrors={liveStockErrors}
+                openProductDropdownRow={openProductDropdownRow}
+                setOpenProductDropdownRow={setOpenProductDropdownRow}
+                productDropdownRef={productDropdownRef}
+                productSearchQuery={productSearchQuery}
+                setProductSearchQuery={setProductSearchQuery}
+                productSearchTimerRef={productSearchTimerRef}
+                isLoadingProducts={isLoadingProducts}
+                hasProductsLoaded={liveProducts.length > 0}
+                matchingProducts={matchingProducts}
+                fetchLiveProducts={fetchLiveProducts}
+                onOpenAddProductModal={(rowIdx) => {
+                  setActiveItemRowIndex(rowIdx);
+                  setIsAddItemModalOpen(true);
+                }}
+                onSelectProduct={handleSelectProduct}
+                onClearProduct={handleClearProductRow}
+                onProductNameChange={(rowIdx, val) =>
+                  handleItemChange(rowIdx, "productName", val)
+                }
+                getBatchesForRow={(item) => getStockBatches(item.productId)}
+                getBatchAvailable={(productId, batchNo) =>
+                  getBatchAvailable(productId, batchNo)
+                }
+                onBatchChange={(rowIdx, batchNo) =>
+                  handleItemChange(rowIdx, "batch", batchNo)
+                }
+                onUnitChange={(rowIdx, unit) =>
+                  handleItemChange(rowIdx, "unit", unit)
+                }
+                onFieldChange={(rowIdx, field, val) =>
+                  handleItemChange(rowIdx, field, val)
+                }
+                onAddRow={handleAddRow}
+                onRemoveRow={handleRemoveRow}
+                clearError={fe.clearError}
+              />
             </div>
 
             {/* 5. BOTTOM SECTION: ACTION TILES (LEFT) & ROUND OFF / TOTAL (RIGHT) */}
@@ -4068,49 +3314,27 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                 )}
               </div>
 
-              {/* Right Column: Round Off & Grand Total Box (CRM Theme) */}
-              <div className="lg:col-span-5 flex flex-col items-end gap-4">
-                {/* Round Off Input */}
-                <div className="flex items-center gap-3">
-                  <label className="flex items-center gap-2 cursor-pointer select-none text-xs font-bold text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={enableRoundOff}
-                      onChange={(e) => {
-                        setEnableRoundOff(e.target.checked);
-                        if (!e.target.checked) setManualRoundOff(null);
-                      }}
-                      className="w-4 h-4 rounded text-[#33077C] focus:ring-[#33077C] border-slate-300 accent-[#33077C]"
-                    />
-                    <span>Round Off</span>
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    disabled={!enableRoundOff}
-                    value={
-                      currentCalculations.roundOff
-                        ? currentCalculations.roundOff
-                        : ""
-                    }
-                    placeholder="0.00"
-                    onChange={(e) => setManualRoundOff(Number(e.target.value))}
-                    className="w-24 h-8 px-2.5 text-right bg-white border border-slate-200 disabled:bg-slate-50 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#33077C]"
-                  />
-                </div>
-
-                {/* Grand Total Display */}
-                <div className="flex items-center gap-4">
-                  <span className="text-sm font-bold text-slate-800">
-                    Total
-                  </span>
-                  <div className="w-48 sm:w-56 h-11 px-3.5 bg-purple-50/30 border-2 border-purple-200 rounded-xl flex items-center justify-end text-base font-extrabold text-[#33077C] shadow-2xs">
-                    ₹{" "}
-                    {currentCalculations.finalAmount.toLocaleString("en-IN", {
-                      minimumFractionDigits: 2,
-                    })}
-                  </div>
-                </div>
+              {/* Right Column: GST Tax Breakdown, Round Off & Grand Total */}
+              <div className="lg:col-span-5 flex justify-end">
+                <SalesDocumentSummaryPanel
+                  withGst={activeTab.formData.withGst}
+                  gstType={activeTab.formData.gstType}
+                  subtotal={currentCalculations.subtotalGross}
+                  totalDiscount={currentCalculations.totalDiscount}
+                  taxableAmount={currentCalculations.netTaxable}
+                  cgst={currentCalculations.cgst}
+                  sgst={currentCalculations.sgst}
+                  igst={currentCalculations.igst}
+                  totalTax={currentCalculations.totalTax}
+                  roundOff={currentCalculations.roundOff}
+                  grandTotal={currentCalculations.finalAmount}
+                  enableRoundOff={enableRoundOff}
+                  onToggleRoundOff={(checked) => {
+                    setEnableRoundOff(checked);
+                    if (!checked) setManualRoundOff(null);
+                  }}
+                  onManualRoundOffChange={(val) => setManualRoundOff(val)}
+                />
               </div>
             </div>
 
@@ -4171,6 +3395,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               stateOfSupply: newCust.state
                 ? `${newCust.state}`
                 : prev.stateOfSupply,
+              gstType: newCust.state
+                ? determineGstType(`${newCust.state}`)
+                : prev.gstType,
             }));
             setPartySearchQuery(newCust.name);
             setIsPartyDropdownOpen(false);
@@ -4902,7 +4129,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                                         right: `${convertDropdownPos.right}px`,
                                         zIndex: 9999,
                                       }}
-                                      className="order-convert-dropdown-menu w-56 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
+                                      className="order-convert-dropdown-menu min-w-[260px] w-max bg-white rounded-xl shadow-2xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 text-left font-sans"
                                       onClick={(e) => e.stopPropagation()}
                                     >
                                       {!orderStages.isChallanConverted && (

@@ -52,10 +52,10 @@ export const fetchOrganizationDocumentProfile = async (
     localStorage.getItem('active_organization_orgsuperadmin') ||
     localStorage.getItem('active_organization');
 
-  // Fallback default profile
+  // Empty defaults until organization profile is returned by API
   let resolved: CompanyDocumentProfile = {
-    companyName: storedOrgName && storedOrgName !== 'All' ? storedOrgName : 'YAA CREATIONS CRM',
-    companySubtitle: 'Sales & Enterprise Distribution',
+    companyName: storedOrgName && storedOrgName !== 'All' ? storedOrgName : '',
+    companySubtitle: '',
     companyAddress: '',
     companyGstin: '',
     companyPhone: '',
@@ -77,7 +77,7 @@ export const fetchOrganizationDocumentProfile = async (
         if (matchedSub) {
           resolved = {
             companyName: matchedSub.legalName || matchedSub.name || resolved.companyName,
-            companySubtitle: matchedSub.industry || 'Sales & Enterprise Distribution',
+            companySubtitle: matchedSub.industry || '',
             companyAddress: matchedSub.address || matchedSub.location || '',
             companyGstin: matchedSub.gstNumber || '',
             companyPhone: matchedSub.phone || matchedSub.whatsapp || '',
@@ -101,7 +101,7 @@ export const fetchOrganizationDocumentProfile = async (
           const org = orgRes.data;
           resolved = {
             companyName: org.legalName || org.name || resolved.companyName,
-            companySubtitle: org.industry || 'Sales & Enterprise Distribution',
+            companySubtitle: org.industry || '',
             companyAddress: org.address || org.location || '',
             companyGstin: org.gstNumber || '',
             companyPhone: org.phone || org.whatsapp || '',
@@ -129,7 +129,7 @@ export const fetchOrganizationDocumentProfile = async (
       if (match) {
         resolved = {
           companyName: match.legalName || match.name || resolved.companyName,
-          companySubtitle: match.industry || 'Sales & Enterprise Distribution',
+          companySubtitle: match.industry || '',
           companyAddress: match.address || match.location || '',
           companyGstin: match.gstNumber || '',
           companyPhone: match.phone || match.whatsapp || '',
@@ -161,10 +161,10 @@ export const useCompanyDocumentProfile = (): CompanyDocumentProfile => {
       localStorage.getItem('active_organization_orgsuperadmin') ||
       localStorage.getItem('active_organization') ||
       currentUser?.name ||
-      'YAA CREATIONS CRM';
+      '';
     return {
       companyName: orgName,
-      companySubtitle: 'Sales & Enterprise Distribution',
+      companySubtitle: '',
       companyAddress: '',
       companyGstin: '',
       companyPhone: currentUser?.phone || '',

@@ -487,7 +487,11 @@ export const PaymentInView: React.FC = () => {
     if (selectedPaymentType && selectedPaymentType !== "All") {
       params.paymentType = selectedPaymentType;
     }
-    if (selectedFirm && selectedFirm !== "All" && UUID_REGEX.test(selectedFirm)) {
+    if (
+      selectedFirm &&
+      selectedFirm !== "All" &&
+      UUID_REGEX.test(selectedFirm)
+    ) {
       params.customerId = selectedFirm;
     }
     const res = await commercePaymentInApi.getPaymentIns(params);
@@ -768,7 +772,10 @@ export const PaymentInView: React.FC = () => {
       }
       const bal = inv.balance > 0 ? inv.balance : inv.grandTotal;
       setFormReceivedAmount(String(bal));
-      if (!formDescription || /^Payment against Invoice /.test(formDescription)) {
+      if (
+        !formDescription ||
+        /^Payment against Invoice /.test(formDescription)
+      ) {
         setFormDescription(`Payment against Invoice ${inv.invoiceNo}`);
       }
     }
@@ -947,9 +954,8 @@ export const PaymentInView: React.FC = () => {
     docTypeTitle: "PAYMENT IN RECEIPT",
     docNo: item.receiptNo,
     docDate: isoToDdmmyyyy(item.date),
-    status: item.status || "Completed",
+    status: item.status || "",
     statusColor: "emerald",
-    referenceNo: item.referenceNo,
     companyName: companyProfile.companyName,
     companySubtitle: companyProfile.companySubtitle,
     companyAddress: companyProfile.companyAddress,
@@ -965,12 +971,11 @@ export const PaymentInView: React.FC = () => {
       ...(item.paymentInManualNo
         ? [{ label: "Payment In No", value: item.paymentInManualNo }]
         : []),
-      { label: "Payment Mode", value: item.paymentType },
+      ...(item.paymentType
+        ? [{ label: "Payment Mode", value: item.paymentType }]
+        : []),
       ...(item.invoiceNo
         ? [{ label: "Linked Invoice", value: item.invoiceNo }]
-        : []),
-      ...(item.referenceNo
-        ? [{ label: "Txn / Ref No", value: item.referenceNo }]
         : []),
     ],
     items: [
@@ -979,8 +984,7 @@ export const PaymentInView: React.FC = () => {
         quantity: 1,
         unitPrice: item.receivedAmount,
         total: item.receivedAmount,
-        remarks:
-          item.description || item.notes || "Payment received in full/part",
+        remarks: item.description || item.notes || undefined,
       },
     ],
     grandTotal: item.receivedAmount,
@@ -1006,7 +1010,12 @@ export const PaymentInView: React.FC = () => {
             item.id,
           );
           if (singleRes?.success && singleRes.data) {
-            activeItem = mapApiPaymentInToSalePaymentIn(singleRes.data);
+            const mapped = mapApiPaymentInToSalePaymentIn(singleRes.data);
+            activeItem = {
+              ...mapped,
+              paymentInManualNo:
+                mapped.paymentInManualNo || item.paymentInManualNo || "",
+            };
           }
         } catch (e) {
           console.warn(
@@ -1039,14 +1048,21 @@ export const PaymentInView: React.FC = () => {
       try {
         const singleRes = await commercePaymentInApi.getPaymentInById(item.id);
         if (singleRes?.success && singleRes.data) {
-          activeItem = mapApiPaymentInToSalePaymentIn(singleRes.data);
+          const mapped = mapApiPaymentInToSalePaymentIn(singleRes.data);
+          activeItem = {
+            ...mapped,
+            paymentInManualNo:
+              mapped.paymentInManualNo || item.paymentInManualNo || "",
+          };
         }
       } catch (e) {
         console.warn("Could not fetch latest receipt details for print:", e);
       }
     }
     try {
-      await printBusinessDocument(mapPaymentInToDocumentPrintOptions(activeItem));
+      await printBusinessDocument(
+        mapPaymentInToDocumentPrintOptions(activeItem),
+      );
     } catch (err: any) {
       console.error("Receipt print error:", err);
       toast.error("Failed to print payment receipt.");
@@ -1227,7 +1243,10 @@ export const PaymentInView: React.FC = () => {
 
     // A payment must be linked to an invoice. Only an old payment that was already saved without one can still
     // be edited without choosing an invoice.
-    if (!selectedInvoiceId && !(editingPaymentIn && !editingPaymentIn.invoiceId)) {
+    if (
+      !selectedInvoiceId &&
+      !(editingPaymentIn && !editingPaymentIn.invoiceId)
+    ) {
       errs.invoice = "Please select the invoice this payment is for.";
     }
 
@@ -1491,67 +1510,81 @@ export const PaymentInView: React.FC = () => {
       label: "payment receipts",
       load: () => fetchAllReportRows(fetchPaymentInReportPage),
       onRows: (rows) => {
+        const excelRows = rows.map((p, idx) => ({
+          srNo: idx + 1,
+          receiptNo: p.receiptNo,
+          paymentInManualNo: p.paymentInManualNo || "-",
+          date: isoToDdmmyyyy(p.date),
+          partyName: p.partyName,
+          customerPhone: p.customerPhone || "-",
+          paymentType: p.paymentType,
+          receivedAmount: Number(p.receivedAmount || 0),
+          status: p.status || "Completed",
+          description: p.description || "-",
+        }));
 
-    const excelRows = rows.map((p, idx) => ({
-      srNo: idx + 1,
-      receiptNo: p.receiptNo,
-      paymentInManualNo: p.paymentInManualNo || "-",
-      date: isoToDdmmyyyy(p.date),
-      partyName: p.partyName,
-      customerPhone: p.customerPhone || "-",
-      paymentType: p.paymentType,
-      receivedAmount: Number(p.receivedAmount || 0),
-      status: p.status || "Completed",
-      description: p.description || "-",
-    }));
+        exportTableToExcel({
+          filename: `Payment_In_Report_${new Date().toISOString().split("T")[0]}`,
+          sheetName: "Payment Receipts",
+          title: "YAA CREATIONS CRM - PAYMENT-IN REPORT",
+          subtitle: `Filter: ${selectedPeriod} | Total Records: ${rows.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
+          columns: [
+            { header: "#", key: "srNo", align: "center", width: 8 },
+            { header: "Date", key: "date", align: "center", width: 15 },
+            {
+              header: "Payment In ID",
+              key: "receiptNo",
+              align: "center",
+              width: 16,
+            },
+            {
+              header: "Payment In No.",
+              key: "paymentInManualNo",
+              align: "center",
+              width: 16,
+            },
+            {
+              header: "Customer Name",
+              key: "partyName",
+              align: "left",
+              width: 28,
+            },
+            { header: "Phone", key: "customerPhone", align: "left", width: 18 },
+            {
+              header: "Payment Type",
+              key: "paymentType",
+              align: "left",
+              width: 16,
+            },
+            {
+              header: "Amount Received (₹)",
+              key: "receivedAmount",
+              align: "right",
+              type: "currency",
+              width: 20,
+            },
+            { header: "Status", key: "status", align: "center", width: 14 },
+            {
+              header: "Remarks / Notes",
+              key: "description",
+              align: "left",
+              width: 30,
+            },
+          ],
+          data: excelRows,
+          summaryRow: {
+            srNo: "TOTAL",
+            partyName: `${rows.length} Receipts`,
+            receivedAmount: rows.reduce(
+              (acc, p) => acc + (Number(p.receivedAmount) || 0),
+              0,
+            ),
+          },
+        });
 
-    exportTableToExcel({
-      filename: `Payment_In_Report_${new Date().toISOString().split("T")[0]}`,
-      sheetName: "Payment Receipts",
-      title: "YAA CREATIONS CRM - PAYMENT-IN REPORT",
-      subtitle: `Filter: ${selectedPeriod} | Total Records: ${rows.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
-      columns: [
-        { header: "#", key: "srNo", align: "center", width: 8 },
-        { header: "Date", key: "date", align: "center", width: 15 },
-        { header: "Payment In ID", key: "receiptNo", align: "center", width: 16 },
-        { header: "Payment In No.", key: "paymentInManualNo", align: "center", width: 16 },
-        { header: "Customer Name", key: "partyName", align: "left", width: 28 },
-        { header: "Phone", key: "customerPhone", align: "left", width: 18 },
-        {
-          header: "Payment Type",
-          key: "paymentType",
-          align: "left",
-          width: 16,
-        },
-        {
-          header: "Amount Received (₹)",
-          key: "receivedAmount",
-          align: "right",
-          type: "currency",
-          width: 20,
-        },
-        { header: "Status", key: "status", align: "center", width: 14 },
-        {
-          header: "Remarks / Notes",
-          key: "description",
-          align: "left",
-          width: 30,
-        },
-      ],
-      data: excelRows,
-      summaryRow: {
-        srNo: "TOTAL",
-        partyName: `${rows.length} Receipts`,
-        receivedAmount: rows.reduce(
-          (acc, p) => acc + (Number(p.receivedAmount) || 0),
-          0,
-        ),
-      },
-    });
-
-    toast.success(
-      `Payment-In Excel report downloaded (${rows.length} records)!`,
-    );
+        toast.success(
+          `Payment-In Excel report downloaded (${rows.length} records)!`,
+        );
       },
     });
 
@@ -1561,67 +1594,76 @@ export const PaymentInView: React.FC = () => {
       label: "payment receipts",
       load: () => fetchAllReportRows(fetchPaymentInReportPage),
       onRows: (rows) => {
+        const printRows = rows.map((p, idx) => ({
+          index: idx + 1,
+          receiptNo: p.receiptNo || "-",
+          paymentInManualNo: p.paymentInManualNo || "-",
+          paymentDate: p.paymentDate,
+          partyName: p.partyName,
+          invoiceNo: p.invoiceNo || "-",
+          paymentType: p.paymentType,
+          receivedAmount: Number(p.receivedAmount || 0),
+        }));
 
-    const printRows = rows.map((p, idx) => ({
-      index: idx + 1,
-      receiptNo: p.receiptNo || "-",
-      paymentInManualNo: p.paymentInManualNo || "-",
-      paymentDate: p.paymentDate,
-      partyName: p.partyName,
-      invoiceNo: p.invoiceNo || "-",
-      paymentType: p.paymentType,
-      receivedAmount: Number(p.receivedAmount || 0),
-    }));
-
-    printTableReport({
-      title: "PAYMENT-IN TRANSACTIONS REPORT",
-      subtitle: `Total Payments: ${rows.length}`,
-      columns: [
-        { header: "#", key: "index", align: "center", width: "6%" },
-        {
-          header: "Payment In ID",
-          key: "receiptNo",
-          align: "center",
-          width: "12%",
-        },
-        {
-          header: "Payment In No.",
-          key: "paymentInManualNo",
-          align: "center",
-          width: "12%",
-        },
-        { header: "Date", key: "paymentDate", align: "center", width: "14%" },
-        {
-          header: "Customer Name",
-          key: "partyName",
-          align: "left",
-          width: "24%",
-        },
-        {
-          header: "Invoice Ref",
-          key: "invoiceNo",
-          align: "center",
-          width: "14%",
-        },
-        { header: "Mode", key: "paymentType", align: "center", width: "12%" },
-        {
-          header: "Amount Received (₹)",
-          key: "receivedAmount",
-          align: "right",
-          type: "currency",
-          width: "14%",
-        },
-      ],
-      data: printRows,
-      summaryRow: {
-        receiptNo: "TOTAL",
-        partyName: `${rows.length} Receipts`,
-        receivedAmount: rows.reduce(
-          (acc, p) => acc + (Number(p.receivedAmount) || 0),
-          0,
-        ),
-      },
-    });
+        printTableReport({
+          title: "PAYMENT-IN TRANSACTIONS REPORT",
+          subtitle: `Total Payments: ${rows.length}`,
+          columns: [
+            { header: "#", key: "index", align: "center", width: "6%" },
+            {
+              header: "Payment In ID",
+              key: "receiptNo",
+              align: "center",
+              width: "12%",
+            },
+            {
+              header: "Payment In No.",
+              key: "paymentInManualNo",
+              align: "center",
+              width: "12%",
+            },
+            {
+              header: "Date",
+              key: "paymentDate",
+              align: "center",
+              width: "14%",
+            },
+            {
+              header: "Customer Name",
+              key: "partyName",
+              align: "left",
+              width: "24%",
+            },
+            {
+              header: "Invoice Ref",
+              key: "invoiceNo",
+              align: "center",
+              width: "14%",
+            },
+            {
+              header: "Mode",
+              key: "paymentType",
+              align: "center",
+              width: "12%",
+            },
+            {
+              header: "Amount Received (₹)",
+              key: "receivedAmount",
+              align: "right",
+              type: "currency",
+              width: "14%",
+            },
+          ],
+          data: printRows,
+          summaryRow: {
+            receiptNo: "TOTAL",
+            partyName: `${rows.length} Receipts`,
+            receivedAmount: rows.reduce(
+              (acc, p) => acc + (Number(p.receivedAmount) || 0),
+              0,
+            ),
+          },
+        });
       },
     });
 
@@ -2050,13 +2092,18 @@ export const PaymentInView: React.FC = () => {
                           )}
                           {item.customerPhone && (
                             <div>
-                              <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight"><Phone className="w-3 h-3 text-[#33077C] shrink-0" />{item.customerPhone}</span>
+                              <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold font-mono tracking-tight">
+                                <Phone className="w-3 h-3 text-[#33077C] shrink-0" />
+                                {item.customerPhone}
+                              </span>
                             </div>
                           )}
                           {item.invoiceNo && (
                             <div className="inline-flex items-center text-[11px] font-semibold text-[#33077C] mt-1 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200/60 whitespace-nowrap">
                               {String(item.invoiceNo)
-                                .replace(/^s*(inv(oice)?s*)?#?s*/i, (m) => (/^s*inv-/i.test(m + "x") ? m : ""))
+                                .replace(/^s*(inv(oice)?s*)?#?s*/i, (m) =>
+                                  /^s*inv-/i.test(m + "x") ? m : "",
+                                )
                                 .trim()}
                             </div>
                           )}
@@ -2333,10 +2380,10 @@ export const PaymentInView: React.FC = () => {
                           s.id === selectedInvoiceId,
                       )
                       .map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.invoiceNo} - {s.customerName} (Bal: ₹{s.balance})
-                      </option>
-                    ))}
+                        <option key={s.id} value={s.id}>
+                          {s.invoiceNo} - {s.customerName} (Bal: ₹{s.balance})
+                        </option>
+                      ))}
                   </select>
                   <FormError message={payFE.errors.invoice} />
                 </div>
@@ -2346,10 +2393,12 @@ export const PaymentInView: React.FC = () => {
                   <FormLabel required>Payment Date</FormLabel>
                   <DateInput
                     value={formDate}
-                    onChange={(v) => ((e) => {
-                      setFormDate(e.target.value);
-                      payFE.clearError("date");
-                    })({ target: { value: v } } as any)}
+                    onChange={(v) =>
+                      ((e) => {
+                        setFormDate(e.target.value);
+                        payFE.clearError("date");
+                      })({ target: { value: v } } as any)
+                    }
                     data-field="date"
                   />
                   <FormError message={payFE.errors.date} />
@@ -2430,7 +2479,9 @@ export const PaymentInView: React.FC = () => {
                     type="text"
                     value={formReferenceNo}
                     onChange={(e) => {
-                      setFormReferenceNo(sanitizePaymentReferenceInput(e.target.value));
+                      setFormReferenceNo(
+                        sanitizePaymentReferenceInput(e.target.value),
+                      );
                       payFE.clearError("referenceNo");
                     }}
                     placeholder="e.g. UPI-UTR-9918237192"

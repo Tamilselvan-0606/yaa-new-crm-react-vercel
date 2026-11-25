@@ -4,7 +4,7 @@ import {
   LocationMeta,
 } from "../../../components/common/LocationFields";
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import {
   User,
   MapPin,
@@ -113,6 +113,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
 
   const {
     register,
+    control,
     handleSubmit,
     watch,
     setValue,
@@ -145,11 +146,9 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
   });
   useEffect(() => {
     register("country");
-    register("phone");
-    register("alternatePhone");
     register("state");
     register("city");
-  }, [register]);
+  }, [register, isOpen]);
 
   // Guards: never run two rep loads at once, and do not re-fetch on every open once loaded.
   const isFetchingRepsRef = useRef(false);
@@ -582,22 +581,44 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                 )}
               </div>
 
-              <PhoneField
-                label="Primary Phone"
-                required
-                value={watch("phone") || ""}
-                error={errors.phone?.message as string | undefined}
-                placeholder="e.g. 9876543210"
-                onChange={(v) => setValue("phone" as any, v as any, { shouldDirty: true, shouldValidate: true })}
+              <Controller
+                name="phone"
+                control={control}
+                rules={{
+                  validate: (val) =>
+                    checkIntlPhone(val, true, "phone number") || true,
+                }}
+                render={({ field }) => (
+                  <PhoneField
+                    label="Primary Phone"
+                    required
+                    dataField="phone"
+                    value={field.value || ""}
+                    error={errors.phone?.message as string | undefined}
+                    placeholder="e.g. 9876543210"
+                    onChange={(v) => field.onChange(v)}
+                  />
+                )}
               />
 
-              <PhoneField
-                label="WhatsApp Number"
-                required
-                value={watch("alternatePhone") || ""}
-                error={errors.alternatePhone?.message as string | undefined}
-                placeholder="e.g. 9876543211"
-                onChange={(v) => setValue("alternatePhone" as any, v as any, { shouldDirty: true, shouldValidate: true })}
+              <Controller
+                name="alternatePhone"
+                control={control}
+                rules={{
+                  validate: (val) =>
+                    checkIntlPhone(val, true, "WhatsApp number") || true,
+                }}
+                render={({ field }) => (
+                  <PhoneField
+                    label="WhatsApp Number"
+                    required
+                    dataField="alternatePhone"
+                    value={field.value || ""}
+                    error={errors.alternatePhone?.message as string | undefined}
+                    placeholder="e.g. 9876543211"
+                    onChange={(v) => field.onChange(v)}
+                  />
+                )}
               />
 
               <div>

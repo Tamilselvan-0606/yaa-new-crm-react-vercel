@@ -617,7 +617,8 @@ export const InvoiceItemsTable: React.FC<InvoiceItemsTableProps> = ({
                       <input
                         type="number"
                         min="1"
-                        value={item.quantity}
+                        value={item.quantity === 0 ? "" : item.quantity || ""}
+                        placeholder="0"
                         {...fieldAttr(`items.${idx}.quantity`)}
                         onKeyDown={handleNonNegativeKeyDown}
                         onChange={(e) =>
@@ -644,7 +645,14 @@ export const InvoiceItemsTable: React.FC<InvoiceItemsTableProps> = ({
                         min="0"
                         max="100"
                         disabled={!formData.withGst}
-                        value={formData.withGst ? item.taxPercent : 0}
+                        value={
+                          formData.withGst
+                            ? item.taxPercent === 0
+                              ? ""
+                              : item.taxPercent || ""
+                            : ""
+                        }
+                        placeholder="0"
                         {...fieldAttr(`items.${idx}.taxPercent`)}
                         onKeyDown={handleNonNegativeKeyDown}
                         onChange={(e) =>
@@ -672,7 +680,8 @@ export const InvoiceItemsTable: React.FC<InvoiceItemsTableProps> = ({
                       <input
                         type="number"
                         min="0"
-                        value={item.unitPrice}
+                        value={item.unitPrice === 0 ? "" : item.unitPrice || ""}
+                        placeholder="0"
                         {...fieldAttr(`items.${idx}.price`)}
                         onKeyDown={handleNonNegativeKeyDown}
                         onChange={(e) =>

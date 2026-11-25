@@ -1035,9 +1035,8 @@ export const PaymentOutView: React.FC = () => {
       docTypeTitle: 'PAYMENT OUT',
       docNo: po.paymentNo,
       docDate: po.paymentDate,
-      status: po.status || 'Completed',
+      status: po.status || '',
       statusColor: po.status === 'Cancelled' ? 'rose' : po.status === 'Pending' ? 'amber' : 'emerald',
-      referenceNo: po.referenceNo,
       partyTitle: 'Paid To (Supplier / Vendor)',
       partyName: po.supplierName,
       partyPhone: (matchedSup as any)?.phone || (matchedSup as any)?.mobile,
@@ -1047,9 +1046,8 @@ export const PaymentOutView: React.FC = () => {
       extraMeta: [
         { label: 'Payment Out ID', value: po.paymentNo },
         ...(po.paymentOutManualNo ? [{ label: 'Payment Out No', value: po.paymentOutManualNo }] : []),
-        { label: 'Payment Mode', value: po.paymentMode },
-        { label: 'Against Bill #', value: po.purchaseNo || 'Direct / Advance Payment' },
-        ...(po.referenceNo ? [{ label: 'UTR / Ref No', value: po.referenceNo }] : []),
+        ...(po.paymentMode ? [{ label: 'Payment Mode', value: po.paymentMode }] : []),
+        ...(po.purchaseNo ? [{ label: 'Against Bill #', value: po.purchaseNo }] : []),
       ],
       columns: [
         { header: 'Disbursement Details', width: '50%' },
@@ -1058,8 +1056,8 @@ export const PaymentOutView: React.FC = () => {
       ],
       items: [
         {
-          name: `Vendor payment to ${po.supplierName}${po.purchaseNo ? ` against Purchase Order ${po.purchaseNo}` : ' (Direct / On Account)'}`,
-          remarks: `Mode: ${po.paymentMode}${po.referenceNo ? ` | Ref/UTR: ${po.referenceNo}` : ''}`,
+          name: `Vendor payment to ${po.supplierName}${po.purchaseNo ? ` against Purchase Order ${po.purchaseNo}` : ''}`,
+          remarks: po.paymentMode ? `Mode: ${po.paymentMode}` : undefined,
           quantity: 1,
           unitPrice: Number(po.amount || 0),
           total: Number(po.amount || 0),
@@ -1071,7 +1069,7 @@ export const PaymentOutView: React.FC = () => {
       balance: 0,
       paidAmountLabel: 'Amount Disbursed',
       balanceLabel: 'Balance',
-      notes: po.notes || 'Vendor disbursement processed and verified.',
+      notes: po.notes || undefined,
     };
   };
 
@@ -1080,7 +1078,15 @@ export const PaymentOutView: React.FC = () => {
     if (!po.id) return po;
     try {
       const res = await workPaymentOutApi.getPaymentOutById(po.id);
-      if (res?.data) return { ...po, ...mapApiPaymentOutToUi(res.data) };
+      if (res?.data) {
+        const mapped = mapApiPaymentOutToUi(res.data);
+        return {
+          ...po,
+          ...mapped,
+          paymentOutManualNo:
+            mapped.paymentOutManualNo || po.paymentOutManualNo || '',
+        };
+      }
     } catch (err) {
       console.warn('Could not fetch latest payment out for print/download:', err);
     }

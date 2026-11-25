@@ -5,11 +5,10 @@ import type {
   SalesInvoiceTotals,
 } from "./salesInvoiceTypes";
 import { type FieldErrors, fieldAttr } from "../../../../utils/formValidation";
-import { AlertCircle, Calendar } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import { CustomerSearchableSelect } from "../../../../components/common/paginated-select";
 import { DateInput } from "../../../../components/common/DateInput";
 import { FormError } from "../../../../components/common/FormError";
-import { isoToDdmmyyyy, ddmmyyyyToIso } from "./salesInvoiceFormat";
 
 interface SelectedCustomerFinancials {
   creditLimit: number;
@@ -149,43 +148,21 @@ export const InvoiceDetailsSection: React.FC<InvoiceDetailsSectionProps> = ({
         <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
           Date
         </label>
-        <div className="relative flex items-center">
-          <input
-            type="text"
-            placeholder="dd/mm/yyyy"
-            value={isoToDdmmyyyy(formData.saleDate)}
-            {...fieldAttr("saleDate")}
-            onChange={(e) => {
-              const iso = ddmmyyyyToIso(e.target.value);
+        <DateInput
+          value={formData.saleDate}
+          error={Boolean(formErrors.saleDate)}
+          {...fieldAttr("saleDate")}
+          onChange={(v) => {
+            if (v) {
               clearFormError("saleDate");
               clearFormError("dueDate");
               setFormData((prev) => ({
                 ...prev,
-                saleDate: iso || e.target.value,
+                saleDate: v,
               }));
-            }}
-            required
-            className="w-full h-11 pl-4 pr-11 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-          />
-          <label className="absolute right-3 text-slate-400 hover:text-[#33077C] cursor-pointer transition-colors p-1">
-            <Calendar className="w-4 h-4" />
-            <DateInput
-              value={formData.saleDate}
-              onChange={(v) =>
-                ((e) => {
-                  if (e.target.value) {
-                    clearFormError("saleDate");
-                    clearFormError("dueDate");
-                    setFormData((prev) => ({
-                      ...prev,
-                      saleDate: e.target.value,
-                    }));
-                  }
-                })({ target: { value: v } } as any)
-              }
-            />
-          </label>
-        </div>
+            }
+          }}
+        />
         <FormError message={formErrors.saleDate} />
       </div>
 
@@ -194,41 +171,20 @@ export const InvoiceDetailsSection: React.FC<InvoiceDetailsSectionProps> = ({
         <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
           Expiry Date
         </label>
-        <div className="relative flex items-center">
-          <input
-            type="text"
-            placeholder="dd/mm/yyyy"
-            value={isoToDdmmyyyy(formData.dueDate)}
-            {...fieldAttr("dueDate")}
-            onChange={(e) => {
-              const iso = ddmmyyyyToIso(e.target.value);
+        <DateInput
+          value={formData.dueDate}
+          error={Boolean(formErrors.dueDate)}
+          {...fieldAttr("dueDate")}
+          onChange={(v) => {
+            if (v) {
               clearFormError("dueDate");
               setFormData((prev) => ({
                 ...prev,
-                dueDate: iso || e.target.value,
+                dueDate: v,
               }));
-            }}
-            required
-            className="w-full h-11 pl-4 pr-11 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-          />
-          <label className="absolute right-3 text-slate-400 hover:text-[#33077C] cursor-pointer transition-colors p-1">
-            <Calendar className="w-4 h-4" />
-            <DateInput
-              value={formData.dueDate}
-              onChange={(v) =>
-                ((e) => {
-                  if (e.target.value) {
-                    clearFormError("dueDate");
-                    setFormData((prev) => ({
-                      ...prev,
-                      dueDate: e.target.value,
-                    }));
-                  }
-                })({ target: { value: v } } as any)
-              }
-            />
-          </label>
-        </div>
+            }
+          }}
+        />
         <FormError message={formErrors.dueDate} />
       </div>
 

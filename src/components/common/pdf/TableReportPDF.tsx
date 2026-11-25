@@ -163,14 +163,14 @@ export const TableReportPDF: React.FC<{ options: PrintTableOptions }> = ({ optio
   const {
     title,
     subtitle,
-    companyName = 'Yaa Creations Inc.',
-    companyDetails = 'Enterprise CRM & Sales Management Division | support@yaacreations.com',
+    companyName = '',
+    companyDetails = '',
     columns,
     data,
     summaryRow,
     metrics,
     orientation = 'landscape',
-    footerNote = 'Confidential & Proprietary • Generated automatically by YAA CRM',
+    footerNote = '',
   } = options;
 
   const colWidth = `${Math.floor(100 / columns.length)}%`;
@@ -198,7 +198,9 @@ export const TableReportPDF: React.FC<{ options: PrintTableOptions }> = ({ optio
               <View key={i} style={styles.metricCard}>
                 <Text style={styles.metricLabel}>{m.label}</Text>
                 <Text style={styles.metricValue}>
-                  {typeof m.value === 'number' ? `₹${m.value.toLocaleString('en-IN')}` : m.value}
+                  {typeof m.value === 'number'
+                    ? `Rs. ${m.value.toLocaleString('en-IN')}`
+                    : String(m.value ?? '').replace(/₹\s*/g, 'Rs. ')}
                 </Text>
               </View>
             ))}
@@ -220,7 +222,7 @@ export const TableReportPDF: React.FC<{ options: PrintTableOptions }> = ({ optio
                     },
                   ]}
                 >
-                  {col.header}
+                  {col.header.replace(/₹/g, 'Rs.')}
                 </Text>
               );
             })}
@@ -236,9 +238,11 @@ export const TableReportPDF: React.FC<{ options: PrintTableOptions }> = ({ optio
                 let val = row[col.key];
                 if (val === undefined || val === null) val = '-';
                 if (col.type === 'currency' && typeof val === 'number') {
-                  val = `₹${val.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+                  val = `Rs. ${val.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
                 } else if (typeof val === 'number') {
                   val = val.toLocaleString('en-IN');
+                } else {
+                  val = String(val).replace(/₹\s*/g, 'Rs. ');
                 }
                 return (
                   <Text
@@ -265,7 +269,9 @@ export const TableReportPDF: React.FC<{ options: PrintTableOptions }> = ({ optio
                 let val = summaryRow[col.key];
                 if (val === undefined || val === null) val = '';
                 if (typeof val === 'number') {
-                  val = `₹${val.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+                  val = `Rs. ${val.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+                } else {
+                  val = String(val).replace(/₹\s*/g, 'Rs. ');
                 }
                 return (
                   <Text

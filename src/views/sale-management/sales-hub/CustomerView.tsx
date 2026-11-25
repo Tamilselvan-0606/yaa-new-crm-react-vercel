@@ -13,7 +13,7 @@ import React, {
   useCallback,
 } from "react";
 import { useNavigate } from "react-router-dom";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import {
   UsersRound,
   Plus,
@@ -525,6 +525,7 @@ export const CustomerView: React.FC = () => {
   // React Hook Form instance for Customer Form Modal
   const {
     register,
+    control,
     handleSubmit,
     reset,
     watch,
@@ -549,11 +550,9 @@ export const CustomerView: React.FC = () => {
   });
   useEffect(() => {
     register("country");
-    register("phone");
-    register("alternatePhone");
     register("state");
     register("city");
-  }, [register]);
+  }, [register, isFormModalOpen, editingCustomer]);
 
   // The customer form always opens and closes without leftover errors.
   useEffect(() => {
@@ -1318,7 +1317,9 @@ export const CustomerView: React.FC = () => {
     if (errorKeys.length > 0) {
       const firstKey = errorKeys[0];
 
-      const el = document.querySelector(`[name="${firstKey}"]`) as HTMLElement;
+      const el = document.querySelector(
+        `[name="${firstKey}"], [data-field="${firstKey}"]`,
+      ) as HTMLElement;
       if (el) {
         el.focus();
         el.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -2500,7 +2501,6 @@ export const CustomerView: React.FC = () => {
                 { label: "Status : All", value: "All" },
                 { label: "Active", value: "Active", dotColor: "#10b981" },
                 { label: "Inactive", value: "Inactive", dotColor: "#64748b" },
-                { label: "Blocked", value: "Blocked", dotColor: "#ef4444" },
               ]}
               onChange={(val) => {
                 setPendingStatus(val);
@@ -2857,23 +2857,6 @@ export const CustomerView: React.FC = () => {
                                   }),
                               },
                               {
-                                label:
-                                  cust.status === "Blocked"
-                                    ? "Unblock Customer"
-                                    : "Block Customer",
-                                variant:
-                                  cust.status === "Blocked"
-                                    ? "activate"
-                                    : "suspend",
-                                onClick: () =>
-                                  handleUpdateCustomerStatus(
-                                    cust,
-                                    cust.status === "Blocked"
-                                      ? "Active"
-                                      : "Blocked",
-                                  ),
-                              },
-                              {
                                 label: "Delete Customer",
                                 variant: "delete",
                                 onClick: () => handleOpenDeleteModal(cust),
@@ -2996,7 +2979,6 @@ export const CustomerView: React.FC = () => {
                   <select {...register("status")} className={FORM_SELECT_CLS}>
                     <option value="Active">Active</option>
                     <option value="Inactive">Inactive</option>
-                    <option value="Blocked">Blocked</option>
                   </select>
                 </div>
 
@@ -3018,22 +3000,44 @@ export const CustomerView: React.FC = () => {
                   <FormError message={errors.salesRepresentativeId?.message} />
                 </div>
 
-                <PhoneField
-                  label="Primary Phone"
-                  required
-                  value={watch("phone") || ""}
-                  error={errors.phone?.message as string | undefined}
-                  placeholder="e.g. 9876543210"
-                  onChange={(v) => setValue("phone" as any, v as any, { shouldDirty: true, shouldValidate: true })}
+                <Controller
+                  name="phone"
+                  control={control}
+                  rules={{
+                    validate: (val) =>
+                      checkPhone(val, isValidIntlPhone, true) || true,
+                  }}
+                  render={({ field }) => (
+                    <PhoneField
+                      label="Primary Phone"
+                      required
+                      dataField="phone"
+                      value={field.value || ""}
+                      error={errors.phone?.message as string | undefined}
+                      placeholder="e.g. 9876543210"
+                      onChange={(v) => field.onChange(v)}
+                    />
+                  )}
                 />
 
-                <PhoneField
-                  label="WhatsApp Number"
-                  required
-                  value={watch("alternatePhone") || ""}
-                  error={errors.alternatePhone?.message as string | undefined}
-                  placeholder="e.g. 9876543211"
-                  onChange={(v) => setValue("alternatePhone" as any, v as any, { shouldDirty: true, shouldValidate: true })}
+                <Controller
+                  name="alternatePhone"
+                  control={control}
+                  rules={{
+                    validate: (val) =>
+                      checkPhone(val, isValidIntlPhone, true) || true,
+                  }}
+                  render={({ field }) => (
+                    <PhoneField
+                      label="WhatsApp Number"
+                      required
+                      dataField="alternatePhone"
+                      value={field.value || ""}
+                      error={errors.alternatePhone?.message as string | undefined}
+                      placeholder="e.g. 9876543211"
+                      onChange={(v) => field.onChange(v)}
+                    />
+                  )}
                 />
 
                 <div>

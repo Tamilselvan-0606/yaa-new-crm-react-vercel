@@ -5745,7 +5745,12 @@ export const InventoryProductsView: React.FC = () => {
                                 <input
                                   type="number"
                                   min="0"
-                                  value={item.openingStock}
+                                  value={
+                                    item.openingStock === 0
+                                      ? ""
+                                      : item.openingStock || ""
+                                  }
+                                  placeholder="0"
                                   onKeyDown={handleNonNegativeKeyDown}
                                   onChange={(e) =>
                                     handleBulkItemChange(

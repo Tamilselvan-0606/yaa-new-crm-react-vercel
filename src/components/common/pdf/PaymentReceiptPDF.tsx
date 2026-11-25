@@ -164,6 +164,9 @@ const BADGE: Record<string, { backgroundColor: string; color: string }> = {
   slate: { backgroundColor: '#F1F5F9', color: '#475569' },
 };
 
+const pdfSafe = (v?: string | number | null): string =>
+  v == null ? '' : String(v).replace(/₹\s*/g, 'Rs. ');
+
 const money = (n: number) =>
   `Rs. ${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -253,7 +256,7 @@ export const PaymentReceiptPDF: React.FC<{ options: PaymentReceiptOptions }> = (
             <Text style={[styles.tHeadText, { width: '30%', textAlign: 'right' }]}>Amount</Text>
           </View>
           <View style={styles.tRow}>
-            <Text style={styles.cellDesc}>{description || 'Payment received'}</Text>
+            <Text style={styles.cellDesc}>{pdfSafe(description) || 'Payment received'}</Text>
             <Text style={styles.cellAmt}>{money(totalAmount)}</Text>
           </View>
           <View style={styles.tTotal}>
@@ -265,7 +268,7 @@ export const PaymentReceiptPDF: React.FC<{ options: PaymentReceiptOptions }> = (
         {notes ? (
           <View style={styles.notesBox}>
             <Text style={styles.notesTitle}>Notes</Text>
-            <Text style={styles.notesText}>{notes}</Text>
+            <Text style={styles.notesText}>{pdfSafe(notes)}</Text>
           </View>
         ) : null}
 

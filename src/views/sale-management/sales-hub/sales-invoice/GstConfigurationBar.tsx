@@ -6,6 +6,7 @@ interface GstConfigurationBarProps {
   gstType: "intra_state" | "inter_state";
   onToggleWithGst: (enableGst: boolean) => void;
   onSetGstType: (type: "intra_state" | "inter_state") => void;
+  documentLabel?: string;
 }
 
 /** "With GST / Without GST" toggle and Intra-State (CGST+SGST) vs Inter-State (IGST) selector. */
@@ -14,7 +15,10 @@ export const GstConfigurationBar: React.FC<GstConfigurationBarProps> = ({
   gstType,
   onToggleWithGst,
   onSetGstType,
+  documentLabel = "sales invoice",
 }) => {
+  const capitalizedLabel =
+    documentLabel.charAt(0).toUpperCase() + documentLabel.slice(1);
   return (
     <div className="bg-gradient-to-r from-purple-50/70 via-indigo-50/40 to-slate-50 border border-purple-100/80 rounded-xl p-3 sm:p-3.5 space-y-3">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
@@ -24,7 +28,7 @@ export const GstConfigurationBar: React.FC<GstConfigurationBarProps> = ({
             Taxation &amp; GST Configuration
           </span>
           <p className="text-[11px] text-slate-500 mt-0.5">
-            Choose whether this sales invoice includes GST, and
+            Choose whether this {documentLabel} includes GST, and
             configure Intra-State (CGST + SGST) or Inter-State (IGST)
           </p>
         </div>
@@ -105,7 +109,7 @@ export const GstConfigurationBar: React.FC<GstConfigurationBarProps> = ({
           <div className="flex items-center gap-2 text-amber-700 text-xs">
             <Tag className="w-3.5 h-3.5" />
             <span>
-              Invoice is marked <strong>Tax Exempt / Non-GST</strong>.
+              {capitalizedLabel} is marked <strong>Tax Exempt / Non-GST</strong>.
               All product tax amounts are set to ₹0.00.
             </span>
           </div>

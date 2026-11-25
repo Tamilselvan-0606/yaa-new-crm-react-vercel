@@ -229,11 +229,19 @@ export const mapSaleProformaToPayload = (
       } else if (it.itemCode && String(it.itemCode).trim()) {
         itemPayload.sku = String(it.itemCode).trim();
       }
-      if (typeof it.discountPercent === 'number' && !isNaN(it.discountPercent) && it.discountPercent > 0) {
-        itemPayload.discountPercent = it.discountPercent;
+      const gross = itemPayload.quantity * itemPayload.unitPrice;
+      const resolvedDiscountPercent =
+        typeof it.discountPercent === 'number' && !isNaN(it.discountPercent) && it.discountPercent > 0
+          ? it.discountPercent
+          : Number(it.discountAmount) > 0 && gross > 0
+            ? Math.min(100, Math.round((Number(it.discountAmount) / gross) * 10000) / 100)
+            : 0;
+      if (resolvedDiscountPercent > 0) {
+        itemPayload.discountPercent = resolvedDiscountPercent;
       }
-      if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent >= 0) {
-        itemPayload.taxPercent = it.taxPercent;
+      const effectiveTaxPercent = proforma.withGst === false ? 0 : Number(it.taxPercent);
+      if (!isNaN(effectiveTaxPercent) && effectiveTaxPercent >= 0) {
+        itemPayload.taxPercent = effectiveTaxPercent;
       }
       return itemPayload;
     }),
@@ -276,6 +284,9 @@ export const mapSaleProformaToPayload = (
   }
   if (typeof proforma.withGst === 'boolean') {
     payload.withGst = proforma.withGst;
+  }
+  if (proforma.gstType) {
+    payload.gstType = proforma.gstType;
   }
   if (typeof proforma.roundOff === 'number') {
     payload.roundOff = proforma.roundOff;

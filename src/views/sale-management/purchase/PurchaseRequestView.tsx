@@ -1184,11 +1184,11 @@ export const PurchaseRequestView: React.FC = () => {
       statusColor: req.status === 'Approved' || req.status === 'Purchase Created' ? 'emerald' : req.status === 'Rejected' ? 'rose' : 'purple',
       partyTitle: 'Requisitioner / Department',
       partyName: req.requestedBy,
-      partyCompany: `Department: ${req.department}`,
+      partyCompany: req.department ? `Department: ${req.department}` : undefined,
       extraMeta: [
         { label: 'Request ID', value: req.requestNo },
         ...(req.purchaseRequestManualNo ? [{ label: 'Request No', value: req.purchaseRequestManualNo }] : []),
-        { label: 'Priority', value: req.priority },
+        ...(req.priority ? [{ label: 'Priority', value: req.priority }] : []),
         ...(req.supplierName ? [{ label: 'Suggested Supplier', value: req.supplierName }] : []),
         ...(req.rejectionReason ? [{ label: 'Rejection Reason', value: req.rejectionReason }] : []),
       ],
@@ -1204,7 +1204,7 @@ export const PurchaseRequestView: React.FC = () => {
         const price = it.estimatedUnitPrice || 0;
         return {
           name: it.productName,
-          unit: (it as any).unit || 'PCS',
+          unit: (it as any).unit || undefined,
           quantity: qty,
           unitPrice: price,
           total: qty * price,
@@ -1222,7 +1222,15 @@ export const PurchaseRequestView: React.FC = () => {
     if (!req.id) return req;
     try {
       const res = await commercePurchaseRequestApi.getPurchaseRequestById(req.id);
-      if (res?.data) return { ...req, ...mapApiPurchaseRequestToUi(res.data) };
+      if (res?.data) {
+        const mapped = mapApiPurchaseRequestToUi(res.data);
+        return {
+          ...req,
+          ...mapped,
+          purchaseRequestManualNo:
+            mapped.purchaseRequestManualNo || req.purchaseRequestManualNo || '',
+        };
+      }
     } catch (err) {
       console.warn('Could not fetch latest purchase request for print/download:', err);
     }
@@ -2070,7 +2078,12 @@ export const PurchaseRequestView: React.FC = () => {
                               type="number"
                               min="1"
                               {...fieldAttr(`items.${idx}.quantity`)}
-                              value={it.requestedQuantity}
+                              value={
+                                it.requestedQuantity === 0
+                                  ? ""
+                                  : it.requestedQuantity || ""
+                              }
+                              placeholder="0"
                               onKeyDown={handleNonNegativeKeyDown}
                               onChange={(e) =>
                                 handleItemFieldChange(idx, 'requestedQuantity', Number(e.target.value))

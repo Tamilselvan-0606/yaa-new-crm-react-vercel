@@ -69,6 +69,9 @@ import {
   ExternalLink,
   Receipt,
   FileCheck,
+  Printer,
+  Info,
+  Percent,
 } from 'lucide-react';
 
 interface RolePermissionActions {
@@ -120,14 +123,15 @@ export const SettingsView: React.FC = () => {
     | 'account'
     | 'permission'
     | 'staff'
+    | 'taxes_gst'
+    | 'transaction_message'
     | 'invoice_settings'
     | 'document_templates'
     | 'numbering_prefix'
     | 'whatsapp_integration'
     | 'integrations'
     | 'security'
-    | 'activity_logs'
-    | 'theme';
+    | 'activity_logs';
 
   const [superAdminTab, setSuperAdminTab] = useState<SettingsTabId>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -137,6 +141,8 @@ export const SettingsView: React.FC = () => {
       'account',
       'permission',
       'staff',
+      'taxes_gst',
+      'transaction_message',
       'invoice_settings',
       'document_templates',
       'numbering_prefix',
@@ -144,7 +150,6 @@ export const SettingsView: React.FC = () => {
       'integrations',
       'security',
       'activity_logs',
-      'theme',
     ];
     if (tabParam && validTabs.includes(tabParam as SettingsTabId)) {
       return tabParam as SettingsTabId;
@@ -153,10 +158,10 @@ export const SettingsView: React.FC = () => {
   });
 
   // Standard Admin tab
-  const [activeTab, setActiveTab] = useState<'account' | 'branding' | 'company' | 'reminders' | 'backup'>(() => {
+  const [activeTab, setActiveTab] = useState<'account' | 'company' | 'reminders' | 'backup'>(() => {
     const params = new URLSearchParams(window.location.search);
     const tabParam = params.get('tab');
-    if (tabParam === 'account' || tabParam === 'company' || tabParam === 'branding' || tabParam === 'reminders' || tabParam === 'backup') {
+    if (tabParam === 'account' || tabParam === 'company' || tabParam === 'reminders' || tabParam === 'backup') {
       return tabParam as any;
     }
     return 'account';
@@ -194,6 +199,133 @@ export const SettingsView: React.FC = () => {
   const [paymentDueReminderDays, setPaymentDueReminderDays] = useState(3);
   const [subscriptionExpiryDays, setSubscriptionExpiryDays] = useState(14);
 
+  // Taxes & GST State
+  const [enableGst, setEnableGst] = useState(true);
+  const [enableHsnSac, setEnableHsnSac] = useState(true);
+  const [reverseCharge, setReverseCharge] = useState(false);
+  const [enablePlaceOfSupply, setEnablePlaceOfSupply] = useState(true);
+  const [compositeScheme, setCompositeScheme] = useState(false);
+  const [enableTcs, setEnableTcs] = useState(false);
+  const [enableTdsState, setEnableTdsState] = useState(false);
+
+  // Tax Rates list
+  const [taxRates, setTaxRates] = useState([
+    { id: 'tr-1', name: 'IGST@0%', rate: 0 },
+    { id: 'tr-2', name: 'SGST@0%', rate: 0 },
+    { id: 'tr-3', name: 'CGST@0%', rate: 0 },
+    { id: 'tr-4', name: 'IGST@0.25%', rate: 0.25 },
+    { id: 'tr-5', name: 'SGST@0.125%', rate: 0.125 },
+    { id: 'tr-6', name: 'CGST@0.125%', rate: 0.125 },
+    { id: 'tr-7', name: 'IGST@3%', rate: 3 },
+    { id: 'tr-8', name: 'SGST@1.5%', rate: 1.5 },
+    { id: 'tr-9', name: 'CGST@1.5%', rate: 1.5 },
+    { id: 'tr-10', name: 'IGST@5%', rate: 5 },
+    { id: 'tr-11', name: 'SGST@2.5%', rate: 2.5 },
+    { id: 'tr-12', name: 'CGST@2.5%', rate: 2.5 },
+    { id: 'tr-13', name: 'IGST@12%', rate: 12 },
+    { id: 'tr-14', name: 'SGST@6%', rate: 6 },
+    { id: 'tr-15', name: 'CGST@6%', rate: 6 },
+    { id: 'tr-16', name: 'IGST@18%', rate: 18 },
+    { id: 'tr-17', name: 'SGST@9%', rate: 9 },
+    { id: 'tr-18', name: 'CGST@9%', rate: 9 },
+    { id: 'tr-19', name: 'IGST@28%', rate: 28 },
+    { id: 'tr-20', name: 'SGST@14%', rate: 14 },
+    { id: 'tr-21', name: 'CGST@14%', rate: 14 },
+    { id: 'tr-22', name: 'IGST@40%', rate: 40 },
+    { id: 'tr-23', name: 'SGST@20%', rate: 20 },
+    { id: 'tr-24', name: 'CGST@20%', rate: 20 },
+  ]);
+
+  // Tax Groups list
+  const [taxGroups, setTaxGroups] = useState([
+    { id: 'tg-1', name: 'GST@0%', subTaxes: 'SGST@0%  CGST@0%' },
+    { id: 'tg-2', name: 'GST@0.25%', subTaxes: 'SGST@0.125%  CGST@0.125%' },
+    { id: 'tg-3', name: 'GST@3%', subTaxes: 'SGST@1.5%  CGST@1.5%' },
+    { id: 'tg-4', name: 'GST@5%', subTaxes: 'SGST@2.5%  CGST@2.5%' },
+    { id: 'tg-5', name: 'GST@12%', subTaxes: 'SGST@6%  CGST@6%' },
+    { id: 'tg-6', name: 'GST@18%', subTaxes: 'SGST@9%  CGST@9%' },
+    { id: 'tg-7', name: 'GST@28%', subTaxes: 'SGST@14%  CGST@14%' },
+    { id: 'tg-8', name: 'GST@40%', subTaxes: 'SGST@20%  CGST@20%' },
+  ]);
+
+  // Modals for adding Tax Rate / Tax Group
+  const [isTaxRateModalOpen, setIsTaxRateModalOpen] = useState(false);
+  const [newTaxRateName, setNewTaxRateName] = useState('');
+  const [newTaxRateValue, setNewTaxRateValue] = useState('');
+
+  const [isTaxGroupModalOpen, setIsTaxGroupModalOpen] = useState(false);
+  const [newTaxGroupName, setNewTaxGroupName] = useState('');
+  const [newTaxGroupSubTaxes, setNewTaxGroupSubTaxes] = useState('');
+
+  // Transaction Message Settings State
+  const [messageChannel, setMessageChannel] = useState<'vyapar' | 'whatsapp'>('vyapar');
+  const [sendMsgToParty, setSendMsgToParty] = useState(true);
+  const [sendMsgCopyToSelf, setSendMsgCopyToSelf] = useState(false);
+  const [sendTxnUpdateMsg, setSendTxnUpdateMsg] = useState(false);
+  const [autoShareVyaparNetwork, setAutoShareVyaparNetwork] = useState(false);
+
+  // Message Content controls
+  const [partyBalanceInMsg, setPartyBalanceInMsg] = useState(false);
+  const [webInvoiceLinkInMsg, setWebInvoiceLinkInMsg] = useState(true);
+  const [paymentLinkInMsg, setPaymentLinkInMsg] = useState(false);
+
+  // Send Automatic Message For checkboxes
+  const [autoMsgTypes, setAutoMsgTypes] = useState<{ [key: string]: boolean }>({
+    Sales: true,
+    Purchase: true,
+    'Sales Return': true,
+    'Purchase Return': true,
+    'Payment In': true,
+    'Payment Out': true,
+    'Sale Order': true,
+    'Purchase Order': false,
+    Estimate: false,
+    'Proforma Invoice': false,
+    'Delivery Challan': false,
+    'Cancelled Invoice': true,
+  });
+
+  // Preview Transaction Type selector
+  const [previewTxnType, setPreviewTxnType] = useState('Sales');
+  const [isTxnTypeDropdownOpen, setIsTxnTypeDropdownOpen] = useState(false);
+
+  // Transaction Settings State (Matching user reference)
+  // 1. Transaction Header
+  const [invoiceBillNo, setInvoiceBillNo] = useState(true);
+  const [addTimeOnTransactions, setAddTimeOnTransactions] = useState(false);
+  const [cashSaleByDefault, setCashSaleByDefault] = useState(false);
+  const [billingNameOfParties, setBillingNameOfParties] = useState(false);
+  const [poDetailsOnTransactions, setPoDetailsOnTransactions] = useState(false);
+
+  // 2. Items Table
+  const [inclusiveExclusiveTaxRate, setInclusiveExclusiveTaxRate] = useState(true);
+  const [displayPurchasePrice, setDisplayPurchasePrice] = useState(true);
+  const [showLast5SalePrice, setShowLast5SalePrice] = useState(false);
+  const [showLast5PurchasePrice, setShowLast5PurchasePrice] = useState(false);
+  const [freeItemQuantity, setFreeItemQuantity] = useState(false);
+  const [enableItemCount, setEnableItemCount] = useState(false);
+
+  // 3. Taxes, Discount & Totals
+  const [transactionWiseTax, setTransactionWiseTax] = useState(false);
+  const [transactionWiseDiscount, setTransactionWiseDiscount] = useState(false);
+  const [roundOffType, setRoundOffType] = useState('Nearest');
+  const [roundOffTo, setRoundOffTo] = useState('1');
+
+  // 4. More Transaction Features
+  const [ewayBillNo, setEwayBillNo] = useState(false);
+  const [quickEntry, setQuickEntry] = useState(false);
+  const [doNotShowInvoicePreview, setDoNotShowInvoicePreview] = useState(false);
+  const [repeatInvoices, setRepeatInvoices] = useState(false);
+  const [enablePasscodeForEditDelete, setEnablePasscodeForEditDelete] = useState(false);
+  const [discountDuringPayments, setDiscountDuringPayments] = useState(false);
+  const [linkPaymentsToInvoices, setLinkPaymentsToInvoices] = useState(false);
+  const [dueDatesAndPaymentTerms, setDueDatesAndPaymentTerms] = useState(false);
+  const [showProfitWhileMakingSale, setShowProfitWhileMakingSale] = useState(false);
+  const [termsAndConditionsEnabled, setTermsAndConditionsEnabled] = useState(true);
+
+  // 5. Billing Type
+  const [billingType, setBillingType] = useState<'Lite Sale' | 'Full Sale'>('Full Sale');
+
   // Documents & Billing Settings State
   const [defaultTaxRate, setDefaultTaxRate] = useState('18');
   const [enableTds, setEnableTds] = useState(false);
@@ -204,13 +336,53 @@ export const SettingsView: React.FC = () => {
   const [signatureName, setSignatureName] = useState('Authorized Signatory');
   const [roundOffTotal, setRoundOffTotal] = useState(true);
 
-  // Document Templates State
-  const [selectedInvoiceTemplate, setSelectedInvoiceTemplate] = useState('modern_minimal');
-  const [showCompanyLogo, setShowCompanyLogo] = useState(true);
-  const [showQrCode, setShowQrCode] = useState(true);
-  const [showBankDetails, setShowBankDetails] = useState(true);
-  const [showTermsConditions, setShowTermsConditions] = useState(true);
-  const [primaryDocumentColor, setPrimaryDocumentColor] = useState('#33077C');
+  // Document / Print Settings State
+  const [printerTab, setPrinterTab] = useState<'regular' | 'thermal'>('regular');
+  const [printSubTab, setPrintSubTab] = useState<'layout' | 'colors'>('layout');
+  const [selectedInvoiceTemplate, setSelectedInvoiceTemplate] = useState('landscape_theme_2');
+  const [makeRegularPrinterDefault, setMakeRegularPrinterDefault] = useState(true);
+  const [printRepeatHeader, setPrintRepeatHeader] = useState(true);
+  const [printCompanyName, setPrintCompanyName] = useState('My Company');
+  const [printCompanyLogo, setPrintCompanyLogo] = useState(true);
+  const [printAddress, setPrintAddress] = useState(true);
+  const [printAddressValue, setPrintAddressValue] = useState('');
+  const [printEmail, setPrintEmail] = useState(true);
+  const [printEmailValue, setPrintEmailValue] = useState('');
+  const [printPhone, setPrintPhone] = useState(true);
+  const [printPhoneValue, setPrintPhoneValue] = useState('9080185828');
+  const [printGstin, setPrintGstin] = useState(true);
+  const [printGstinValue, setPrintGstinValue] = useState('');
+  const [paperSize, setPaperSize] = useState('A4');
+  const [orientation, setOrientation] = useState('Portrait');
+  const [companyNameSize, setCompanyNameSize] = useState('Large');
+  const [invoiceTextSize, setInvoiceTextSize] = useState('Medium');
+  const [printOriginalDuplicate, setPrintOriginalDuplicate] = useState(false);
+  const [extraSpaceTopPdf, setExtraSpaceTopPdf] = useState(0);
+
+  // Item Table Settings
+  const [expandTableToWholePage, setExpandTableToWholePage] = useState(true);
+  const [minItemRows, setMinItemRows] = useState(0);
+
+  // Totals & Taxes Settings
+  const [totalItemQuantity, setTotalItemQuantity] = useState(true);
+  const [amountWithDecimal, setAmountWithDecimal] = useState(true);
+  const [receivedAmount, setReceivedAmount] = useState(true);
+  const [balanceAmount, setBalanceAmount] = useState(true);
+  const [currentBalanceOfParty, setCurrentBalanceOfParty] = useState(false);
+  const [taxDetails, setTaxDetails] = useState(true);
+  const [youSaved, setYouSaved] = useState(true);
+  const [printAmountWithGrouping, setPrintAmountWithGrouping] = useState(true);
+  const [amountInWordsFormat, setAmountInWordsFormat] = useState('Indian');
+
+  // Footer Settings
+  const [printDescription, setPrintDescription] = useState(true);
+  const [printTermsConditions, setPrintTermsConditions] = useState(true);
+  const [printReceivedBy, setPrintReceivedBy] = useState(true);
+  const [printDeliveredBy, setPrintDeliveredBy] = useState(true);
+  const [printSignature, setPrintSignature] = useState(true);
+  const [signatureText, setSignatureText] = useState('Authorized Signatory');
+  const [printPaymentMode, setPrintPaymentMode] = useState(false);
+  const [printAcknowledgement, setPrintAcknowledgement] = useState(false);
 
   // Numbering & Prefix State
   interface TransactionPrefixConfig {
@@ -805,14 +977,15 @@ export const SettingsView: React.FC = () => {
           { id: 'account', label: 'Account', icon: User },
           { id: 'permission', label: 'Permission', icon: ShieldCheck },
           { id: 'staff', label: 'Staff', icon: Users },
-          { id: 'theme', label: 'Theme & Colors', icon: Palette },
         ],
       },
       {
         groupTitle: 'DOCUMENTS & BILLING',
         items: [
-          { id: 'invoice_settings', label: 'Invoice Settings', icon: Receipt },
-          { id: 'document_templates', label: 'Document Templates', icon: FileCode },
+          { id: 'taxes_gst', label: 'Taxes & GST', icon: Percent },
+          { id: 'invoice_settings', label: 'Transaction Settings', icon: Sliders },
+          { id: 'transaction_message', label: 'Transaction Message', icon: MessageSquare },
+          { id: 'document_templates', label: 'Print / Document Settings', icon: Printer },
           { id: 'numbering_prefix', label: 'Numbering & Prefix', icon: Hash },
         ],
       },
@@ -851,18 +1024,6 @@ export const SettingsView: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            {superAdminTab === 'theme' && (
-              <button
-                type="button"
-                onClick={resetTheme}
-                className="h-10 px-4 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs sm:text-[13px] font-bold rounded-xl transition-all flex items-center gap-2 cursor-pointer shadow-2xs whitespace-nowrap shrink-0"
-                title="Reset theme and colors to default"
-              >
-                <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
-                <span>Reset Colors</span>
-              </button>
-            )}
-
             <button
               type="button"
               onClick={handleSaveSettings}
@@ -1033,273 +1194,6 @@ export const SettingsView: React.FC = () => {
                           }`}
                       />
                     </button>
-                  </div>
-                </div>
-              )}
-
-              {/* 2. THEME TAB */}
-              {superAdminTab === 'theme' && (
-                <div className="space-y-6">
-                  {/* 1-Click Curated Presets */}
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                          <Sparkles className="w-4 h-4 text-amber-500" />
-                          1-Click Color & Theme Presets
-                        </h3>
-                        <p className="text-xs text-slate-500">
-                          Select a curated palette or customize every individual color with automated contrast below.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-2">
-                      {presets.map((p) => {
-                        const isSelected =
-                          theme.primary.toLowerCase() === p.theme.primary.toLowerCase() &&
-                          theme.bg.toLowerCase() === p.theme.bg.toLowerCase();
-
-                        return (
-                          <button
-                            key={p.id}
-                            type="button"
-                            onClick={() => applyPreset(p.id)}
-                            className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer relative flex flex-col justify-between ${isSelected
-                              ? 'border-[#33077C] ring-2 ring-[#33077C]/20 bg-purple-50/20'
-                              : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
-                              }`}
-                          >
-                            <div>
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="text-xs font-bold text-slate-900">{p.name}</span>
-                                {isSelected && (
-                                  <span className="w-5 h-5 rounded-full bg-[#33077C] text-white flex items-center justify-center shrink-0">
-                                    <Check className="w-3 h-3" />
-                                  </span>
-                                )}
-                              </div>
-                              <p className="text-[11px] text-slate-500 mt-1 leading-snug">{p.description}</p>
-                            </div>
-
-                            <div className="flex items-center gap-2 mt-3 pt-2 border-t border-slate-100">
-                              <div className="flex items-center gap-1.5">
-                                <span
-                                  className="w-5 h-5 rounded-md border border-slate-200 shadow-2xs"
-                                  style={{ backgroundColor: p.theme.primary }}
-                                  title={`Primary: ${p.theme.primary}`}
-                                />
-                                <span
-                                  className="w-5 h-5 rounded-md border border-slate-200 shadow-2xs"
-                                  style={{ backgroundColor: p.theme.accent }}
-                                  title={`Accent: ${p.theme.accent}`}
-                                />
-                                <span
-                                  className="w-5 h-5 rounded-md border border-slate-200 shadow-2xs"
-                                  style={{ backgroundColor: p.theme.bg }}
-                                  title={`Canvas Background: ${p.theme.bg}`}
-                                />
-                              </div>
-                              <span className="text-[10px] font-mono text-slate-400 ml-auto">
-                                {p.theme.primary}
-                              </span>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Centralized Color Controls with Live Contrast Text Feedback */}
-                  <div className="pt-6 border-t border-slate-100 space-y-6">
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-900">Custom Color Calibration & Contrast Engine</h3>
-                      <p className="text-xs text-slate-500">
-                        Change any color in one place. The system computes WCAG relative luminance and automatically sets contrast text.
-                      </p>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {/* Primary Color Card */}
-                      <div className="p-4 rounded-xl border border-slate-200 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <label className="text-xs font-bold text-slate-900 block">Primary Brand Color</label>
-                            <span className="text-[11px] text-slate-500">Sidebar, major headings & brand badges</span>
-                          </div>
-                          <input
-                            type="color"
-                            value={theme.primary}
-                            onChange={(e) => setTheme({ primary: e.target.value })}
-                            className="w-9 h-9 rounded-lg border border-slate-300 cursor-pointer p-0.5"
-                          />
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-mono text-slate-400">HEX:</span>
-                          <input
-                            type="text"
-                            value={theme.primary}
-                            onChange={(e) => setTheme({ primary: e.target.value })}
-                            className="w-32 px-2.5 py-1 text-xs font-mono border border-slate-300 rounded-lg uppercase font-bold"
-                          />
-                        </div>
-
-                        <div
-                          className="p-3 rounded-lg flex items-center justify-between text-xs font-semibold transition-all shadow-2xs"
-                          style={{
-                            backgroundColor: theme.primary,
-                            color: primaryContrast,
-                          }}
-                        >
-                          <span>Auto Contrast Result:</span>
-                          <span className="px-2 py-0.5 rounded text-[11px] font-mono border border-current/30">
-                            {primaryContrast === '#FFFFFF' ? 'Light Text (#FFFFFF)' : 'Dark Text (#0F172A)'}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Accent Color Card */}
-                      <div className="p-4 rounded-xl border border-slate-200 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <label className="text-xs font-bold text-slate-900 block">Accent / Action Color</label>
-                            <span className="text-[11px] text-slate-500">Buttons, active tabs, alerts & highlights</span>
-                          </div>
-                          <input
-                            type="color"
-                            value={theme.accent}
-                            onChange={(e) => setTheme({ accent: e.target.value })}
-                            className="w-9 h-9 rounded-lg border border-slate-300 cursor-pointer p-0.5"
-                          />
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-mono text-slate-400">HEX:</span>
-                          <input
-                            type="text"
-                            value={theme.accent}
-                            onChange={(e) => setTheme({ accent: e.target.value })}
-                            className="w-32 px-2.5 py-1 text-xs font-mono border border-slate-300 rounded-lg uppercase font-bold"
-                          />
-                        </div>
-
-                        <div
-                          className="p-3 rounded-lg flex items-center justify-between text-xs font-semibold transition-all shadow-2xs"
-                          style={{
-                            backgroundColor: theme.accent,
-                            color: accentContrast,
-                          }}
-                        >
-                          <span>Auto Contrast Result:</span>
-                          <span className="px-2 py-0.5 rounded text-[11px] font-mono border border-current/30">
-                            {accentContrast === '#FFFFFF' ? 'Light Text (#FFFFFF)' : 'Dark Text (#0F172A)'}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Main Canvas Background */}
-                      <div className="p-4 rounded-xl border border-slate-200 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <label className="text-xs font-bold text-slate-900 block">Canvas Background</label>
-                            <span className="text-[11px] text-slate-500">Main viewport and page backdrop</span>
-                          </div>
-                          <input
-                            type="color"
-                            value={theme.bg}
-                            onChange={(e) => setTheme({ bg: e.target.value })}
-                            className="w-9 h-9 rounded-lg border border-slate-300 cursor-pointer p-0.5"
-                          />
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-mono text-slate-400">HEX:</span>
-                          <input
-                            type="text"
-                            value={theme.bg}
-                            onChange={(e) => setTheme({ bg: e.target.value })}
-                            className="w-32 px-2.5 py-1 text-xs font-mono border border-slate-300 rounded-lg uppercase font-bold"
-                          />
-                        </div>
-
-                        <div
-                          className="p-3 rounded-lg flex items-center justify-between text-xs font-semibold transition-all border"
-                          style={{
-                            backgroundColor: theme.bg,
-                            color: bgContrast,
-                            borderColor: theme.border || '#E2E8F0',
-                          }}
-                        >
-                          <span>Canvas Contrast Result:</span>
-                          <span className="px-2 py-0.5 rounded text-[11px] font-mono border border-current/30">
-                            {bgContrast === '#FFFFFF' ? 'Dark Mode (Light Text)' : 'Light Mode (Dark Text)'}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Surface / Card Background */}
-                      <div className="p-4 rounded-xl border border-slate-200 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <label className="text-xs font-bold text-slate-900 block">Card & Surface Background</label>
-                            <span className="text-[11px] text-slate-500">Data tables, modal dialogs, and cards</span>
-                          </div>
-                          <input
-                            type="color"
-                            value={theme.surface}
-                            onChange={(e) => setTheme({ surface: e.target.value })}
-                            className="w-9 h-9 rounded-lg border border-slate-300 cursor-pointer p-0.5"
-                          />
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-mono text-slate-400">HEX:</span>
-                          <input
-                            type="text"
-                            value={theme.surface}
-                            onChange={(e) => setTheme({ surface: e.target.value })}
-                            className="w-32 px-2.5 py-1 text-xs font-mono border border-slate-300 rounded-lg uppercase font-bold"
-                          />
-                        </div>
-
-                        <div
-                          className="p-3 rounded-lg flex items-center justify-between text-xs font-semibold transition-all border"
-                          style={{
-                            backgroundColor: theme.surface,
-                            color: surfaceContrast,
-                            borderColor: theme.border || '#E2E8F0',
-                          }}
-                        >
-                          <span>Surface Contrast Result:</span>
-                          <span className="px-2 py-0.5 rounded text-[11px] font-mono border border-current/30">
-                            {surfaceContrast === '#FFFFFF' ? 'Light Text (#FFFFFF)' : 'Dark Text (#0F172A)'}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Typography Selector */}
-                    <div className="pt-4 border-t border-slate-100 space-y-2">
-                      <label className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                        <Type className="w-4 h-4 text-slate-600" />
-                        Global Font Family
-                      </label>
-                      <select
-                        value={theme.fontFamily}
-                        onChange={(e) => setTheme({ fontFamily: e.target.value })}
-                        className="w-full md:w-96 px-3 py-2 text-xs border border-slate-300 rounded-xl outline-none font-medium bg-white"
-                      >
-                        {fontOptions.map((f) => (
-                          <option key={f.value} value={f.value}>
-                            {f.label}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="text-[11px] text-slate-500">
-                        Updating this single option immediately changes typography across the whole application.
-                      </p>
-                    </div>
                   </div>
                 </div>
               )}
@@ -2040,220 +1934,2187 @@ export const SettingsView: React.FC = () => {
                 </div>
               )}
 
-              {/* 6. INVOICE SETTINGS TAB */}
+              {/* 5.5 TAXES & GST TAB */}
+              {superAdminTab === 'taxes_gst' && (
+                <div className="space-y-6">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                        <Percent className="w-5 h-5 text-[#33077C]" />
+                        Taxes & GST Configuration
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Manage Goods & Services Tax (GST), tax slabs, split rates, and tax group mappings.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* 3-Column Layout: Column 1 = GST Settings, Column 2 = Tax Rates, Column 3 = Tax Group */}
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                    {/* Column 1: GST Settings (Width: 4/12) */}
+                    <div className="lg:col-span-4 bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-5">
+                      <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2">
+                        GST Settings
+                      </h4>
+
+                      <div className="space-y-4">
+                        {[
+                          { label: 'Enable GST', checked: enableGst, onChange: setEnableGst },
+                          { label: 'Enable HSN/SAC Code', checked: enableHsnSac, onChange: setEnableHsnSac },
+                          { label: 'Reverse Charge', checked: reverseCharge, onChange: setReverseCharge },
+                          { label: 'Enable Place of Supply', checked: enablePlaceOfSupply, onChange: setEnablePlaceOfSupply },
+                          { label: 'Composite Scheme', checked: compositeScheme, onChange: setCompositeScheme },
+                          { label: 'Enable TCS', checked: enableTcs, onChange: setEnableTcs },
+                          { label: 'Enable TDS', checked: enableTdsState, onChange: setEnableTdsState },
+                        ].map((item) => (
+                          <label key={item.label} className="flex items-center gap-3 cursor-pointer py-0.5">
+                            <input
+                              type="checkbox"
+                              checked={item.checked}
+                              onChange={(e) => item.onChange(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5">
+                              {item.label}
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </label>
+                        ))}
+
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            className="text-xs sm:text-[13px] font-semibold text-[#33077C] hover:underline flex items-center gap-1 cursor-pointer"
+                          >
+                            Tax List &gt;
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Column 2: Tax Rates (Width: 4/12) */}
+                    <div className="lg:col-span-4 bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                        <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                          Tax Rates
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNewTaxRateName('');
+                            setNewTaxRateValue('');
+                            setIsTaxRateModalOpen(true);
+                          }}
+                          className="w-6 h-6 rounded-full bg-[#33077C]/10 text-[#33077C] hover:bg-[#33077C] hover:text-white transition-all flex items-center justify-center cursor-pointer shadow-2xs"
+                          title="Add Tax Rate"
+                        >
+                          <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                        </button>
+                      </div>
+
+                      <div className="space-y-1 max-h-[680px] overflow-y-auto pr-1 custom-scrollbar divide-y divide-slate-100">
+                        {taxRates.map((tr) => (
+                          <div key={tr.id} className="py-2.5 flex items-center justify-between gap-2 hover:bg-slate-50/60 px-2 rounded-lg transition-colors group">
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700">
+                              {tr.name}
+                            </span>
+                            <div className="flex items-center gap-3">
+                              <span className="text-xs font-semibold text-slate-900 min-w-8 text-right">
+                                {tr.rate}
+                              </span>
+                              <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const nextVal = prompt(`Update rate for ${tr.name}:`, String(tr.rate));
+                                    if (nextVal !== null && !isNaN(Number(nextVal))) {
+                                      setTaxRates((prev) =>
+                                        prev.map((item) => (item.id === tr.id ? { ...item, rate: Number(nextVal) } : item))
+                                      );
+                                    }
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-[#33077C] cursor-pointer rounded"
+                                  title="Edit rate"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (confirm(`Delete ${tr.name}?`)) {
+                                      setTaxRates((prev) => prev.filter((item) => item.id !== tr.id));
+                                    }
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-rose-600 cursor-pointer rounded"
+                                  title="Delete rate"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Column 3: Tax Group (Width: 4/12) */}
+                    <div className="lg:col-span-4 bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                        <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                          Tax Group
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNewTaxGroupName('');
+                            setNewTaxGroupSubTaxes('');
+                            setIsTaxGroupModalOpen(true);
+                          }}
+                          className="w-6 h-6 rounded-full bg-[#33077C]/10 text-[#33077C] hover:bg-[#33077C] hover:text-white transition-all flex items-center justify-center cursor-pointer shadow-2xs"
+                          title="Add Tax Group"
+                        >
+                          <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                        </button>
+                      </div>
+
+                      <div className="space-y-1 max-h-[680px] overflow-y-auto pr-1 custom-scrollbar divide-y divide-slate-100">
+                        {taxGroups.map((tg) => (
+                          <div key={tg.id} className="py-3 flex items-start justify-between gap-2 hover:bg-slate-50/60 px-2 rounded-lg transition-colors group">
+                            <div>
+                              <span className="text-xs sm:text-[13px] font-bold text-slate-900 block leading-tight">
+                                {tg.name}
+                              </span>
+                              <span className="text-[11.5px] font-medium text-slate-400 block mt-1">
+                                {tg.subTaxes}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1 pt-0.5 opacity-70 group-hover:opacity-100 transition-opacity">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const nextName = prompt('Update Tax Group Name:', tg.name);
+                                  if (nextName) {
+                                    setTaxGroups((prev) =>
+                                      prev.map((item) => (item.id === tg.id ? { ...item, name: nextName } : item))
+                                    );
+                                  }
+                                }}
+                                className="p-1 text-slate-400 hover:text-[#33077C] cursor-pointer rounded"
+                                title="Edit group"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (confirm(`Delete ${tg.name}?`)) {
+                                    setTaxGroups((prev) => prev.filter((item) => item.id !== tg.id));
+                                  }
+                                }}
+                                className="p-1 text-slate-400 hover:text-rose-600 cursor-pointer rounded"
+                                title="Delete group"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Add Tax Rate Modal */}
+                  {isTaxRateModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+                      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-sm w-full p-5 space-y-4">
+                        <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                          <h4 className="text-sm font-bold text-slate-900">Add New Tax Rate</h4>
+                          <button
+                            type="button"
+                            onClick={() => setIsTaxRateModalOpen(false)}
+                            className="text-slate-400 hover:text-slate-600"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <div className="space-y-3">
+                          <div>
+                            <label className="text-xs font-medium text-slate-500 block mb-1">Tax Rate Name</label>
+                            <input
+                              type="text"
+                              placeholder="e.g. IGST@18%"
+                              value={newTaxRateName}
+                              onChange={(e) => setNewTaxRateName(e.target.value)}
+                              className="w-full h-10 px-3 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 outline-none focus:border-[#4309A2]"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs font-medium text-slate-500 block mb-1">Rate (%)</label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              placeholder="e.g. 18"
+                              value={newTaxRateValue}
+                              onChange={(e) => setNewTaxRateValue(e.target.value)}
+                              className="w-full h-10 px-3 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 outline-none focus:border-[#4309A2]"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                          <button
+                            type="button"
+                            onClick={() => setIsTaxRateModalOpen(false)}
+                            className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!newTaxRateName.trim()) return;
+                              setTaxRates((prev) => [
+                                ...prev,
+                                {
+                                  id: `tr-${Date.now()}`,
+                                  name: newTaxRateName.trim(),
+                                  rate: Number(newTaxRateValue) || 0,
+                                },
+                              ]);
+                              setIsTaxRateModalOpen(false);
+                            }}
+                            className="px-4 py-1.5 rounded-lg bg-[#33077C] text-white text-xs font-bold hover:bg-[#432eb5]"
+                          >
+                            Add Rate
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Add Tax Group Modal */}
+                  {isTaxGroupModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+                      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-sm w-full p-5 space-y-4">
+                        <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                          <h4 className="text-sm font-bold text-slate-900">Add New Tax Group</h4>
+                          <button
+                            type="button"
+                            onClick={() => setIsTaxGroupModalOpen(false)}
+                            className="text-slate-400 hover:text-slate-600"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <div className="space-y-3">
+                          <div>
+                            <label className="text-xs font-medium text-slate-500 block mb-1">Group Name</label>
+                            <input
+                              type="text"
+                              placeholder="e.g. GST@18%"
+                              value={newTaxGroupName}
+                              onChange={(e) => setNewTaxGroupName(e.target.value)}
+                              className="w-full h-10 px-3 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 outline-none focus:border-[#4309A2]"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs font-medium text-slate-500 block mb-1">Sub-Taxes Included</label>
+                            <input
+                              type="text"
+                              placeholder="e.g. SGST@9%  CGST@9%"
+                              value={newTaxGroupSubTaxes}
+                              onChange={(e) => setNewTaxGroupSubTaxes(e.target.value)}
+                              className="w-full h-10 px-3 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 outline-none focus:border-[#4309A2]"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                          <button
+                            type="button"
+                            onClick={() => setIsTaxGroupModalOpen(false)}
+                            className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!newTaxGroupName.trim()) return;
+                              setTaxGroups((prev) => [
+                                ...prev,
+                                {
+                                  id: `tg-${Date.now()}`,
+                                  name: newTaxGroupName.trim(),
+                                  subTaxes: newTaxGroupSubTaxes.trim() || 'Custom Grouping',
+                                },
+                              ]);
+                              setIsTaxGroupModalOpen(false);
+                            }}
+                            className="px-4 py-1.5 rounded-lg bg-[#33077C] text-white text-xs font-bold hover:bg-[#432eb5]"
+                          >
+                            Add Group
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 5.6 TRANSACTION MESSAGE TAB */}
+              {superAdminTab === 'transaction_message' && (
+                <div className="space-y-6">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                        <MessageSquare className="w-5 h-5 text-[#33077C]" />
+                        Transaction Message
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Configure automated WhatsApp and SMS delivery for sales, purchases, payment receipts, and orders.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* 2-Column Split: Left = Settings & Controls, Right = Live Chat Message Preview */}
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                    {/* Left Column (Width: 7/12) */}
+                    <div className="lg:col-span-7 space-y-6">
+                      {/* Section: Select Message Type Channel */}
+                      <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-3.5">
+                        <label className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider block">
+                          Select Message Type:
+                        </label>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setMessageChannel('vyapar')}
+                            className={`h-11 px-4 rounded-xl border text-xs sm:text-[13px] font-semibold transition-all cursor-pointer flex items-center gap-2.5 ${
+                              messageChannel === 'vyapar'
+                                ? 'border-[#33077C] bg-[#33077C]/5 text-[#33077C] ring-2 ring-[#33077C]/20 font-bold'
+                                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                            }`}
+                          >
+                            <span className="w-3.5 h-3.5 rounded-full bg-rose-500 flex items-center justify-center text-white text-[9px] font-bold">
+                              ▼
+                            </span>
+                            <span>Send via System Server</span>
+                            {messageChannel === 'vyapar' && (
+                              <span className="w-4 h-4 rounded-full bg-[#33077C] text-white flex items-center justify-center text-[10px] ml-1">
+                                ✓
+                              </span>
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setMessageChannel('whatsapp')}
+                            className={`h-11 px-4 rounded-xl border text-xs sm:text-[13px] font-semibold transition-all cursor-pointer flex items-center gap-2.5 ${
+                              messageChannel === 'whatsapp'
+                                ? 'border-emerald-600 bg-emerald-50 text-emerald-800 ring-2 ring-emerald-600/20 font-bold'
+                                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                            }`}
+                          >
+                            <MessageSquare className="w-4 h-4 text-emerald-600" />
+                            <span>Send via Personal WhatsApp</span>
+                            <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200 ml-1">
+                              Login
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Section: Message Recipient Settings */}
+                      <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
+                        <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider">
+                          Message Recipient Settings:
+                        </h4>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                          <label className="flex items-center gap-3 cursor-pointer py-0.5">
+                            <input
+                              type="checkbox"
+                              checked={sendMsgToParty}
+                              onChange={(e) => setSendMsgToParty(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5">
+                              Send Message to Party
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </label>
+
+                          <label className="flex items-center gap-3 cursor-pointer py-0.5">
+                            <input
+                              type="checkbox"
+                              checked={sendTxnUpdateMsg}
+                              onChange={(e) => setSendTxnUpdateMsg(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5">
+                              Send Transaction Update Message
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </label>
+
+                          <label className="flex items-center gap-3 cursor-pointer py-0.5">
+                            <input
+                              type="checkbox"
+                              checked={sendMsgCopyToSelf}
+                              onChange={(e) => setSendMsgCopyToSelf(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5">
+                              Send Message Copy to Self
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </label>
+
+                          <label className="flex items-center gap-3 cursor-pointer py-0.5">
+                            <input
+                              type="checkbox"
+                              checked={autoShareVyaparNetwork}
+                              onChange={(e) => setAutoShareVyaparNetwork(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5">
+                              Auto Share Invoices on Network
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </label>
+                        </div>
+
+                        <div className="flex items-center gap-3 pt-2 border-t border-slate-100 text-xs">
+                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200 font-bold">
+                            ★ 100 CREDITS &gt;
+                          </span>
+                          <span className="text-slate-400 flex items-center gap-1.5">
+                            Last synced: now
+                            <RotateCcw className="w-3 h-3 text-slate-400 cursor-pointer hover:text-slate-700" />
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Section: Message Content */}
+                      <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
+                        <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider">
+                          Message Content:
+                        </h4>
+
+                        <div className="space-y-3">
+                          <label className="flex items-center gap-3 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={partyBalanceInMsg}
+                              onChange={(e) => setPartyBalanceInMsg(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5">
+                              Party Current Balance in Message
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </label>
+
+                          <label className="flex items-center gap-3 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={webInvoiceLinkInMsg}
+                              onChange={(e) => setWebInvoiceLinkInMsg(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5">
+                              Web invoice link in Message
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </label>
+
+                          <label className="flex items-center gap-3 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={paymentLinkInMsg}
+                              onChange={(e) => setPaymentLinkInMsg(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5">
+                              Send payment link in Message
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </label>
+                        </div>
+                      </div>
+
+                      {/* Section: Send Automatic Message for: */}
+                      <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
+                        <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider">
+                          Send Automatic Message for:
+                        </h4>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5">
+                          {[
+                            'Sales',
+                            'Purchase',
+                            'Sales Return',
+                            'Purchase Return',
+                            'Payment In',
+                            'Payment Out',
+                            'Sale Order',
+                            'Purchase Order',
+                            'Estimate',
+                            'Proforma Invoice',
+                            'Delivery Challan',
+                            'Cancelled Invoice',
+                          ].map((tName) => (
+                            <label key={tName} className="flex items-center gap-3 cursor-pointer py-1">
+                              <input
+                                type="checkbox"
+                                checked={!!autoMsgTypes[tName]}
+                                onChange={(e) =>
+                                  setAutoMsgTypes((prev) => ({ ...prev, [tName]: e.target.checked }))
+                                }
+                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                              />
+                              <span className="text-xs sm:text-[13px] font-medium text-slate-700">
+                                {tName}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right Column: Live Message Preview (Width: 5/12) */}
+                    <div className="lg:col-span-5 sticky top-4 space-y-4">
+                      {/* Top Type Selector */}
+                      <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-xs flex items-center justify-between gap-3">
+                        <span className="text-xs sm:text-[13px] font-bold text-slate-700">
+                          Transaction Type:
+                        </span>
+                        <div className="w-48">
+                          <CustomSelect
+                            value={previewTxnType}
+                            onChange={(val) => setPreviewTxnType(val)}
+                            options={[
+                              { label: 'Sales', value: 'Sales' },
+                              { label: 'Purchase', value: 'Purchase' },
+                              { label: 'Sales Return', value: 'Sales Return' },
+                              { label: 'Purchase Return', value: 'Purchase Return' },
+                              { label: 'Payment In', value: 'Payment In' },
+                              { label: 'Payment Out', value: 'Payment Out' },
+                              { label: 'Sale Order', value: 'Sale Order' },
+                              { label: 'Purchase Order', value: 'Purchase Order' },
+                              { label: 'Estimate', value: 'Estimate' },
+                              { label: 'Proforma Invoice', value: 'Proforma Invoice' },
+                              { label: 'Delivery Challan', value: 'Delivery Challan' },
+                              { label: 'Cancelled Invoice', value: 'Cancelled Invoice' },
+                            ]}
+                            placeholder="Select Transaction"
+                            optionVariant="strong"
+                            activeColor="brand"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Mockup WhatsApp Bubble Preview matching reference image */}
+                      <div className="bg-slate-100/70 border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-3">
+                        <div className="text-xs font-bold text-slate-500 uppercase tracking-wider text-center pb-1">
+                          Message Preview ({previewTxnType})
+                        </div>
+
+                        {/* WhatsApp Chat Bubble */}
+                        <div className="bg-[#E7F8E8] border border-emerald-200 rounded-2xl p-4 text-slate-800 text-xs sm:text-[12.5px] leading-relaxed shadow-xs space-y-2">
+                          <div className="flex items-center gap-1.5 text-emerald-800 font-bold border-b border-emerald-200/70 pb-1.5">
+                            <span className="w-2 h-2 rounded-full bg-emerald-600" />
+                            <span>Transaction Confirmation</span>
+                          </div>
+
+                          <p className="font-semibold text-slate-900">
+                            Thanks for your purchase with us!
+                          </p>
+                          <div className="space-y-0.5 text-slate-700">
+                            <div><span className="font-semibold text-slate-800">Purchase Details:</span> #{previewTxnType.toUpperCase()}-101</div>
+                            <div><span className="font-semibold text-slate-800">Invoice Amount:</span> ₹792.00</div>
+                            <div><span className="font-semibold text-slate-800">Received:</span> ₹300.00</div>
+                            <div><span className="font-semibold text-slate-800">Balance:</span> ₹492.00</div>
+                            {partyBalanceInMsg && (
+                              <div><span className="font-semibold text-slate-800">Total Party Balance:</span> ₹800.00</div>
+                            )}
+                          </div>
+
+                          {webInvoiceLinkInMsg && (
+                            <div className="pt-2 border-t border-emerald-200/70 text-blue-600 font-medium break-all">
+                              🔗 <span className="underline cursor-pointer">https://inv.yaacreations.com/tx/inv-101</span>
+                            </div>
+                          )}
+
+                          {paymentLinkInMsg && (
+                            <div className="text-emerald-700 font-medium">
+                              💳 <span className="underline cursor-pointer">https://pay.yaacreations.com/inv-101</span>
+                            </div>
+                          )}
+
+                          <div className="text-right text-[10px] text-slate-400 pt-1">
+                            12:45 PM · Delivered ✓✓
+                          </div>
+                        </div>
+
+                        {/* Additional template notice */}
+                        <div className="bg-white border border-slate-200 rounded-xl p-3 text-[11px] text-slate-500">
+                          <span className="font-bold text-slate-700">Notice:</span> Variables such as Invoice Amount, Received, and Balance automatically resolve for each customer at the moment of dispatch.
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 6. TRANSACTION SETTINGS TAB */}
               {superAdminTab === 'invoice_settings' && (
                 <div className="space-y-6">
                   <div>
                     <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                       <Receipt className="w-5 h-5 text-[#33077C]" />
-                      Invoice & Billing Rules
+                      Transaction Settings
                     </h3>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Configure default taxation rates, payment terms, auto-round-off, and customer invoice notices.
+                      Configure transaction header details, item pricing behaviors, taxation, and billing modes.
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs sm:text-[13px] font-medium text-slate-600 mb-1.5">
-                        Default GST / Tax Rate (%)
-                      </label>
-                      <select
-                        value={defaultTaxRate}
-                        onChange={(e) => setDefaultTaxRate(e.target.value)}
-                        className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] transition-all cursor-pointer"
-                      >
-                        <option value="0">0% (Exempt)</option>
-                        <option value="5">5% (Essential items)</option>
-                        <option value="12">12% (Standard goods)</option>
-                        <option value="18">18% (Standard services & IT)</option>
-                        <option value="28">28% (Luxury items)</option>
-                      </select>
+                  {/* 3 Balanced Columns Layout */}
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+                    {/* COLUMN 1: Transaction Header */}
+                    <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-5">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800 pb-3 border-b border-slate-100">
+                        Transaction Header
+                      </h4>
+                      <div className="space-y-4">
+                        <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                          <input
+                            type="checkbox"
+                            checked={invoiceBillNo}
+                            onChange={(e) => setInvoiceBillNo(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                            Invoice/Bill No.
+                          </span>
+                          <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                        </label>
+
+                        <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                          <input
+                            type="checkbox"
+                            checked={addTimeOnTransactions}
+                            onChange={(e) => setAddTimeOnTransactions(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                            Add Time on Transactions
+                          </span>
+                          <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                        </label>
+
+                        <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                          <input
+                            type="checkbox"
+                            checked={cashSaleByDefault}
+                            onChange={(e) => setCashSaleByDefault(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                            Cash Sale by default
+                          </span>
+                          <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                        </label>
+
+                        <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                          <input
+                            type="checkbox"
+                            checked={billingNameOfParties}
+                            onChange={(e) => setBillingNameOfParties(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                            Billing Name of Parties
+                          </span>
+                          <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                        </label>
+
+                        <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                          <input
+                            type="checkbox"
+                            checked={poDetailsOnTransactions}
+                            onChange={(e) => setPoDetailsOnTransactions(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                            Customers P.O. Details on Transactions
+                          </span>
+                          <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                        </label>
+                      </div>
                     </div>
 
-                    <div>
-                      <label className="block text-xs sm:text-[13px] font-medium text-slate-600 mb-1.5">
-                        Default Payment Terms
-                      </label>
-                      <select
-                        value={defaultPaymentTerms}
-                        onChange={(e) => setDefaultPaymentTerms(e.target.value)}
-                        className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] transition-all cursor-pointer"
-                      >
-                        <option value="Immediate">Immediate / Due on Receipt</option>
-                        <option value="Net 7">Net 7 Days</option>
-                        <option value="Net 15">Net 15 Days</option>
-                        <option value="Net 30">Net 30 Days</option>
-                        <option value="Net 45">Net 45 Days</option>
-                        <option value="Net 60">Net 60 Days</option>
-                      </select>
+                    {/* COLUMN 2: Items Table */}
+                    <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-5">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800 pb-3 border-b border-slate-100">
+                        Items Table
+                      </h4>
+                      <div className="space-y-4">
+                        <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                          <input
+                            type="checkbox"
+                            checked={inclusiveExclusiveTaxRate}
+                            onChange={(e) => setInclusiveExclusiveTaxRate(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                            Inclusive/Exclusive Tax on Rate(Price/Unit)
+                          </span>
+                          <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                        </label>
+
+                        <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                          <input
+                            type="checkbox"
+                            checked={displayPurchasePrice}
+                            onChange={(e) => setDisplayPurchasePrice(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                            Display Purchase Price of Items
+                          </span>
+                          <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                        </label>
+
+                        <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                          <input
+                            type="checkbox"
+                            checked={showLast5SalePrice}
+                            onChange={(e) => setShowLast5SalePrice(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                            Show last 5 Sale Price of Items
+                          </span>
+                          <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                        </label>
+
+                        <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                          <input
+                            type="checkbox"
+                            checked={showLast5PurchasePrice}
+                            onChange={(e) => setShowLast5PurchasePrice(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                            Show last 5 Purchase Price of Items
+                          </span>
+                          <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                        </label>
+
+                        <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                          <input
+                            type="checkbox"
+                            checked={freeItemQuantity}
+                            onChange={(e) => setFreeItemQuantity(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                            Free Item Quantity
+                          </span>
+                          <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                        </label>
+
+                        <div className="pt-0.5">
+                          <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                            <input
+                              type="checkbox"
+                              checked={enableItemCount}
+                              onChange={(e) => setEnableItemCount(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                              Count
+                            </span>
+                            <button
+                              type="button"
+                              className="text-xs font-semibold text-[#33077C] hover:underline cursor-pointer ml-1"
+                            >
+                              Change Text
+                            </button>
+                            <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                          </label>
+                        </div>
+                      </div>
                     </div>
 
-                    <div>
-                      <label className="block text-xs sm:text-[13px] font-medium text-slate-600 mb-1.5">
-                        Default Due Period (Days)
-                      </label>
-                      <input
-                        type="number"
-                        min={0}
-                        value={invoiceDuePeriodDays}
-                        onChange={(e) => setInvoiceDuePeriodDays(Number(e.target.value))}
-                        className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] transition-all"
-                      />
-                    </div>
+                    {/* COLUMN 3: Taxes, Discount & Totals & Billing Type */}
+                    <div className="space-y-6">
+                      {/* Section: Taxes, Discount & Totals */}
+                      <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-5">
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800 pb-3 border-b border-slate-100">
+                          Taxes, Discount & Totals
+                        </h4>
+                        <div className="space-y-4">
+                          <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                            <input
+                              type="checkbox"
+                              checked={transactionWiseTax}
+                              onChange={(e) => setTransactionWiseTax(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                              Transaction wise Tax
+                            </span>
+                            <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                          </label>
 
-                    <div>
-                      <label className="block text-xs sm:text-[13px] font-medium text-slate-600 mb-1.5">
-                        Authorized Signatory Designation
-                      </label>
-                      <input
-                        type="text"
-                        value={signatureName}
-                        onChange={(e) => setSignatureName(e.target.value)}
-                        placeholder="e.g. Authorized Signatory"
-                        className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] transition-all"
-                      />
-                    </div>
+                          <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                            <input
+                              type="checkbox"
+                              checked={transactionWiseDiscount}
+                              onChange={(e) => setTransactionWiseDiscount(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                              Transaction wise Discount
+                            </span>
+                            <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                          </label>
 
-                    <div className="md:col-span-2">
-                      <label className="block text-xs sm:text-[13px] font-medium text-slate-600 mb-1.5">
-                        Default Invoice Notes / Message to Customer
-                      </label>
-                      <textarea
-                        rows={2}
-                        value={invoiceNotes}
-                        onChange={(e) => setInvoiceNotes(e.target.value)}
-                        className="w-full p-3 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] transition-all"
-                      />
-                    </div>
+                          <div className="pt-0.5 space-y-3">
+                            <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                              <input
+                                type="checkbox"
+                                checked={roundOffTotal}
+                                onChange={(e) => setRoundOffTotal(e.target.checked)}
+                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                              />
+                              <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                                Round Off Total
+                              </span>
+                              <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                            </label>
 
-                    <div className="md:col-span-2">
-                      <label className="block text-xs sm:text-[13px] font-medium text-slate-600 mb-1.5">
-                        Default Terms & Conditions
-                      </label>
-                      <textarea
-                        rows={3}
-                        value={invoiceTerms}
-                        onChange={(e) => setInvoiceTerms(e.target.value)}
-                        className="w-full p-3 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] transition-all"
-                      />
+                            {roundOffTotal && (
+                              <div className="grid grid-cols-2 gap-3 pl-7 pt-1">
+                                <div>
+                                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">Type</label>
+                                  <CustomSelect
+                                    value={roundOffType}
+                                    onChange={setRoundOffType}
+                                    options={[
+                                      { value: 'Nearest', label: 'Nearest' },
+                                      { value: 'Round Up', label: 'Round Up' },
+                                      { value: 'Round Down', label: 'Round Down' },
+                                    ]}
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">To</label>
+                                  <CustomSelect
+                                    value={roundOffTo}
+                                    onChange={setRoundOffTo}
+                                    options={[
+                                      { value: '1', label: 'To 1' },
+                                      { value: '5', label: 'To 5' },
+                                      { value: '10', label: 'To 10' },
+                                    ]}
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Section: Billing Type */}
+                      <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-4">
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800 pb-3 border-b border-slate-100">
+                          Billing Type
+                        </h4>
+                        <div className="flex items-center gap-6">
+                          <label className="flex items-center gap-2.5 cursor-pointer group">
+                            <input
+                              type="radio"
+                              name="billingType"
+                              value="Lite Sale"
+                              checked={billingType === 'Lite Sale'}
+                              onChange={(e) => setBillingType(e.target.value)}
+                              className="w-4 h-4 text-[#33077C] focus:ring-[#33077C] border-slate-300 cursor-pointer"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                              Lite Sale
+                            </span>
+                          </label>
+
+                          <label className="flex items-center gap-2.5 cursor-pointer group">
+                            <input
+                              type="radio"
+                              name="billingType"
+                              value="Full Sale"
+                              checked={billingType === 'Full Sale'}
+                              onChange={(e) => setBillingType(e.target.value)}
+                              className="w-4 h-4 text-[#33077C] focus:ring-[#33077C] border-slate-300 cursor-pointer"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                              Full Sale
+                            </span>
+                          </label>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  {/* Round Off Toggle */}
-                  <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 flex items-center justify-between gap-4">
-                    <div>
-                      <h4 className="text-xs sm:text-[13px] font-bold text-slate-900">Auto Round-Off Invoice Total</h4>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        Automatically round net payable amounts to the nearest whole integer.
-                      </p>
+                  {/* Section: More Transaction Features (Full Width 2-Column Grid) */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-5">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800 pb-3 border-b border-slate-100">
+                      More Transaction Features
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-4">
+                      <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                        <input
+                          type="checkbox"
+                          checked={ewayBillNo}
+                          onChange={(e) => setEwayBillNo(e.target.checked)}
+                          className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                        />
+                        <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                          E-way bill no
+                        </span>
+                        <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                      </label>
+
+                      <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                        <input
+                          type="checkbox"
+                          checked={quickEntry}
+                          onChange={(e) => setQuickEntry(e.target.checked)}
+                          className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                        />
+                        <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                          Quick Entry
+                        </span>
+                        <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                      </label>
+
+                      <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                        <input
+                          type="checkbox"
+                          checked={doNotShowInvoicePreview}
+                          onChange={(e) => setDoNotShowInvoicePreview(e.target.checked)}
+                          className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                        />
+                        <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                          Do not Show Invoice Preview
+                        </span>
+                        <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                      </label>
+
+                      <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                        <input
+                          type="checkbox"
+                          checked={repeatInvoices}
+                          onChange={(e) => setRepeatInvoices(e.target.checked)}
+                          className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                        />
+                        <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                          Repeat Invoices
+                        </span>
+                        <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                      </label>
+
+                      <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                        <input
+                          type="checkbox"
+                          checked={enablePasscodeForEditDelete}
+                          onChange={(e) => setEnablePasscodeForEditDelete(e.target.checked)}
+                          className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                        />
+                        <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                          Enable Passcode for transaction edit/delete
+                        </span>
+                        <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                      </label>
+
+                      <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                        <input
+                          type="checkbox"
+                          checked={discountDuringPayments}
+                          onChange={(e) => setDiscountDuringPayments(e.target.checked)}
+                          className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                        />
+                        <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                          Discount During Payments
+                        </span>
+                        <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                      </label>
+
+                      <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                        <input
+                          type="checkbox"
+                          checked={linkPaymentsToInvoices}
+                          onChange={(e) => setLinkPaymentsToInvoices(e.target.checked)}
+                          className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                        />
+                        <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                          Link Payments to Invoices
+                        </span>
+                        <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                      </label>
+
+                      <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                        <input
+                          type="checkbox"
+                          checked={dueDatesAndPaymentTerms}
+                          onChange={(e) => setDueDatesAndPaymentTerms(e.target.checked)}
+                          className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                        />
+                        <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                          Due Dates and Payment Terms
+                        </span>
+                        <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                      </label>
+
+                      <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                        <input
+                          type="checkbox"
+                          checked={showProfitWhileMakingSale}
+                          onChange={(e) => setShowProfitWhileMakingSale(e.target.checked)}
+                          className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                        />
+                        <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                          Show Profit while making Sale Invoice
+                        </span>
+                        <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                      </label>
+
+                      <div>
+                        <label className="flex items-center gap-3 cursor-pointer group py-0.5">
+                          <input
+                            type="checkbox"
+                            checked={termsAndConditionsEnabled}
+                            onChange={(e) => setTermsAndConditionsEnabled(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 group-hover:text-slate-900">
+                            Terms and Conditions
+                          </span>
+                          <Info className="w-3.5 h-3.5 text-slate-400 ml-auto" />
+                        </label>
+                        <button
+                          type="button"
+                          className="text-xs font-semibold text-[#33077C] hover:text-[#4309A2] hover:underline pl-7 mt-0.5 cursor-pointer block"
+                        >
+                          Set Terms and Conditions
+                        </button>
+                      </div>
                     </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={roundOffTotal}
-                      onClick={() => setRoundOffTotal(!roundOffTotal)}
-                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${roundOffTotal ? 'bg-[#33077C]' : 'bg-slate-300'
-                        }`}
-                    >
-                      <span
-                        aria-hidden="true"
-                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${roundOffTotal ? 'translate-x-5' : 'translate-x-0'
-                          }`}
-                      />
-                    </button>
+
+                    <div className="pt-3 border-t border-slate-100 flex items-center gap-6">
+                      <button
+                        type="button"
+                        className="text-xs font-semibold text-[#33077C] hover:text-[#4309A2] hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        Additional Fields &gt;
+                      </button>
+                      <button
+                        type="button"
+                        className="text-xs font-semibold text-[#33077C] hover:text-[#4309A2] hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        Transportation Details &gt;
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
 
-              {/* 7. DOCUMENT TEMPLATES TAB */}
+              {/* 7. PRINT / DOCUMENT SETTINGS TAB */}
               {superAdminTab === 'document_templates' && (
                 <div className="space-y-6">
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                      <FileCode className="w-5 h-5 text-[#33077C]" />
-                      Document PDF Templates
-                    </h3>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      Customize the layout, colors, and embedded sections on generated PDF invoices and quotes.
-                    </p>
+                  {/* Top Bar with Tabs and Actions */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-3">
+                    <div className="flex items-center gap-6">
+                      <button
+                        type="button"
+                        onClick={() => setPrinterTab('regular')}
+                        className={`text-xs sm:text-sm font-bold uppercase tracking-wider pb-3 -mb-3 transition-colors cursor-pointer border-b-2 ${
+                          printerTab === 'regular'
+                            ? 'border-[#33077C] text-[#33077C]'
+                            : 'border-transparent text-slate-500 hover:text-slate-800'
+                        }`}
+                      >
+                        Regular Printer
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPrinterTab('thermal')}
+                        className={`text-xs sm:text-sm font-bold uppercase tracking-wider pb-3 -mb-3 transition-colors cursor-pointer border-b-2 ${
+                          printerTab === 'thermal'
+                            ? 'border-[#33077C] text-[#33077C]'
+                            : 'border-transparent text-slate-500 hover:text-slate-800'
+                        }`}
+                      >
+                        Thermal Printer
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setPrintSubTab('layout')}
+                        className={`text-xs font-bold uppercase tracking-wider px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                          printSubTab === 'layout'
+                            ? 'bg-[#33077C]/10 text-[#33077C] border border-[#33077C]/20'
+                            : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                        }`}
+                      >
+                        Change Layout
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPrintSubTab('colors')}
+                        className={`text-xs font-bold uppercase tracking-wider px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                          printSubTab === 'colors'
+                            ? 'bg-[#33077C]/10 text-[#33077C] border border-[#33077C]/20'
+                            : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                        }`}
+                      >
+                        Change Colors
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Layout Cards */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {[
-                      { id: 'modern_minimal', title: 'Modern Clean', desc: 'Clean header, minimalist tables, high legibility' },
-                      { id: 'enterprise_bold', title: 'Enterprise Bold', desc: 'Bold purple banners, comprehensive banking details' },
-                      { id: 'compact_gst', title: 'Compact GST Standard', desc: 'Optimized for high item counts & tax breakdowns' },
-                    ].map((tpl) => {
-                      const isSelected = selectedInvoiceTemplate === tpl.id;
-                      return (
-                        <div
-                          key={tpl.id}
-                          onClick={() => setSelectedInvoiceTemplate(tpl.id)}
-                          className={`p-4 rounded-xl border transition-all cursor-pointer relative ${isSelected
-                            ? 'border-[#33077C] ring-2 ring-[#33077C]/20 bg-purple-50/20'
-                            : 'border-slate-200 hover:border-slate-300 bg-white'
-                            }`}
-                        >
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="font-bold text-xs sm:text-sm text-slate-900">{tpl.title}</span>
-                            {isSelected && (
-                              <span className="w-5 h-5 rounded-full bg-[#33077C] text-white flex items-center justify-center shrink-0">
-                                <Check className="w-3 h-3" />
-                              </span>
-                            )}
+                  {/* Main Two-Column View: Left Form Controls, Right Live Invoice Preview */}
+                  <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+                    {/* Left Settings Column with comfortable spacing */}
+                    <div className="xl:col-span-7 space-y-8 max-h-[85vh] overflow-y-auto pr-2 custom-scrollbar">
+                      {/* Theme / Template Carousel Selection */}
+                      <div className="space-y-3">
+                        <label className="text-xs sm:text-[13px] font-bold text-slate-800 uppercase tracking-wider block">
+                          Select Invoice Theme
+                        </label>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 pt-1">
+                          {[
+                            { id: 'tally_theme', label: 'Tally Theme' },
+                            { id: 'landscape_theme_1', label: 'Landscape Theme 1' },
+                            { id: 'landscape_theme_2', label: 'Landscape Theme 2' },
+                            { id: 'gst_theme_1', label: 'GST Theme 1' },
+                          ].map((tpl) => {
+                            const isSelected = selectedInvoiceTemplate === tpl.id;
+                            return (
+                              <button
+                                key={tpl.id}
+                                type="button"
+                                onClick={() => setSelectedInvoiceTemplate(tpl.id)}
+                                className={`p-3.5 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center justify-between gap-3 ${
+                                  isSelected
+                                    ? 'border-[#33077C] bg-[#33077C]/5 ring-2 ring-[#33077C]/20 shadow-xs'
+                                    : 'border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50/50'
+                                }`}
+                              >
+                                {/* Miniature Document Preview Glyph */}
+                                <div className="w-16 h-12 bg-white border border-slate-200 rounded p-1.5 flex flex-col justify-between shadow-2xs">
+                                  <div className="h-1.5 w-1/2 bg-slate-300 rounded-xs" />
+                                  <div className="space-y-0.5">
+                                    <div className="h-1 w-full bg-slate-200 rounded-xs" />
+                                    <div className="h-1 w-3/4 bg-slate-200 rounded-xs" />
+                                    <div className="h-1 w-full bg-slate-200 rounded-xs" />
+                                  </div>
+                                  <div className="flex justify-between items-center">
+                                    <div className="h-1 w-1/3 bg-slate-300 rounded-xs" />
+                                    <div className="h-1 w-1/4 bg-[#33077C]/60 rounded-xs" />
+                                  </div>
+                                </div>
+                                <span className={`text-xs truncate w-full ${
+                                  isSelected ? 'text-[#33077C] font-bold' : 'text-slate-700 font-medium'
+                                }`}>
+                                  {tpl.label}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Section 1: Print Company Info / Header */}
+                      <div className="space-y-5 pt-6 border-t border-slate-200/80">
+                        <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider">
+                          Print Company Info / Header
+                        </h4>
+
+                        <div className="space-y-4">
+                          <label className="flex items-center gap-3 cursor-pointer py-0.5">
+                            <input
+                              type="checkbox"
+                              checked={makeRegularPrinterDefault}
+                              onChange={(e) => setMakeRegularPrinterDefault(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13.5px] font-medium text-slate-700 flex items-center gap-1.5">
+                              Make Regular Printer Default
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </label>
+
+                          <label className="flex items-center gap-3 cursor-pointer py-0.5">
+                            <input
+                              type="checkbox"
+                              checked={printRepeatHeader}
+                              onChange={(e) => setPrintRepeatHeader(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13.5px] font-medium text-slate-700 flex items-center gap-1.5">
+                              Print repeat header in all pages
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </label>
+
+                          {/* Company Name field */}
+                          <div className="flex items-start gap-3.5 pt-2">
+                            <input
+                              type="checkbox"
+                              checked={!!printCompanyName}
+                              onChange={(e) => setPrintCompanyName(e.target.checked ? 'My Company' : '')}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] shrink-0 mt-8"
+                            />
+                            <div className="flex-1">
+                              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                                Company Name
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="Enter company name"
+                                value={printCompanyName}
+                                onChange={(e) => setPrintCompanyName(e.target.value)}
+                                className="w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all placeholder:text-slate-400"
+                              />
+                            </div>
                           </div>
-                          <p className="text-xs text-slate-500">{tpl.desc}</p>
-                          <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] font-semibold text-[#33077C]">
-                            <span>Active Preview</span>
-                            <ExternalLink className="w-3.5 h-3.5" />
+
+                          {/* Company Logo */}
+                          <div className="flex items-center justify-between py-1.5">
+                            <label className="flex items-center gap-3 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={printCompanyLogo}
+                                onChange={(e) => setPrintCompanyLogo(e.target.checked)}
+                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                              />
+                              <span className="text-xs sm:text-[13.5px] font-medium text-slate-700 flex items-center gap-1.5">
+                                Company Logo
+                                <span className="text-xs text-[#33077C] hover:underline cursor-pointer font-semibold ml-1">(Change)</span>
+                                <Info className="w-3.5 h-3.5 text-slate-400" />
+                              </span>
+                            </label>
+                          </div>
+
+                          {/* Address */}
+                          <div className="flex items-start gap-3.5 pt-1">
+                            <input
+                              type="checkbox"
+                              checked={printAddress}
+                              onChange={(e) => setPrintAddress(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] shrink-0 mt-8"
+                            />
+                            <div className="flex-1">
+                              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                                Address
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="Enter complete address"
+                                value={printAddressValue}
+                                onChange={(e) => setPrintAddressValue(e.target.value)}
+                                className="w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all placeholder:text-slate-400"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Email */}
+                          <div className="flex items-start gap-3.5 pt-1">
+                            <input
+                              type="checkbox"
+                              checked={printEmail}
+                              onChange={(e) => setPrintEmail(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] shrink-0 mt-8"
+                            />
+                            <div className="flex-1">
+                              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                                Email
+                              </label>
+                              <input
+                                type="email"
+                                placeholder="e.g. billing@company.com"
+                                value={printEmailValue}
+                                onChange={(e) => setPrintEmailValue(e.target.value)}
+                                className="w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all placeholder:text-slate-400"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Phone Number */}
+                          <div className="flex items-start gap-3.5 pt-1">
+                            <input
+                              type="checkbox"
+                              checked={printPhone}
+                              onChange={(e) => setPrintPhone(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] shrink-0 mt-8"
+                            />
+                            <div className="flex-1">
+                              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                                Phone Number
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="e.g. 9080185828"
+                                value={printPhoneValue}
+                                onChange={(e) => setPrintPhoneValue(e.target.value)}
+                                className="w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all placeholder:text-slate-400"
+                              />
+                            </div>
+                          </div>
+
+                          {/* GSTIN on Sale */}
+                          <div className="flex items-start gap-3.5 pt-1">
+                            <input
+                              type="checkbox"
+                              checked={printGstin}
+                              onChange={(e) => setPrintGstin(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] shrink-0 mt-8"
+                            />
+                            <div className="flex-1">
+                              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                                GSTIN on Sale
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="e.g. 33AABCA1234F1Z5"
+                                value={printGstinValue}
+                                onChange={(e) => setPrintGstinValue(e.target.value)}
+                                className="w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all placeholder:text-slate-400 uppercase"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Paper Size, Orientation, and Font Sizes */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4 pt-3">
+                            <div>
+                              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                                Paper Size
+                              </label>
+                              <CustomSelect
+                                value={paperSize}
+                                onChange={(val) => setPaperSize(val)}
+                                options={[
+                                  { label: 'A4', value: 'A4' },
+                                  { label: 'A5', value: 'A5' },
+                                  { label: 'Letter', value: 'Letter' },
+                                  { label: '3-inch Thermal', value: '3-inch' },
+                                ]}
+                                placeholder="Select paper size"
+                                optionVariant="strong"
+                                activeColor="brand"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                                Orientation
+                              </label>
+                              <CustomSelect
+                                value={orientation}
+                                onChange={(val) => setOrientation(val)}
+                                options={[
+                                  { label: 'Portrait', value: 'Portrait' },
+                                  { label: 'Landscape', value: 'Landscape' },
+                                ]}
+                                placeholder="Select orientation"
+                                optionVariant="strong"
+                                activeColor="brand"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                                Company Name Text Size
+                              </label>
+                              <CustomSelect
+                                value={companyNameSize}
+                                onChange={(val) => setCompanyNameSize(val)}
+                                options={[
+                                  { label: 'Small', value: 'Small' },
+                                  { label: 'Medium', value: 'Medium' },
+                                  { label: 'Large', value: 'Large' },
+                                  { label: 'Extra Large', value: 'Extra Large' },
+                                ]}
+                                placeholder="Select text size"
+                                optionVariant="strong"
+                                activeColor="brand"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                                Invoice Text Size
+                              </label>
+                              <CustomSelect
+                                value={invoiceTextSize}
+                                onChange={(val) => setInvoiceTextSize(val)}
+                                options={[
+                                  { label: 'Small', value: 'Small' },
+                                  { label: 'Medium', value: 'Medium' },
+                                  { label: 'Large', value: 'Large' },
+                                ]}
+                                placeholder="Select text size"
+                                optionVariant="strong"
+                                activeColor="brand"
+                              />
+                            </div>
+                          </div>
+
+                          <label className="flex items-center gap-3 cursor-pointer pt-2">
+                            <input
+                              type="checkbox"
+                              checked={printOriginalDuplicate}
+                              onChange={(e) => setPrintOriginalDuplicate(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13.5px] font-medium text-slate-700 flex items-center gap-1.5">
+                              Print Original/Duplicate
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </label>
+
+                          <div className="flex items-center justify-between py-2 border-t border-slate-100 mt-2">
+                            <span className="text-xs sm:text-[13.5px] font-medium text-slate-700 flex items-center gap-1.5">
+                              Extra space on Top of PDF
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                value={extraSpaceTopPdf}
+                                onChange={(e) => setExtraSpaceTopPdf(Number(e.target.value))}
+                                className="w-24 h-10 px-3 border border-slate-200 rounded-xl text-xs font-semibold text-center text-slate-800 outline-none focus:border-[#4309A2]"
+                              />
+                            </div>
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
+                      </div>
 
-                  {/* Template Sections Display Controls */}
-                  <div className="bg-slate-50 rounded-xl border border-slate-200 p-4 space-y-3">
-                    <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Visible Elements on PDF</h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-                      <label className="flex items-center gap-2.5 text-xs font-semibold text-slate-700 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={showCompanyLogo}
-                          onChange={(e) => setShowCompanyLogo(e.target.checked)}
-                          className="rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
-                        />
-                        <span>Company Logo</span>
-                      </label>
-                      <label className="flex items-center gap-2.5 text-xs font-semibold text-slate-700 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={showQrCode}
-                          onChange={(e) => setShowQrCode(e.target.checked)}
-                          className="rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
-                        />
-                        <span>UPI / QR Payment Code</span>
-                      </label>
-                      <label className="flex items-center gap-2.5 text-xs font-semibold text-slate-700 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={showBankDetails}
-                          onChange={(e) => setShowBankDetails(e.target.checked)}
-                          className="rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
-                        />
-                        <span>Bank Account Details</span>
-                      </label>
-                      <label className="flex items-center gap-2.5 text-xs font-semibold text-slate-700 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={showTermsConditions}
-                          onChange={(e) => setShowTermsConditions(e.target.checked)}
-                          className="rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
-                        />
-                        <span>Terms & Signatures</span>
-                      </label>
+                      {/* Section 2: Item Table */}
+                      <div className="space-y-5 pt-6 border-t border-slate-200/80">
+                        <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider">
+                          Item Table
+                        </h4>
+
+                        <div className="space-y-4">
+                          <label className="flex items-center gap-3 cursor-pointer py-0.5">
+                            <input
+                              type="checkbox"
+                              checked={expandTableToWholePage}
+                              onChange={(e) => setExpandTableToWholePage(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13.5px] font-medium text-slate-700 flex items-center gap-1.5">
+                              Expand table to print on whole page
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </label>
+
+                          <div className="flex items-center justify-between py-1">
+                            <span className="text-xs sm:text-[13.5px] font-medium text-slate-700 flex items-center gap-1.5">
+                              Min No. of Rows in Item Table
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                            <input
+                              type="number"
+                              min={0}
+                              max={50}
+                              value={minItemRows}
+                              onChange={(e) => setMinItemRows(Number(e.target.value))}
+                              className="w-24 h-10 px-3 border border-slate-200 rounded-xl text-xs font-semibold text-center text-slate-800 outline-none focus:border-[#4309A2]"
+                            />
+                          </div>
+
+                          <button
+                            type="button"
+                            className="text-xs sm:text-[13px] font-semibold text-[#33077C] hover:underline flex items-center gap-1 cursor-pointer pt-1"
+                          >
+                            Item Table Customization &gt;
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Section 3: Totals & Taxes */}
+                      <div className="space-y-5 pt-6 border-t border-slate-200/80">
+                        <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider">
+                          Totals & Taxes
+                        </h4>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                          {[
+                            { label: 'Total Item Quantity', val: totalItemQuantity, set: setTotalItemQuantity },
+                            { label: 'Amount with Decimal e.g. 0.00', val: amountWithDecimal, set: setAmountWithDecimal },
+                            { label: 'Received Amount', val: receivedAmount, set: setReceivedAmount },
+                            { label: 'Balance Amount', val: balanceAmount, set: setBalanceAmount },
+                            { label: 'Current Balance of Party', val: currentBalanceOfParty, set: setCurrentBalanceOfParty },
+                            { label: 'Tax Details', val: taxDetails, set: setTaxDetails },
+                            { label: 'You Saved', val: youSaved, set: setYouSaved },
+                            { label: 'Print Amount with Grouping', val: printAmountWithGrouping, set: setPrintAmountWithGrouping },
+                          ].map((item) => (
+                            <label key={item.label} className="flex items-center gap-3 cursor-pointer py-1">
+                              <input
+                                type="checkbox"
+                                checked={item.val}
+                                onChange={(e) => item.set(e.target.checked)}
+                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                              />
+                              <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5">
+                                {item.label}
+                                <Info className="w-3.5 h-3.5 text-slate-400" />
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+
+                        <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5">
+                            Amount In Words
+                            <Info className="w-3.5 h-3.5 text-slate-400" />
+                          </span>
+                          <div className="w-44">
+                            <CustomSelect
+                              value={amountInWordsFormat}
+                              onChange={(val) => setAmountInWordsFormat(val)}
+                              options={[
+                                { label: 'Indian (Lakhs, Crores)', value: 'Indian' },
+                                { label: 'International (Millions)', value: 'International' },
+                              ]}
+                              placeholder="Select format"
+                              optionVariant="strong"
+                              activeColor="brand"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Section 4: Footer */}
+                      <div className="space-y-5 pt-6 border-t border-slate-200/80">
+                        <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider">
+                          Footer
+                        </h4>
+
+                        <div className="space-y-4">
+                          {[
+                            { label: 'Print Description', val: printDescription, set: setPrintDescription },
+                            { label: 'Print Terms and Conditions', val: printTermsConditions, set: setPrintTermsConditions },
+                            { label: 'Print Received by details', val: printReceivedBy, set: setPrintReceivedBy },
+                            { label: 'Print Delivered by details', val: printDeliveredBy, set: setPrintDeliveredBy },
+                          ].map((item) => (
+                            <label key={item.label} className="flex items-center gap-3 cursor-pointer py-0.5">
+                              <input
+                                type="checkbox"
+                                checked={item.val}
+                                onChange={(e) => item.set(e.target.checked)}
+                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                              />
+                              <span className="text-xs sm:text-[13.5px] font-medium text-slate-700 flex items-center gap-1.5">
+                                {item.label}
+                                <Info className="w-3.5 h-3.5 text-slate-400" />
+                              </span>
+                            </label>
+                          ))}
+
+                          {/* Print Signature Text */}
+                          <div className="flex items-start gap-3.5 pt-2">
+                            <input
+                              type="checkbox"
+                              checked={printSignature}
+                              onChange={(e) => setPrintSignature(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] shrink-0 mt-8"
+                            />
+                            <div className="flex-1">
+                              <div className="flex items-center justify-between mb-1.5">
+                                <label className="text-xs sm:text-[13px] font-medium text-slate-500">
+                                  Print Signature Text
+                                </label>
+                                <button
+                                  type="button"
+                                  className="text-xs font-semibold text-[#33077C] hover:underline"
+                                >
+                                  Change Signature
+                                </button>
+                              </div>
+                              <input
+                                type="text"
+                                placeholder="e.g. Authorized Signatory"
+                                value={signatureText}
+                                onChange={(e) => setSignatureText(e.target.value)}
+                                className="w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all placeholder:text-slate-400"
+                              />
+                            </div>
+                          </div>
+
+                          <label className="flex items-center gap-3 cursor-pointer py-1">
+                            <input
+                              type="checkbox"
+                              checked={printPaymentMode}
+                              onChange={(e) => setPrintPaymentMode(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13.5px] font-medium text-slate-700 flex items-center gap-1.5">
+                              Payment Mode
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </label>
+
+                          <label className="flex items-center gap-3 cursor-pointer py-1">
+                            <input
+                              type="checkbox"
+                              checked={printAcknowledgement}
+                              onChange={(e) => setPrintAcknowledgement(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13.5px] font-medium text-slate-700 flex items-center gap-1.5">
+                              Print Acknowledgement
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right Live Document Preview Column (Dynamic to selected theme) */}
+                    <div className="xl:col-span-5 sticky top-4">
+                      {/* Tally Theme Layout */}
+                      {selectedInvoiceTemplate === 'tally_theme' && (
+                        <div className="bg-white border-2 border-slate-400 rounded-none shadow-md p-4 text-[10.5px] text-slate-800 space-y-2.5 font-mono max-h-[85vh] overflow-y-auto">
+                          <div className="text-center font-bold text-xs uppercase tracking-widest border-b-2 border-slate-700 pb-1">
+                            TAX INVOICE (TALLY FORMAT)
+                          </div>
+                          <div className="border border-slate-400 p-2 flex justify-between items-start">
+                            <div>
+                              <div className="font-bold text-sm text-slate-900">{printCompanyName || 'My Company'}</div>
+                              {printAddress && printAddressValue && <div className="text-slate-600">{printAddressValue}</div>}
+                              {printPhone && <div className="text-slate-600">Contact: {printPhoneValue}</div>}
+                              {printGstin && printGstinValue && <div className="text-slate-600 font-bold">GSTIN/UIN: {printGstinValue}</div>}
+                            </div>
+                            <div className="text-right text-[10px]">
+                              <div>Invoice No: <span className="font-bold">INV-101</span></div>
+                              <div>Dated: <span className="font-bold">24-Nov-2026</span></div>
+                              <div>Mode of Pay: <span className="font-bold">Credit - 30 Days</span></div>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 border border-slate-400 divide-x divide-slate-400 p-2">
+                            <div>
+                              <span className="font-bold underline block mb-1">Buyer (Bill to):</span>
+                              <div className="font-bold">Classic Enterprises</div>
+                              <div>Plot No. 1, Koramangala, Bangalore</div>
+                              <div>GSTIN/UIN: 29AABCA1234F1Z5</div>
+                            </div>
+                            <div className="pl-2">
+                              <span className="font-bold underline block mb-1">Consignee (Ship to):</span>
+                              <div className="font-bold">Mahita Textiles</div>
+                              <div>Marathahalli Road, Bangalore</div>
+                              <div>State Name: Karnataka, Code: 29</div>
+                            </div>
+                          </div>
+
+                          <table className="w-full text-left text-[10px] border border-slate-400 border-collapse">
+                            <thead>
+                              <tr className="bg-slate-200 border-b border-slate-400 font-bold">
+                                <th className="p-1 border-r border-slate-400 w-6 text-center">Sl</th>
+                                <th className="p-1 border-r border-slate-400">Description of Goods</th>
+                                <th className="p-1 border-r border-slate-400 text-center">HSN/SAC</th>
+                                <th className="p-1 border-r border-slate-400 text-center">Quantity</th>
+                                <th className="p-1 border-r border-slate-400 text-right">Rate</th>
+                                <th className="p-1 text-right">Amount</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-300">
+                              <tr>
+                                <td className="p-1 border-r border-slate-400 text-center">1</td>
+                                <td className="p-1 border-r border-slate-400 font-bold">Cotton Fabric A-Grade</td>
+                                <td className="p-1 border-r border-slate-400 text-center">5208</td>
+                                <td className="p-1 border-r border-slate-400 text-center">10 m</td>
+                                <td className="p-1 border-r border-slate-400 text-right">50.00</td>
+                                <td className="p-1 text-right font-bold">500.00</td>
+                              </tr>
+                              <tr>
+                                <td className="p-1 border-r border-slate-400 text-center">2</td>
+                                <td className="p-1 border-r border-slate-400 font-bold">Silk Embroidery Thread</td>
+                                <td className="p-1 border-r border-slate-400 text-center">5004</td>
+                                <td className="p-1 border-r border-slate-400 text-center">5 rolls</td>
+                                <td className="p-1 border-r border-slate-400 text-right">80.00</td>
+                                <td className="p-1 text-right font-bold">400.00</td>
+                              </tr>
+                              <tr className="bg-slate-50 font-bold border-t border-slate-400">
+                                <td colSpan={3} className="p-1 border-r border-slate-400 text-right">OUTPUT CGST @ 2.5%</td>
+                                <td colSpan={2} className="p-1 border-r border-slate-400"></td>
+                                <td className="p-1 text-right">22.50</td>
+                              </tr>
+                              <tr className="bg-slate-50 font-bold">
+                                <td colSpan={3} className="p-1 border-r border-slate-400 text-right">OUTPUT SGST @ 2.5%</td>
+                                <td colSpan={2} className="p-1 border-r border-slate-400"></td>
+                                <td className="p-1 text-right">22.50</td>
+                              </tr>
+                            </tbody>
+                            <tfoot>
+                              <tr className="bg-slate-200 border-t-2 border-slate-600 font-bold text-[11px]">
+                                <td colSpan={3} className="p-1 border-r border-slate-400 text-right">Total:</td>
+                                <td className="p-1 border-r border-slate-400 text-center">15 pcs</td>
+                                <td className="p-1 border-r border-slate-400"></td>
+                                <td className="p-1 text-right">₹945.00</td>
+                              </tr>
+                            </tfoot>
+                          </table>
+
+                          <div className="border border-slate-400 p-1.5 text-[10px]">
+                            <span className="font-bold">Amount Chargeable (in words): </span>
+                            INR Nine Hundred Forty Five Only
+                          </div>
+
+                          <div className="grid grid-cols-2 border border-slate-400 p-2 text-[10px]">
+                            <div>
+                              <span className="font-bold underline block">Declaration:</span>
+                              We declare that this invoice shows the actual price of the goods described.
+                            </div>
+                            <div className="text-right flex flex-col justify-between items-end">
+                              <span className="font-bold">for {printCompanyName || 'My Company'}</span>
+                              <div className="pt-6 font-bold">{signatureText || 'Authorised Signatory'}</div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Landscape Theme 1 Layout */}
+                      {selectedInvoiceTemplate === 'landscape_theme_1' && (
+                        <div className="bg-white border-2 border-blue-200 rounded-lg shadow-md p-4 text-[10.5px] text-slate-800 space-y-3 font-sans max-h-[85vh] overflow-y-auto">
+                          {/* Banner Header with primary accent styling */}
+                          <div className="bg-gradient-to-r from-blue-700 to-indigo-800 text-white p-3 rounded-md flex justify-between items-center shadow-xs">
+                            <div className="flex items-center gap-2.5">
+                              {printCompanyLogo && (
+                                <div className="w-10 h-10 bg-white/20 border border-white/30 rounded flex items-center justify-center text-xs font-bold text-white">
+                                  Logo
+                                </div>
+                              )}
+                              <div>
+                                <h3 className="font-bold text-base text-white">{printCompanyName || 'My Company'}</h3>
+                                {printPhone && <p className="text-[10px] text-blue-100">Tel: {printPhoneValue}</p>}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-xs font-bold uppercase tracking-wider bg-white/20 px-2.5 py-1 rounded">
+                                Landscape Invoice
+                              </span>
+                              <div className="text-[10px] text-blue-100 mt-1">#INV-101 | 24-11-2026</div>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-3 p-2 bg-blue-50/50 border border-blue-100 rounded-md">
+                            <div>
+                              <span className="font-bold text-blue-900 block text-xs mb-0.5">Invoiced To:</span>
+                              <div className="font-semibold text-slate-800">Classic Enterprises</div>
+                              <div className="text-slate-500">Plot 1, Koramangala, Bangalore</div>
+                              <div className="text-slate-500">GSTIN: 29AABCA1234F1Z5</div>
+                            </div>
+                            <div>
+                              <span className="font-bold text-blue-900 block text-xs mb-0.5">Dispatched To:</span>
+                              <div className="font-semibold text-slate-800">Mahita Textiles</div>
+                              <div className="text-slate-500">Marathahalli, Bangalore, 560037</div>
+                              <div className="text-slate-500">Due: 15-12-2026 (Net 30)</div>
+                            </div>
+                          </div>
+
+                          <table className="w-full text-left text-[10px] border border-blue-200 rounded-md overflow-hidden">
+                            <thead className="bg-blue-600 text-white font-bold">
+                              <tr>
+                                <th className="p-1.5 w-6 text-center">#</th>
+                                <th className="p-1.5">Item & Description</th>
+                                <th className="p-1.5 text-center">Qty</th>
+                                <th className="p-1.5 text-right">Unit Rate</th>
+                                <th className="p-1.5 text-right">GST</th>
+                                <th className="p-1.5 text-right">Total</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-blue-100">
+                              <tr className="hover:bg-blue-50/30">
+                                <td className="p-1.5 text-center">1</td>
+                                <td className="p-1.5 font-medium">Cotton Fabric A-Grade (HSN 5208)</td>
+                                <td className="p-1.5 text-center">10 m</td>
+                                <td className="p-1.5 text-right">50.00</td>
+                                <td className="p-1.5 text-right">5% (25.00)</td>
+                                <td className="p-1.5 text-right font-semibold">525.00</td>
+                              </tr>
+                              <tr className="hover:bg-blue-50/30">
+                                <td className="p-1.5 text-center">2</td>
+                                <td className="p-1.5 font-medium">Silk Embroidery Thread (HSN 5004)</td>
+                                <td className="p-1.5 text-center">5 rolls</td>
+                                <td className="p-1.5 text-right">80.00</td>
+                                <td className="p-1.5 text-right">12% (45.60)</td>
+                                <td className="p-1.5 text-right font-semibold">425.60</td>
+                              </tr>
+                            </tbody>
+                            <tfoot className="bg-blue-50 font-bold border-t border-blue-200">
+                              <tr>
+                                <td colSpan={2} className="p-1.5 text-right">Grand Total:</td>
+                                <td className="p-1.5 text-center">15</td>
+                                <td colSpan={2} className="p-1.5 text-right">Taxes: ₹70.60</td>
+                                <td className="p-1.5 text-right font-bold text-blue-900 text-xs">₹950.60</td>
+                              </tr>
+                            </tfoot>
+                          </table>
+
+                          <div className="flex justify-between items-end pt-2 border-t border-slate-200">
+                            <div className="text-[10px] text-slate-500">
+                              <span className="font-bold text-slate-700">Bank:</span> HDFC Bank | A/C: 123456789012
+                            </div>
+                            <div className="text-right">
+                              <div className="text-[10px] text-slate-500">Authorized Signature</div>
+                              <div className="font-bold text-slate-800 mt-1">{signatureText || 'Authorized Signatory'}</div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Landscape Theme 2 Layout (Original default layout with purple corporate styling) */}
+                      {selectedInvoiceTemplate === 'landscape_theme_2' && (
+                        <div className="bg-white border-2 border-purple-200 rounded-sm shadow-md p-4 text-[11px] text-slate-800 space-y-3 font-sans max-h-[85vh] overflow-y-auto">
+                          {/* Tax Invoice Header */}
+                          <div className="text-center font-bold text-xs uppercase tracking-wide border-b-2 border-[#33077C] pb-1 text-[#33077C]">
+                            Tax Invoice
+                          </div>
+
+                          {/* Company Header Block */}
+                          <div className="flex items-start justify-between border-b border-slate-300 pb-2">
+                            <div className="flex items-center gap-2.5">
+                              {printCompanyLogo && (
+                                <div className="w-12 h-12 bg-purple-50 border border-purple-200 flex items-center justify-center text-[10px] text-[#33077C] font-bold rounded">
+                                  Logo
+                                </div>
+                              )}
+                              <div>
+                                <h4 className="font-bold text-sm text-slate-900 leading-tight">
+                                  {printCompanyName || 'My Company'}
+                                </h4>
+                                {printPhone && (
+                                  <p className="text-[11px] text-slate-600 mt-0.5">Phone: {printPhoneValue}</p>
+                                )}
+                                {printEmail && printEmailValue && (
+                                  <p className="text-[11px] text-slate-600">Email: {printEmailValue}</p>
+                                )}
+                                {printAddress && printAddressValue && (
+                                  <p className="text-[11px] text-slate-600">{printAddressValue}</p>
+                                )}
+                                {printGstin && printGstinValue && (
+                                  <p className="text-[11px] text-slate-600">GSTIN: {printGstinValue}</p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="text-right text-[10.5px] space-y-0.5 text-slate-600">
+                              <div><span className="font-semibold text-slate-800">Invoice No:</span> INV-101</div>
+                              <div><span className="font-semibold text-slate-800">Date:</span> 24-11-2026</div>
+                              <div><span className="font-semibold text-slate-800">Time:</span> 12:30 PM</div>
+                              <div><span className="font-semibold text-slate-800">Due Date:</span> 15-12-2026</div>
+                            </div>
+                          </div>
+
+                          {/* Bill To & Ship To */}
+                          <div className="grid grid-cols-2 gap-2 border-b border-slate-300 pb-2 text-[10.5px]">
+                            <div className="pr-1 border-r border-slate-200">
+                              <span className="font-bold text-[#33077C] block mb-0.5">Bill To:</span>
+                              <div className="font-semibold text-slate-800">Classic Enterprises</div>
+                              <div className="text-slate-500">Plot No. 1, Shop No. 4, Koramangala</div>
+                              <div className="text-slate-500">Bangalore, Karnataka, 560034</div>
+                              <div className="text-slate-500">Contact: 9876543210</div>
+                            </div>
+                            <div className="pl-1">
+                              <span className="font-bold text-[#33077C] block mb-0.5">Ship To:</span>
+                              <div className="font-semibold text-slate-800">Mahita Textiles</div>
+                              <div className="text-slate-500">Marathahalli Road, Bangalore</div>
+                              <div className="text-slate-500">Karnataka, 560037</div>
+                            </div>
+                          </div>
+
+                          {/* Item Table Grid */}
+                          <div className="border border-purple-200 rounded-xs overflow-hidden">
+                            <table className="w-full text-left text-[10px] border-collapse">
+                              <thead>
+                                <tr className="bg-[#33077C]/10 border-b border-purple-200 font-bold text-[#33077C]">
+                                  <th className="p-1 border-r border-purple-200 w-6 text-center">#</th>
+                                  <th className="p-1 border-r border-purple-200">Item Name</th>
+                                  <th className="p-1 border-r border-purple-200 text-center">HSN</th>
+                                  <th className="p-1 border-r border-purple-200 text-center">Qty</th>
+                                  <th className="p-1 border-r border-purple-200 text-right">Price</th>
+                                  <th className="p-1 border-r border-purple-200 text-right">Discount</th>
+                                  <th className="p-1 border-r border-purple-200 text-right">GST</th>
+                                  <th className="p-1 text-right">Amount</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-purple-100">
+                                <tr>
+                                  <td className="p-1 border-r border-purple-100 text-center">1</td>
+                                  <td className="p-1 border-r border-purple-100 font-medium">Cotton Fabric A-Grade</td>
+                                  <td className="p-1 border-r border-purple-100 text-center font-mono">5208</td>
+                                  <td className="p-1 border-r border-purple-100 text-center">10 m</td>
+                                  <td className="p-1 border-r border-purple-100 text-right">50.00</td>
+                                  <td className="p-1 border-r border-purple-100 text-right">0.00</td>
+                                  <td className="p-1 border-r border-purple-100 text-right">5% (25.00)</td>
+                                  <td className="p-1 text-right font-semibold">525.00</td>
+                                </tr>
+                                <tr>
+                                  <td className="p-1 border-r border-purple-100 text-center">2</td>
+                                  <td className="p-1 border-r border-purple-100 font-medium">Silk Embroidery Thread</td>
+                                  <td className="p-1 border-r border-purple-100 text-center font-mono">5004</td>
+                                  <td className="p-1 border-r border-purple-100 text-center">5 rolls</td>
+                                  <td className="p-1 border-r border-purple-100 text-right">80.00</td>
+                                  <td className="p-1 border-r border-purple-100 text-right">5% (20.00)</td>
+                                  <td className="p-1 border-r border-purple-100 text-right">12% (45.60)</td>
+                                  <td className="p-1 text-right font-semibold">425.60</td>
+                                </tr>
+                              </tbody>
+                              <tfoot>
+                                <tr className="bg-purple-50/50 border-t border-purple-200 font-bold text-slate-800">
+                                  <td colSpan={3} className="p-1 text-right">Total:</td>
+                                  <td className="p-1 text-center">15</td>
+                                  <td colSpan={3} className="p-1 text-right">Taxable: 880.00</td>
+                                  <td className="p-1 text-right font-bold text-[#33077C]">₹950.60</td>
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
+
+                          {/* Taxes Breakdown & Summary */}
+                          <div className="grid grid-cols-2 gap-2 border border-slate-300 rounded-xs p-2 text-[10px]">
+                            <div>
+                              <span className="font-bold text-slate-900 block mb-0.5">Tax Details:</span>
+                              <div className="text-slate-600">CGST (2.5%): ₹12.50</div>
+                              <div className="text-slate-600">SGST (2.5%): ₹12.50</div>
+                              <div className="text-slate-600">IGST (12%): ₹45.60</div>
+                              {youSaved && (
+                                <div className="text-emerald-700 font-semibold mt-1">You Saved: ₹20.00</div>
+                              )}
+                            </div>
+                            <div className="text-right space-y-0.5">
+                              <div><span className="text-slate-600">Sub Total:</span> ₹880.00</div>
+                              <div><span className="text-slate-600">Total Tax:</span> ₹70.60</div>
+                              <div className="font-bold text-[#33077C] text-xs border-t border-purple-200 pt-0.5">
+                                Invoice Total: ₹950.60
+                              </div>
+                              {receivedAmount && (
+                                <div className="text-emerald-600 font-medium">Received: ₹500.00</div>
+                              )}
+                              {balanceAmount && (
+                                <div className="text-rose-600 font-medium">Balance: ₹450.60</div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Amount in Words */}
+                          <div className="border border-purple-100 bg-purple-50/30 p-1.5 text-[10px] text-slate-700">
+                            <span className="font-bold text-[#33077C]">Invoice Amount In Words:</span> Nine Hundred Fifty Rupees and Sixty Paise only
+                          </div>
+
+                          {/* Footer & Signature */}
+                          <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-300 text-[10px]">
+                            <div>
+                              {printTermsConditions && (
+                                <div className="mb-1">
+                                  <span className="font-bold block">Terms & Conditions:</span>
+                                  <span className="text-slate-500">1. Goods once sold will not be taken back.</span>
+                                </div>
+                              )}
+                              {printDescription && (
+                                <div>
+                                  <span className="font-bold block">Bank Details:</span>
+                                  <span className="text-slate-500 block">Bank Name: HDFC Bank</span>
+                                  <span className="text-slate-500 block">A/C: 123456789012</span>
+                                  <span className="text-slate-500 block">IFSC: HDFC0001234</span>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="text-right flex flex-col justify-between items-end">
+                              <span className="font-bold text-[#33077C]">For: {printCompanyName || 'My Company'}</span>
+                              <div className="pt-6 border-t border-slate-300 w-32 text-center text-slate-500">
+                                {signatureText || 'Authorized Signatory'}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* GST Theme 1 Layout (Clean government GST compliant table matching user uploaded image) */}
+                      {selectedInvoiceTemplate === 'gst_theme_1' && (
+                        <div className="bg-white border-2 border-slate-300 rounded-sm shadow-md p-4 text-[11px] text-slate-800 space-y-3 font-sans max-h-[85vh] overflow-y-auto">
+                          {/* Centered GST Tax Invoice Title */}
+                          <div className="text-center font-bold text-xs uppercase tracking-wide border-b border-slate-300 pb-1 text-slate-900">
+                            TAX INVOICE
+                          </div>
+
+                          {/* Company Header Block */}
+                          <div className="flex items-start justify-between border-b border-slate-300 pb-2">
+                            <div className="flex items-center gap-2.5">
+                              {printCompanyLogo && (
+                                <div className="w-12 h-12 bg-slate-100 border border-slate-300 flex items-center justify-center text-[10px] text-slate-400 font-semibold">
+                                  Logo
+                                </div>
+                              )}
+                              <div>
+                                <h4 className="font-bold text-sm text-slate-900 leading-tight">
+                                  {printCompanyName || 'My Company'}
+                                </h4>
+                                {printPhone && (
+                                  <p className="text-[11px] text-slate-600 mt-0.5">Phone: {printPhoneValue}</p>
+                                )}
+                                {printEmail && printEmailValue && (
+                                  <p className="text-[11px] text-slate-600">Email: {printEmailValue}</p>
+                                )}
+                                {printAddress && printAddressValue && (
+                                  <p className="text-[11px] text-slate-600">{printAddressValue}</p>
+                                )}
+                                {printGstin && printGstinValue && (
+                                  <p className="text-[11px] text-slate-600">GSTIN: {printGstinValue}</p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="text-right text-[10.5px] space-y-0.5 text-slate-600">
+                              <div><span className="font-semibold text-slate-800">Invoice No:</span> INV-101</div>
+                              <div><span className="font-semibold text-slate-800">Date:</span> 24-11-2026</div>
+                              <div><span className="font-semibold text-slate-800">Time:</span> 12:30 PM</div>
+                              <div><span className="font-semibold text-slate-800">Due Date:</span> 15-12-2026</div>
+                            </div>
+                          </div>
+
+                          {/* Bill To & Ship To */}
+                          <div className="grid grid-cols-2 gap-2 border-b border-slate-300 pb-2 text-[10.5px]">
+                            <div className="pr-1 border-r border-slate-200">
+                              <span className="font-bold text-slate-900 block mb-0.5">Bill To:</span>
+                              <div className="font-semibold text-slate-800">Classic Enterprises</div>
+                              <div className="text-slate-500">Plot No. 1, Shop No. 4, Koramangala</div>
+                              <div className="text-slate-500">Bangalore, Karnataka, 560034</div>
+                              <div className="text-slate-500">Contact: 9876543210</div>
+                            </div>
+                            <div className="pl-1">
+                              <span className="font-bold text-slate-900 block mb-0.5">Ship To:</span>
+                              <div className="font-semibold text-slate-800">Mahita Textiles</div>
+                              <div className="text-slate-500">Marathahalli Road, Bangalore</div>
+                              <div className="text-slate-500">Karnataka, 560037</div>
+                            </div>
+                          </div>
+
+                          {/* Item Table Grid */}
+                          <div className="border border-slate-300 rounded-xs overflow-hidden">
+                            <table className="w-full text-left text-[10px] border-collapse">
+                              <thead>
+                                <tr className="bg-slate-100/90 border-b border-slate-300 font-bold text-slate-800">
+                                  <th className="p-1 border-r border-slate-200 w-6 text-center">#</th>
+                                  <th className="p-1 border-r border-slate-200">Item Name</th>
+                                  <th className="p-1 border-r border-slate-200 text-center">HSN</th>
+                                  <th className="p-1 border-r border-slate-200 text-center">Qty</th>
+                                  <th className="p-1 border-r border-slate-200 text-right">Price</th>
+                                  <th className="p-1 border-r border-slate-200 text-right">Discount</th>
+                                  <th className="p-1 border-r border-slate-200 text-right">GST</th>
+                                  <th className="p-1 text-right">Amount</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-200">
+                                <tr>
+                                  <td className="p-1 border-r border-slate-200 text-center">1</td>
+                                  <td className="p-1 border-r border-slate-200 font-medium">Cotton Fabric A-Grade</td>
+                                  <td className="p-1 border-r border-slate-200 text-center font-mono">5208</td>
+                                  <td className="p-1 border-r border-slate-200 text-center">10 m</td>
+                                  <td className="p-1 border-r border-slate-200 text-right">50.00</td>
+                                  <td className="p-1 border-r border-slate-200 text-right">0.00</td>
+                                  <td className="p-1 border-r border-slate-200 text-right">5% (25.00)</td>
+                                  <td className="p-1 text-right font-semibold">525.00</td>
+                                </tr>
+                                <tr>
+                                  <td className="p-1 border-r border-slate-200 text-center">2</td>
+                                  <td className="p-1 border-r border-slate-200 font-medium">Silk Embroidery Thread</td>
+                                  <td className="p-1 border-r border-slate-200 text-center font-mono">5004</td>
+                                  <td className="p-1 border-r border-slate-200 text-center">5 rolls</td>
+                                  <td className="p-1 border-r border-slate-200 text-right">80.00</td>
+                                  <td className="p-1 border-r border-slate-200 text-right">5% (20.00)</td>
+                                  <td className="p-1 border-r border-slate-200 text-right">12% (45.60)</td>
+                                  <td className="p-1 text-right font-semibold">425.60</td>
+                                </tr>
+                              </tbody>
+                              <tfoot>
+                                <tr className="bg-slate-50 border-t border-slate-300 font-bold text-slate-800">
+                                  <td colSpan={3} className="p-1 text-right">Total:</td>
+                                  <td className="p-1 text-center">15</td>
+                                  <td colSpan={3} className="p-1 text-right">Taxable: 880.00</td>
+                                  <td className="p-1 text-right font-bold text-slate-900">₹950.60</td>
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
+
+                          {/* Taxes Breakdown & Summary */}
+                          <div className="grid grid-cols-2 gap-2 border border-slate-300 rounded-xs p-2 text-[10px]">
+                            <div>
+                              <span className="font-bold text-slate-900 block mb-0.5">Tax Details:</span>
+                              <div className="text-slate-600">CGST (2.5%): ₹12.50</div>
+                              <div className="text-slate-600">SGST (2.5%): ₹12.50</div>
+                              <div className="text-slate-600">IGST (12%): ₹45.60</div>
+                              {youSaved && (
+                                <div className="text-emerald-700 font-semibold mt-1">You Saved: ₹20.00</div>
+                              )}
+                            </div>
+                            <div className="text-right space-y-0.5">
+                              <div><span className="text-slate-600">Sub Total:</span> ₹880.00</div>
+                              <div><span className="text-slate-600">Total Tax:</span> ₹70.60</div>
+                              <div className="font-bold text-slate-900 text-xs border-t border-slate-200 pt-0.5">
+                                Invoice Total: ₹950.60
+                              </div>
+                              {receivedAmount && (
+                                <div className="text-emerald-600 font-medium">Received: ₹500.00</div>
+                              )}
+                              {balanceAmount && (
+                                <div className="text-rose-600 font-medium">Balance: ₹450.60</div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Amount in Words */}
+                          <div className="border border-slate-200 bg-slate-50 p-1.5 text-[10px] text-slate-700">
+                            <span className="font-bold">Invoice Amount In Words:</span> Nine Hundred Fifty Rupees and Sixty Paise only
+                          </div>
+
+                          {/* Footer & Signature */}
+                          <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-300 text-[10px]">
+                            <div>
+                              {printTermsConditions && (
+                                <div className="mb-1">
+                                  <span className="font-bold block">Terms & Conditions:</span>
+                                  <span className="text-slate-500">1. Goods once sold will not be taken back.</span>
+                                </div>
+                              )}
+                              {printDescription && (
+                                <div>
+                                  <span className="font-bold block">Bank Details:</span>
+                                  <span className="text-slate-500 block">Bank Name: HDFC Bank</span>
+                                  <span className="text-slate-500 block">A/C: 123456789012</span>
+                                  <span className="text-slate-500 block">IFSC: HDFC0001234</span>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="text-right flex flex-col justify-between items-end">
+                              <span className="font-bold">For: {printCompanyName || 'My Company'}</span>
+                              <div className="pt-6 border-t border-slate-300 w-32 text-center text-slate-500">
+                                {signatureText || 'Authorized Signatory'}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -2954,16 +4815,7 @@ export const SettingsView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
-          {activeTab === 'branding' && (
-            <button
-              onClick={resetTheme}
-              className="h-10 px-4 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-semibold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
-              title="Reset theme and colors to default"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Reset Colors
-            </button>
-          )}
+          
 
           <button
             onClick={handleSaveSettings}
@@ -2979,7 +4831,7 @@ export const SettingsView: React.FC = () => {
       <div className="bg-slate-100/80 border border-slate-200/70 rounded-2xl p-1.5 flex items-center gap-1 overflow-x-auto">
         {[
           { id: 'account', label: 'My Account', icon: User },
-          { id: 'branding', label: 'Theme, Colors & Typography', icon: Palette },
+          
           { id: 'company', label: 'Company Profile', icon: Building2 },
           { id: 'reminders', label: 'Automated Reminders & SLA', icon: Bell },
           { id: 'backup', label: 'Data Management & Export', icon: Database },
@@ -3224,274 +5076,6 @@ export const SettingsView: React.FC = () => {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* TAB CONTENT: THEME & BRANDING */}
-      {activeTab === 'branding' && (
-        <div className="space-y-6">
-          {/* 1-Click Curated Presets */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-3">
-                  <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0"><Sparkles className="w-4 h-4" /></span>
-                  1-Click Color & Theme Presets
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Select a curated palette or customize every individual color with automated contrast below.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-2">
-              {presets.map((p) => {
-                const isSelected =
-                  theme.primary.toLowerCase() === p.theme.primary.toLowerCase() &&
-                  theme.bg.toLowerCase() === p.theme.bg.toLowerCase();
-
-                return (
-                  <button
-                    key={p.id}
-                    onClick={() => applyPreset(p.id)}
-                    className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer relative flex flex-col justify-between ${isSelected
-                      ? 'border-primary ring-2 ring-primary/20 bg-primary/5'
-                      : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
-                      }`}
-                  >
-                    <div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-bold text-slate-900">{p.name}</span>
-                        {isSelected && (
-                          <span className="w-5 h-5 rounded-full bg-primary text-white flex items-center justify-center shrink-0">
-                            <Check className="w-3 h-3" />
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-[11px] text-slate-500 mt-1 leading-snug">{p.description}</p>
-                    </div>
-
-                    <div className="flex items-center gap-2 mt-3 pt-2 border-t border-slate-100">
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className="w-5 h-5 rounded-md border border-slate-200 shadow-2xs"
-                          style={{ backgroundColor: p.theme.primary }}
-                          title={`Primary: ${p.theme.primary}`}
-                        />
-                        <span
-                          className="w-5 h-5 rounded-md border border-slate-200 shadow-2xs"
-                          style={{ backgroundColor: p.theme.accent }}
-                          title={`Accent: ${p.theme.accent}`}
-                        />
-                        <span
-                          className="w-5 h-5 rounded-md border border-slate-200 shadow-2xs"
-                          style={{ backgroundColor: p.theme.bg }}
-                          title={`Canvas Background: ${p.theme.bg}`}
-                        />
-                      </div>
-                      <span className="text-[10px] font-mono text-slate-400 ml-auto">
-                        {p.theme.primary}
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Centralized Color Controls with Live Contrast Text Feedback */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6 space-y-6">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-3"><span className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0"><Sliders className="w-4 h-4" /></span>Custom Color Calibration & Contrast Engine</h3>
-              <p className="text-xs text-slate-500">
-                Change any color in one place. The system computes WCAG relative luminance and automatically sets contrast text (like MUI contrast text).
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Primary Color Card */}
-              <div className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 transition-colors space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <label className="text-xs font-bold text-slate-900 block">Primary Brand Color</label>
-                    <span className="text-[11px] text-slate-500">Sidebar, major headings & brand badges</span>
-                  </div>
-                  <input
-                    type="color"
-                    value={theme.primary}
-                    onChange={(e) => setTheme({ primary: e.target.value })}
-                    className="w-9 h-9 rounded-lg border border-slate-300 cursor-pointer p-0.5"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono text-slate-400">HEX:</span>
-                  <input
-                    type="text"
-                    value={theme.primary}
-                    onChange={(e) => setTheme({ primary: e.target.value })}
-                    className="w-32 h-9 px-2.5 text-xs font-mono border border-slate-200 rounded-lg uppercase font-bold outline-none focus:border-primary focus:ring-4 focus:ring-primary/15"
-                  />
-                </div>
-
-                {/* Auto Contrast Indicator */}
-                <div
-                  className="p-3 rounded-lg flex items-center justify-between text-xs font-semibold transition-all shadow-2xs"
-                  style={{
-                    backgroundColor: theme.primary,
-                    color: primaryContrast,
-                  }}
-                >
-                  <span>Auto Contrast Result:</span>
-                  <span className="px-2 py-0.5 rounded text-[11px] font-mono border border-current/30">
-                    {primaryContrast === '#FFFFFF' ? 'Light Text (#FFFFFF)' : 'Dark Text (#0F172A)'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Accent Color Card */}
-              <div className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 transition-colors space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <label className="text-xs font-bold text-slate-900 block">Accent / Action Color</label>
-                    <span className="text-[11px] text-slate-500">Buttons, active tabs, alerts & highlights</span>
-                  </div>
-                  <input
-                    type="color"
-                    value={theme.accent}
-                    onChange={(e) => setTheme({ accent: e.target.value })}
-                    className="w-9 h-9 rounded-lg border border-slate-300 cursor-pointer p-0.5"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono text-slate-400">HEX:</span>
-                  <input
-                    type="text"
-                    value={theme.accent}
-                    onChange={(e) => setTheme({ accent: e.target.value })}
-                    className="w-32 h-9 px-2.5 text-xs font-mono border border-slate-200 rounded-lg uppercase font-bold outline-none focus:border-primary focus:ring-4 focus:ring-primary/15"
-                  />
-                </div>
-
-                {/* Auto Contrast Indicator */}
-                <div
-                  className="p-3 rounded-lg flex items-center justify-between text-xs font-semibold transition-all shadow-2xs"
-                  style={{
-                    backgroundColor: theme.accent,
-                    color: accentContrast,
-                  }}
-                >
-                  <span>Auto Contrast Result:</span>
-                  <span className="px-2 py-0.5 rounded text-[11px] font-mono border border-current/30">
-                    {accentContrast === '#FFFFFF' ? 'Light Text (#FFFFFF)' : 'Dark Text (#0F172A)'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Main Canvas Background */}
-              <div className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 transition-colors space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <label className="text-xs font-bold text-slate-900 block">Canvas Background</label>
-                    <span className="text-[11px] text-slate-500">Main viewport and page backdrop</span>
-                  </div>
-                  <input
-                    type="color"
-                    value={theme.bg}
-                    onChange={(e) => setTheme({ bg: e.target.value })}
-                    className="w-9 h-9 rounded-lg border border-slate-300 cursor-pointer p-0.5"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono text-slate-400">HEX:</span>
-                  <input
-                    type="text"
-                    value={theme.bg}
-                    onChange={(e) => setTheme({ bg: e.target.value })}
-                    className="w-32 h-9 px-2.5 text-xs font-mono border border-slate-200 rounded-lg uppercase font-bold outline-none focus:border-primary focus:ring-4 focus:ring-primary/15"
-                  />
-                </div>
-
-                <div
-                  className="p-3 rounded-lg flex items-center justify-between text-xs font-semibold transition-all border"
-                  style={{
-                    backgroundColor: theme.bg,
-                    color: bgContrast,
-                    borderColor: theme.border || '#E2E8F0',
-                  }}
-                >
-                  <span>Canvas Contrast Result:</span>
-                  <span className="px-2 py-0.5 rounded text-[11px] font-mono border border-current/30">
-                    {bgContrast === '#FFFFFF' ? 'Dark Mode (Light Text)' : 'Light Mode (Dark Text)'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Surface / Card Background */}
-              <div className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 transition-colors space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <label className="text-xs font-bold text-slate-900 block">Card & Surface Background</label>
-                    <span className="text-[11px] text-slate-500">Data tables, modal dialogs, and cards</span>
-                  </div>
-                  <input
-                    type="color"
-                    value={theme.surface}
-                    onChange={(e) => setTheme({ surface: e.target.value })}
-                    className="w-9 h-9 rounded-lg border border-slate-300 cursor-pointer p-0.5"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono text-slate-400">HEX:</span>
-                  <input
-                    type="text"
-                    value={theme.surface}
-                    onChange={(e) => setTheme({ surface: e.target.value })}
-                    className="w-32 h-9 px-2.5 text-xs font-mono border border-slate-200 rounded-lg uppercase font-bold outline-none focus:border-primary focus:ring-4 focus:ring-primary/15"
-                  />
-                </div>
-
-                <div
-                  className="p-3 rounded-lg flex items-center justify-between text-xs font-semibold transition-all border"
-                  style={{
-                    backgroundColor: theme.surface,
-                    color: surfaceContrast,
-                    borderColor: theme.border || '#E2E8F0',
-                  }}
-                >
-                  <span>Surface Contrast Result:</span>
-                  <span className="px-2 py-0.5 rounded text-[11px] font-mono border border-current/30">
-                    {surfaceContrast === '#FFFFFF' ? 'Light Text (#FFFFFF)' : 'Dark Text (#0F172A)'}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Typography Selector */}
-            <div className="pt-4 border-t border-slate-100 space-y-2">
-              <label className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                <Type className="w-4 h-4 text-slate-600" />
-                Global Font Family
-              </label>
-              <select
-                value={theme.fontFamily}
-                onChange={(e) => setTheme({ fontFamily: e.target.value })}
-                className="w-full md:w-96 h-11 px-3.5 text-[13px] border border-slate-200 hover:border-slate-300 rounded-xl outline-none font-medium bg-white focus:border-primary focus:ring-4 focus:ring-primary/15 transition-all cursor-pointer"
-              >
-                {fontOptions.map((f) => (
-                  <option key={f.value} value={f.value}>
-                    {f.label}
-                  </option>
-                ))}
-              </select>
-              <p className="text-[11px] text-slate-500">
-                Updating this single option immediately changes typography across the whole application.
-              </p>
-            </div>
           </div>
         </div>
       )}

@@ -45,18 +45,20 @@ export const DateInput: React.FC<DateInputProps> = ({
   return (
     <div
       title={title}
-      className={`relative w-full ${heightClass} ${disabled ? 'bg-slate-50 opacity-70' : 'bg-white'} rounded-xl transition-all focus-within:ring-4 ${
+      className={`relative flex items-center justify-between gap-2 px-3.5 w-full min-w-[140px] ${heightClass} ${disabled ? 'bg-slate-50 opacity-70' : 'bg-white'} rounded-xl transition-all focus-within:ring-4 ${
         error
           ? 'border border-red-500 focus-within:border-red-500 focus-within:ring-red-500/10'
           : 'border border-slate-200 hover:border-slate-300 focus-within:border-[#4309A2] focus-within:ring-[#4309A2]/10'
       }`}
     >
-      <div className="absolute inset-0 flex items-center justify-between px-4 pointer-events-none">
-        <span className={`text-xs sm:text-[13px] font-medium ${display ? 'text-slate-700' : 'text-slate-400'}`}>
-          {display || placeholder}
-        </span>
-        <Calendar className="w-4 h-4 text-slate-500" />
-      </div>
+      <span
+        className={`text-xs sm:text-[13px] font-medium whitespace-nowrap pointer-events-none select-none ${
+          display ? 'text-slate-700' : 'text-slate-400'
+        }`}
+      >
+        {display || placeholder}
+      </span>
+      <Calendar className="w-4 h-4 text-slate-500 shrink-0 pointer-events-none" />
       <input
         ref={ref}
         type="date"

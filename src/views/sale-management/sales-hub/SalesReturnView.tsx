@@ -50,6 +50,7 @@ import {
   FileCheck2,
   Download,
   Phone,
+  Printer,
 } from "lucide-react";
 import {
   useSalesManagementStore,
@@ -1390,7 +1391,15 @@ export const SalesReturnView: React.FC = () => {
             tx.originalReturn.id,
           );
           if (res?.success && res.data) {
-            active = mapApiSalesReturnToSalesReturn(res.data);
+            const mapped = mapApiSalesReturnToSalesReturn(res.data);
+            active = {
+              ...tx.originalReturn,
+              ...mapped,
+              salesReturnManualNo:
+                mapped.salesReturnManualNo ||
+                tx.originalReturn.salesReturnManualNo ||
+                "",
+            };
           }
         } catch (e) {
           console.warn("Could not fetch latest return for preview:", e);
@@ -1419,7 +1428,9 @@ export const SalesReturnView: React.FC = () => {
       origReturn?.items && origReturn.items.length > 0
         ? origReturn.items.map((it) => ({
             name: it.productName,
+            sku: it.sku,
             batch: it.batch,
+            unit: (it as any).unit || undefined,
             quantity: it.returnQuantity,
             unitPrice: it.unitPrice,
             total: it.returnAmount || it.returnQuantity * it.unitPrice,
@@ -1434,18 +1445,18 @@ export const SalesReturnView: React.FC = () => {
       : Number(txOrReturn.returnAmount || 0);
     const paidAmount = isTx ? txOrReturn.receivedPaid : 0;
     const balance = isTx ? txOrReturn.balance : grandTotal;
+    const returnStatus =
+      origReturn?.returnStatus || (isTx ? txOrReturn.status : "");
 
     return {
       docTypeTitle: "SALES RETURN",
       docNo,
       docDate: date,
-      status: (origReturn?.returnStatus ||
-        (isTx ? txOrReturn.status : "Approved")) as string,
+      status: returnStatus as string,
       statusColor: "rose" as const,
-      referenceNo: origReturn?.invoiceNo || undefined,
       partyTitle: "Customer Details",
       partyName: pName,
-      partyCompany: customer?.company,
+      partyCompany: origReturn?.customerCompany || customer?.company,
       partyPhone: customer?.phone,
       partyEmail: customer?.email,
       partyAddress: customer?.billingAddress || customer?.address,
@@ -1460,8 +1471,15 @@ export const SalesReturnView: React.FC = () => {
         ...(origReturn?.refundMethod
           ? [{ label: "Refund Method", value: origReturn.refundMethod }]
           : []),
+        ...(origReturn?.refundStatus
+          ? [{ label: "Refund Status", value: origReturn.refundStatus }]
+          : []),
+        ...(returnStatus && !/^converted$/i.test(String(returnStatus).trim())
+          ? [{ label: "Return Status", value: returnStatus }]
+          : []),
       ],
       items,
+      subtotal: Number(origReturn?.returnAmount ?? grandTotal),
       grandTotal,
       paidAmount,
       balance,
@@ -1473,32 +1491,44 @@ export const SalesReturnView: React.FC = () => {
     };
   };
 
+  // Load the latest return record (GET /returns/:id) while preserving list manual number
+  const resolveLatestSalesReturnSource = async (
+    txOrReturn: UnifiedTransactionRecord | SalesReturn,
+  ): Promise<UnifiedTransactionRecord | SalesReturn> => {
+    const isTx = "refNo" in txOrReturn;
+    const original: SalesReturn | undefined = isTx
+      ? txOrReturn.originalReturn
+      : txOrReturn;
+    if (!original || !UUID_REGEX.test(original.id)) return txOrReturn;
+    try {
+      const res = await commerceSalesReturnApi.getSalesReturnById(original.id);
+      if (res?.success && res.data) {
+        const mapped = mapApiSalesReturnToSalesReturn(res.data);
+        const mergedReturn: SalesReturn = {
+          ...original,
+          ...mapped,
+          salesReturnManualNo:
+            mapped.salesReturnManualNo || original.salesReturnManualNo || "",
+        };
+        return isTx
+          ? { ...txOrReturn, originalReturn: mergedReturn }
+          : mergedReturn;
+      }
+    } catch (err) {
+      console.warn("Could not fetch latest sales return:", err);
+    }
+    return txOrReturn;
+  };
+
   // Print Sales Return — loads the latest return from the API (GET /returns/:id) so the print matches server data
-  const handlePrintReturn = async (row: UnifiedTransactionRecord) => {
+  const handlePrintReturn = async (
+    txOrReturn: UnifiedTransactionRecord | SalesReturn,
+  ) => {
     setActiveMenuId(null);
     if (isPrinting) return;
     setIsPrinting(true);
     try {
-      let source: UnifiedTransactionRecord | SalesReturn = row;
-      const original = row.originalReturn;
-      if (original && UUID_REGEX.test(original.id)) {
-        try {
-          const res = await commerceSalesReturnApi.getSalesReturnById(
-            original.id,
-          );
-          if (res?.success && res.data) {
-            source = {
-              ...row,
-              originalReturn: {
-                ...original,
-                ...mapApiSalesReturnToSalesReturn(res.data),
-              },
-            };
-          }
-        } catch (err) {
-          console.warn("Could not fetch latest return for print:", err);
-        }
-      }
+      const source = await resolveLatestSalesReturnSource(txOrReturn);
       await printBusinessDocument(buildSalesReturnDocumentOptions(source));
     } catch (err) {
       console.error("Failed to print sales return:", err);
@@ -1508,7 +1538,7 @@ export const SalesReturnView: React.FC = () => {
     }
   };
 
-  // Download Sales Return
+  // Download Sales Return — loads the latest return from the API (GET /returns/:id) so the PDF matches server data
   const handleDownloadReturn = async (
     txOrReturn: UnifiedTransactionRecord | SalesReturn,
   ) => {
@@ -1519,8 +1549,9 @@ export const SalesReturnView: React.FC = () => {
       "refNo" in txOrReturn ? txOrReturn.refNo : txOrReturn.returnNo;
     const filename = `SalesReturn_${(docNo || "return").replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`;
     try {
+      const source = await resolveLatestSalesReturnSource(txOrReturn);
       await downloadBusinessDocument(
-        buildSalesReturnDocumentOptions(txOrReturn),
+        buildSalesReturnDocumentOptions(source),
         filename,
       );
       toast.success(`Downloaded ${filename}`);
@@ -2309,7 +2340,12 @@ export const SalesReturnView: React.FC = () => {
                               type="number"
                               min="0"
                               max={item.soldQuantity || 9999}
-                              value={item.returnQuantity}
+                              value={
+                                item.returnQuantity === 0
+                                  ? ""
+                                  : item.returnQuantity || ""
+                              }
+                              placeholder="0"
                               data-field={`items.${idx}.returnQuantity`}
                               onKeyDown={handleNonNegativeKeyDown}
                               onChange={(e) => {
@@ -2611,6 +2647,23 @@ export const SalesReturnView: React.FC = () => {
                 className="h-10 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 whitespace-nowrap justify-center"
               >
                 Close
+              </button>
+              <button
+                type="button"
+                disabled={isPrinting}
+                onClick={() => {
+                  if (selectedReturn) {
+                    handlePrintReturn(selectedReturn);
+                  }
+                }}
+                className="h-10 px-5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold flex items-center gap-2 shadow-md transition disabled:opacity-50 whitespace-nowrap justify-center"
+              >
+                {isPrinting ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Printer className="w-4 h-4" />
+                )}
+                <span>{isPrinting ? "Printing..." : "Print Return"}</span>
               </button>
               <button
                 type="button"

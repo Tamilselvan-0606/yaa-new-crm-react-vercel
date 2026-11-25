@@ -12,6 +12,7 @@ interface PhoneFieldProps {
   onChange: (value: string) => void;
   error?: string;
   placeholder?: string;
+  dataField?: string;
 }
 
 const digitsOf = (s?: string | null) => (s || '').replace(/\D/g, '');
@@ -38,7 +39,7 @@ const Flag: React.FC<{ country?: MasterCountry }> = ({ country }) => {
  * Phone input with a country-code dropdown (flag + dial code) in front of the number.
  * The code is chosen here and is independent of the Country field of the form.
  */
-export const PhoneField: React.FC<PhoneFieldProps> = ({ label, required, value, onChange, error, placeholder }) => {
+export const PhoneField: React.FC<PhoneFieldProps> = ({ label, required, value, onChange, error, placeholder, dataField }) => {
   const [countries, setCountries] = useState<MasterCountry[]>([]);
   const [chosenId, setChosenId] = useState('');
   const [open, setOpen] = useState(false);
@@ -145,6 +146,7 @@ export const PhoneField: React.FC<PhoneFieldProps> = ({ label, required, value, 
         <input
           type="tel"
           inputMode="numeric"
+          data-field={dataField}
           value={national}
           maxLength={maxNational}
           placeholder={placeholder || 'Phone number'}

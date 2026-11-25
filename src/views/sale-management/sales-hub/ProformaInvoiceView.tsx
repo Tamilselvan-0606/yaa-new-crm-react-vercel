@@ -229,6 +229,8 @@ const validateProformaForm = (
     customerId?: string | null;
     date: string;
     validUntil?: string;
+    withGst?: boolean;
+    gstType?: "intra_state" | "inter_state";
     items: ExtendedProformaItem[];
   },
   ctx: {
@@ -295,19 +297,25 @@ const validateProformaForm = (
   if (Object.keys(errors).length === 0) {
     const expected = round2(
       realRows.reduce(
-        (sum, it) =>
-          sum +
-          calculateLineItem(
-            {
-              quantity: it.quantity,
-              unitPrice: it.unitPrice,
-              discountPercent: it.discountPercent,
-              discountAmount: it.discountAmount,
-              taxPercent: it.taxPercent,
-              isTaxInclusive: ctx.isInclusive,
-            },
-            { withGst: true },
-          ).lineTotal,
+        (sum, it) => {
+          const useAmt =
+            it.discountType === "amount" ||
+            (Number(it.discountAmount) > 0 && Number(it.discountPercent) === 0);
+          return (
+            sum +
+            calculateLineItem(
+              {
+                quantity: it.quantity,
+                unitPrice: it.unitPrice,
+                discountPercent: useAmt ? 0 : it.discountPercent,
+                discountAmount: useAmt ? it.discountAmount : 0,
+                taxPercent: it.taxPercent,
+                isTaxInclusive: ctx.isInclusive,
+              },
+              { withGst: form.withGst !== false, gstType: form.gstType },
+            ).lineTotal
+          );
+        },
         0,
       ),
     );
@@ -324,6 +332,12 @@ const validateProformaForm = (
 import { AddCustomerModal } from "./AddCustomerModal";
 import { AddItemModal } from "../inventory/AddItemModal";
 import { DateInput } from "../../../components/common/DateInput";
+import { GstConfigurationBar } from "./sales-invoice/GstConfigurationBar";
+import {
+  SalesDocumentItemsTable,
+  type SalesDocumentLineItem,
+} from "./SalesDocumentItemsTable";
+import { SalesDocumentSummaryPanel } from "./SalesDocumentSummaryPanel";
 
 // Helper for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -392,22 +406,6 @@ const STATE_OPTIONS = [
   "03-Punjab",
   "23-Madhya Pradesh",
   "Other",
-];
-
-const UNIT_OPTIONS = [
-  "NONE",
-  "PCS",
-  "KG",
-  "BOX",
-  "LTR",
-  "BAG",
-  "PACK",
-  "DOZEN",
-  "CARTON",
-  "CAN",
-  "SET",
-  "QUINTAL",
-  "MTR",
 ];
 
 const TAX_RATE_OPTIONS = [
@@ -506,6 +504,8 @@ export interface ProformaTabItem {
     date: string;
     validUntil: string;
     stateOfSupply: string;
+    withGst: boolean;
+    gstType: "intra_state" | "inter_state";
     items: ExtendedProformaItem[];
     notes: string;
     terms: string;
@@ -1315,6 +1315,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       date: todayIso,
       validUntil: validUntilIso,
       stateOfSupply: "33-Tamil Nadu",
+      withGst: true,
+      gstType: "intra_state" as "intra_state" | "inter_state",
       items: initialRows,
       notes: "",
       terms: "",
@@ -1517,36 +1519,55 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     let proforma = listProforma;
     try {
       const res = await commerceProformaApi.getProformaById(listProforma.id);
-      if (res?.success && res.data)
-        proforma = mapApiProformaToSaleProforma(res.data);
+      if (res?.success && res.data) {
+        const mapped = mapApiProformaToSaleProforma(res.data);
+        proforma = {
+          ...mapped,
+          proformaInvoiceManualNo:
+            mapped.proformaInvoiceManualNo ||
+            listProforma.proformaInvoiceManualNo ||
+            "",
+        };
+      }
     } catch (err) {
       console.warn("Could not fetch proforma details:", err);
     }
+    const editWithGst = proforma.withGst !== false;
+    const editGstType: "intra_state" | "inter_state" =
+      proforma.gstType === "inter_state"
+        ? "inter_state"
+        : proforma.gstType === "intra_state"
+          ? "intra_state"
+          : determineGstType(proforma.stateOfSupply);
     const mappedItems: ExtendedProformaItem[] = proforma.items.map((it) => {
       const stockItem = availableProducts.find(
         (s) => s.productId === it.productId || s.productName === it.productName,
+      );
+      const useAmt =
+        Number((it as any).discountAmount) > 0 && Number(it.discountPercent) === 0;
+      const lineRes = calculateLineItem(
+        {
+          quantity: Number(it.quantity) || 0,
+          unitPrice: Number(it.unitPrice) || 0,
+          discountPercent: useAmt ? 0 : Number(it.discountPercent) || 0,
+          discountAmount: useAmt ? Number((it as any).discountAmount) : 0,
+          taxPercent: Number(it.taxPercent) || 0,
+          isTaxInclusive: priceTaxMode === "With Tax",
+        },
+        { withGst: editWithGst, gstType: editGstType },
       );
       return {
         ...it,
         id: it.id || `row_${Date.now()}_${Math.random()}`,
         unit: it.unit || "PCS",
-        discountPercent: it.discountPercent || 0,
-        discountAmount:
-          it.discountAmount ||
-          (it.discountPercent
-            ? (it.quantity * it.unitPrice * it.discountPercent) / 100
-            : 0),
-        taxPercent: it.taxPercent || 0,
-        taxAmount:
-          it.taxAmount ||
-          (it.taxPercent
-            ? ((it.quantity * it.unitPrice - (it.discountAmount || 0)) *
-                it.taxPercent) /
-              100
-            : 0),
+        discountType: useAmt ? "amount" : "percent",
+        discountPercent: useAmt ? 0 : lineRes.discountPercent,
+        discountAmount: useAmt ? lineRes.discountAmount : 0,
+        taxPercent: lineRes.taxPercent,
+        taxAmount: lineRes.taxAmount,
         category: it.category || (stockItem as any)?.category || "",
         itemCode: it.itemCode || stockItem?.sku || "",
-        total: it.total || it.quantity * it.unitPrice,
+        total: lineRes.lineTotal,
       };
     });
 
@@ -1563,6 +1584,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       date: proforma.date,
       validUntil: proforma.validUntil,
       stateOfSupply: proforma.stateOfSupply || "33-Tamil Nadu",
+      withGst: editWithGst,
+      gstType: editGstType,
       items:
         mappedItems.length > 0 ? mappedItems : createDefaultFormData().items,
       notes: proforma.notes || "",
@@ -1641,15 +1664,20 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         }
       }
       const isInclusive = priceTaxMode === "With Tax";
-      const lineRes = calculateLineItem({
-        quantity: Number(item.quantity) || 1,
-        unitPrice: Number(item.unitPrice) || 0,
-        discountPercent: Number(item.discountPercent) || 0,
-        discountAmount: item.discountAmount,
-        taxPercent: item.taxPercent || 0,
-        isTaxInclusive: isInclusive,
-      });
-      item.discountAmount = lineRes.discountAmount;
+      const useAmt =
+        item.discountType === "amount" ||
+        (Number(item.discountAmount) > 0 && Number(item.discountPercent) === 0);
+      const lineRes = calculateLineItem(
+        {
+          quantity: Number(item.quantity) || 1,
+          unitPrice: Number(item.unitPrice) || 0,
+          discountPercent: useAmt ? 0 : Number(item.discountPercent) || 0,
+          discountAmount: useAmt ? Number(item.discountAmount) || 0 : 0,
+          taxPercent: item.taxPercent || 0,
+          isTaxInclusive: isInclusive,
+        },
+        { withGst: prev.withGst, gstType: prev.gstType },
+      );
       item.taxAmount = lineRes.taxAmount;
       item.total = lineRes.lineTotal;
 
@@ -1657,6 +1685,59 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       return { ...prev, items: newItems };
     });
     setOpenProductDropdownRow(null);
+  };
+
+  const handleToggleWithGst = (enableGst: boolean) => {
+    setFormData((prev) => {
+      const isInclusive = priceTaxMode === "With Tax";
+      const updatedItems = prev.items.map((it) => {
+        const useAmt =
+          it.discountType === "amount" ||
+          (Number(it.discountAmount) > 0 && Number(it.discountPercent) === 0);
+        const lineRes = calculateLineItem(
+          {
+            quantity: it.quantity,
+            unitPrice: it.unitPrice,
+            discountPercent: useAmt ? 0 : it.discountPercent,
+            discountAmount: useAmt ? it.discountAmount : 0,
+            taxPercent: it.taxPercent,
+            isTaxInclusive: isInclusive,
+          },
+          { withGst: enableGst, gstType: prev.gstType },
+        );
+        return {
+          ...it,
+          taxAmount: lineRes.taxAmount,
+          total: lineRes.lineTotal,
+        };
+      });
+      return { ...prev, withGst: enableGst, items: updatedItems };
+    });
+  };
+
+  const handleSetGstType = (type: "intra_state" | "inter_state") => {
+    setFormData((prev) => ({ ...prev, gstType: type }));
+  };
+
+  const handleClearProductRow = (index: number) => {
+    setFormData((prev) => {
+      const newItems = [...prev.items];
+      newItems[index] = {
+        ...newItems[index],
+        productId: "",
+        productName: "",
+        sku: "",
+        itemCode: "",
+        batch: "",
+        unitPrice: 0,
+        taxPercent: 0,
+        discountPercent: 0,
+        discountAmount: 0,
+        taxAmount: 0,
+        total: 0,
+      };
+      return { ...prev, items: newItems };
+    });
   };
 
   // Row operations
@@ -1853,18 +1934,27 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       }
 
       const isInclusive = priceTaxMode === "With Tax";
-      const rawDiscPct =
-        field === "discountPercent"
-          ? Number(value)
-          : field === "discountAmount"
-            ? 0
-            : item.discountPercent;
-      const rawDiscAmt =
-        field === "discountAmount"
-          ? Number(value)
-          : field === "discountPercent"
-            ? 0
-            : item.discountAmount;
+      let rawDiscPct = Number(item.discountPercent) || 0;
+      let rawDiscAmt = Number(item.discountAmount) || 0;
+      if (field === "discountPercent") {
+        item.discountType = "percent";
+        rawDiscPct = Math.min(100, Math.max(0, Number(value) || 0));
+        rawDiscAmt = 0;
+        item.discountPercent = rawDiscPct;
+        item.discountAmount = 0;
+      } else if (field === "discountAmount") {
+        item.discountType = "amount";
+        rawDiscPct = 0;
+        rawDiscAmt = Math.max(0, Number(value) || 0);
+        item.discountPercent = 0;
+      } else if (
+        item.discountType === "amount" ||
+        (Number(item.discountAmount) > 0 && Number(item.discountPercent) === 0)
+      ) {
+        rawDiscPct = 0;
+      } else {
+        rawDiscAmt = 0;
+      }
 
       const lineRes = calculateLineItem(
         {
@@ -1876,15 +1966,20 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           isTaxInclusive: isInclusive,
         },
         {
-          withGst: true,
-          gstType: determineGstType(prev.stateOfSupply),
+          withGst: prev.withGst,
+          gstType: prev.gstType,
         },
       );
 
       item.quantity = lineRes.quantity;
       item.unitPrice = lineRes.unitPrice;
-      item.discountPercent = lineRes.discountPercent;
-      item.discountAmount = lineRes.discountAmount;
+      if (item.discountType === "amount") {
+        item.discountPercent = 0;
+        item.discountAmount = lineRes.discountAmount;
+      } else {
+        item.discountPercent = lineRes.discountPercent;
+        item.discountAmount = 0;
+      }
       item.taxPercent = lineRes.taxPercent;
       item.taxAmount = lineRes.taxAmount;
       item.total = lineRes.lineTotal;
@@ -1898,15 +1993,21 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   const formCalculations = useMemo(() => {
     const isInclusive = priceTaxMode === "With Tax";
     const docTotals = calculateDocumentTotals({
-      items: formData.items.map((it) => ({
-        quantity: it.quantity,
-        unitPrice: it.unitPrice,
-        discountPercent: it.discountPercent,
-        discountAmount: it.discountAmount,
-        taxPercent: it.taxPercent,
-        isTaxInclusive: isInclusive,
-      })),
-      withGst: true,
+      items: formData.items.map((it) => {
+        const useAmt =
+          it.discountType === "amount" ||
+          (Number(it.discountAmount) > 0 && Number(it.discountPercent) === 0);
+        return {
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          discountPercent: useAmt ? 0 : it.discountPercent,
+          discountAmount: useAmt ? it.discountAmount : 0,
+          taxPercent: it.taxPercent,
+          isTaxInclusive: isInclusive,
+        };
+      }),
+      withGst: formData.withGst,
+      gstType: formData.gstType,
       stateOfSupply: formData.stateOfSupply,
       roundMode: enableRoundOff ? "auto" : "none",
       manualRoundOff: manualRoundOff,
@@ -1928,6 +2029,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   }, [
     formData.items,
     formData.stateOfSupply,
+    formData.withGst,
+    formData.gstType,
     priceTaxMode,
     enableRoundOff,
     manualRoundOff,
@@ -1956,13 +2059,16 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       const isInclusive = priceTaxMode === "With Tax";
       const rows = restored.lines.map((l, i) => {
         const prod = productMap.get(l.productId);
-        const lineRes = calculateLineItem({
-          quantity: l.quantity,
-          unitPrice: l.unitPrice,
-          discountPercent: l.discountPercent,
-          taxPercent: l.taxPercent,
-          isTaxInclusive: isInclusive,
-        });
+        const lineRes = calculateLineItem(
+          {
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            discountPercent: l.discountPercent,
+            taxPercent: l.taxPercent,
+            isTaxInclusive: isInclusive,
+          },
+          { withGst: formData.withGst, gstType: formData.gstType },
+        );
         return {
           id: `row_${Date.now()}_${i}`,
           productId: l.productId,
@@ -2167,8 +2273,16 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         productId: resolveProductIdForItem(it) as string,
       }));
 
-      const { rawSubtotal, totalTax, totalDiscount, roundOffDiff, grandTotal } =
-        formCalculations;
+      const {
+        rawSubtotal,
+        totalTax,
+        cgst,
+        sgst,
+        igst,
+        totalDiscount,
+        roundOffDiff,
+        grandTotal,
+      } = formCalculations;
 
       const proformaId = editingProforma
         ? editingProforma.id
@@ -2190,13 +2304,11 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         stateOfSupply: formData.stateOfSupply,
         items: resolvedItems,
         subtotal: rawSubtotal,
-        withGst: totalTax > 0,
-        gstType: formData.stateOfSupply?.includes("Tamil Nadu")
-          ? "intra_state"
-          : "inter_state",
-        cgst: totalTax / 2,
-        sgst: totalTax / 2,
-        igst: 0,
+        withGst: formData.withGst,
+        gstType: formData.gstType,
+        cgst,
+        sgst,
+        igst,
         discount: totalDiscount,
         taxAmount: totalTax,
         roundOff: roundOffDiff,
@@ -2820,6 +2932,12 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       date: today,
       validUntil,
       stateOfSupply: proforma.stateOfSupply || "33-Tamil Nadu",
+      withGst: proforma.withGst !== false,
+      gstType: (proforma.gstType === "inter_state"
+        ? "inter_state"
+        : proforma.gstType === "intra_state"
+          ? "intra_state"
+          : determineGstType(proforma.stateOfSupply)) as "intra_state" | "inter_state",
       items: copiedItems,
       notes: proforma.notes || "",
       terms: proforma.terms || "",
@@ -2966,7 +3084,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       docNo: proforma.proformaNo,
       docDate: isoToDdmmyyyy(proforma.date),
       dueDate: isoToDdmmyyyy(proforma.validUntil),
-      status: proforma.status,
+      status: /^converted$/i.test(String(proforma.status || "").trim()) ? "" : proforma.status,
       statusColor:
         proforma.status === "Converted"
           ? "emerald"
@@ -2983,18 +3101,19 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       partyName: proforma.partyName,
       partyCompany: proforma.customerCompany,
       partyPhone: proforma.customerPhone,
+      partyEmail: proforma.customerEmail,
       partyAddress: proforma.billingAddress,
       extraMeta: [
         { label: "Proforma ID", value: proforma.proformaNo },
         ...(proforma.proformaInvoiceManualNo
           ? [{ label: "Proforma No", value: proforma.proformaInvoiceManualNo }]
           : []),
-        {
-          label: "State of Supply",
-          value: proforma.stateOfSupply || "Tamil Nadu",
-        },
-        ...(proforma.convertedToInvoiceNo
-          ? [{ label: "Converted Ref", value: proforma.convertedToInvoiceNo }]
+        ...(proforma.stateOfSupply
+          ? [{ label: "State of Supply", value: proforma.stateOfSupply }]
+          : []),
+        ...(!/^converted$/i.test(String(proforma.status || "").trim()) &&
+        proforma.status
+          ? [{ label: "Proforma Status", value: proforma.status }]
           : []),
       ],
       items: (proforma.items || []).map((it) => ({
@@ -3004,17 +3123,26 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         unit: it.unit,
         quantity: it.quantity,
         unitPrice: it.unitPrice,
+        discountPercent: it.discountPercent,
         taxPercent: isGstActive ? it.taxPercent || 0 : 0,
         total: it.total,
       })),
       subtotal: proforma.subtotal,
+      discount: proforma.discount,
       tax: {
         withGst: isGstActive,
+        gstType: proforma.gstType,
         taxAmount: proforma.taxAmount,
+        cgst: proforma.cgst || undefined,
+        sgst: proforma.sgst || undefined,
+        igst: proforma.igst || undefined,
       },
       roundOff: proforma.roundOff,
       grandTotal: proforma.amount,
+      balance: proforma.balance,
+      notes: proforma.notes,
       terms: proforma.terms,
+      primarySignatoryLabel: "Authorized Signatory",
     };
   };
 
@@ -3026,7 +3154,16 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     if (!UUID_REGEX.test(proforma.id)) return proforma;
     try {
       const res = await commerceProformaApi.getProformaById(proforma.id);
-      if (res?.success && res.data) return mapApiProformaToSaleProforma(res.data);
+      if (res?.success && res.data) {
+        const mapped = mapApiProformaToSaleProforma(res.data);
+        return {
+          ...mapped,
+          proformaInvoiceManualNo:
+            mapped.proformaInvoiceManualNo ||
+            proforma.proformaInvoiceManualNo ||
+            "",
+        };
+      }
     } catch (err) {
       console.warn("Could not fetch latest proforma for print/download:", err);
     }
@@ -3536,6 +3673,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                       setFormData({
                         ...formData,
                         stateOfSupply: e.target.value,
+                        gstType: determineGstType(e.target.value),
                       })
                     }
                     className="w-40 sm:w-48 h-9 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none cursor-pointer transition-colors"
@@ -3583,994 +3721,70 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                 <FormError message={fe.errors.validUntil} />
               </div>
             </div>
-            {(fe.errors.items || fe.errors.total) && (
-              <div className="mt-4" {...fieldAttr("items")}>
-                <FormError message={fe.errors.items || fe.errors.total} />
-              </div>
-            )}
+            {/* 4. TAXATION & GST CONFIGURATION BAR + ITEMS TABLE */}
+            <div className="mt-6 space-y-4">
+              <GstConfigurationBar
+                withGst={formData.withGst}
+                gstType={formData.gstType}
+                onToggleWithGst={handleToggleWithGst}
+                onSetGstType={handleSetGstType}
+                documentLabel="proforma invoice"
+              />
 
-            {/* 4. BILLING TABLE (THE GRID - CRM THEME) */}
-            <div className="mt-6 overflow-x-auto border border-slate-200 rounded-xl min-h-[380px] pb-36">
-              <table className="w-full min-w-[1250px] text-xs border-collapse">
-                {/* Table Header */}
-                <thead>
-                  <tr className="bg-[#33077C] text-white font-bold uppercase text-[10.5px] border-b border-[#4309A2] tracking-wider select-none">
-                    <th className="py-2.5 px-2.5 text-center border-r border-[#4309A2]/70 w-10 text-white/80 font-extrabold">
-                      +
-                    </th>
-                    <th className="py-2.5 px-3 text-left border-r border-[#4309A2]/70 min-w-[200px] text-white">
-                      ITEM
-                    </th>
-                    {columnSettings.showItemCategory && (
-                      <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 min-w-[130px] text-white">
-                        ITEM CATEGORY
-                      </th>
-                    )}
-                    {columnSettings.showItemCode && (
-                      <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 w-28 text-white">
-                        ITEM CODE
-                      </th>
-                    )}
-                    {columnSettings.showHsnSac && (
-                      <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 w-28 text-white">
-                        HSN/SAC CODE
-                      </th>
-                    )}
-                    {columnSettings.showDescription && (
-                      <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 min-w-[160px] text-white">
-                        DESCRIPTION
-                      </th>
-                    )}
-                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 min-w-[160px] text-white">
-                      BATCH NO
-                    </th>
-                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-28 min-w-[112px] text-white">
-                      QTY
-                    </th>
-                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-24 min-w-[96px] text-white">
-                      UNIT
-                    </th>
-                    <th className="py-2.5 px-3 text-right border-r border-[#4309A2]/70 w-36 text-white">
-                      <div>PRICE/UNIT</div>
-                      <div className="text-[9.5px] text-purple-200 font-normal lowercase">
-                        ({priceTaxMode.toLowerCase()})
-                      </div>
-                    </th>
-                    {columnSettings.showDiscount && (
-                      <th
-                        colSpan={2}
-                        className="py-2 px-2 text-center border-r border-[#4309A2]/70 text-white"
-                      >
-                        <div className="text-[10px]">DISCOUNT</div>
-                        <div className="grid grid-cols-2 text-[9.5px] text-purple-200 font-semibold mt-0.5 border-t border-[#4309A2]/70 pt-1">
-                          <span>%</span>
-                          <span className="text-right pr-1">AMOUNT</span>
-                        </div>
-                      </th>
-                    )}
-                    <th
-                      colSpan={2}
-                      className="py-2 px-2 text-center border-r border-[#4309A2]/70 text-white"
-                    >
-                      <div className="text-[10px]">TAX</div>
-                      <div className="grid grid-cols-2 text-[9.5px] text-purple-200 font-semibold mt-0.5 border-t border-[#4309A2]/70 pt-1">
-                        <span>%</span>
-                        <span className="text-right pr-1">AMOUNT</span>
-                      </div>
-                    </th>
-                    <th className="py-2.5 px-3 text-right border-r border-[#4309A2]/70 w-36 relative text-white">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <span>AMOUNT</span>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setShowColumnCustomizePopover(
-                              !showColumnCustomizePopover,
-                            );
-                          }}
-                          className="table-column-customize-btn inline-flex items-center justify-center w-5 h-5 rounded-full text-white hover:bg-white/20 transition-colors cursor-pointer"
-                          title="Customize table columns"
-                        >
-                          <PlusCircle className="w-4 h-4 text-white stroke-[2.2]" />
-                        </button>
-                      </div>
-
-                      {/* Customization Dropdown Popover */}
-                      {showColumnCustomizePopover && (
-                        <div
-                          onClick={(e) => e.stopPropagation()}
-                          className="table-column-customize-popover absolute right-0 top-full mt-1.5 w-52 bg-white rounded-xl shadow-2xl border border-slate-200 p-2.5 z-50 text-left normal-case tracking-normal animate-in fade-in zoom-in-95 duration-100"
-                        >
-                          <div className="space-y-1">
-                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
-                              <input
-                                type="checkbox"
-                                checked={columnSettings.showItemCategory}
-                                onChange={(e) =>
-                                  setColumnSettings((prev) => ({
-                                    ...prev,
-                                    showItemCategory: e.target.checked,
-                                  }))
-                                }
-                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
-                              />
-                              <span className="text-xs font-semibold text-slate-700">
-                                Item Category
-                              </span>
-                            </label>
-
-                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
-                              <input
-                                type="checkbox"
-                                checked={columnSettings.showItemCode}
-                                onChange={(e) =>
-                                  setColumnSettings((prev) => ({
-                                    ...prev,
-                                    showItemCode: e.target.checked,
-                                  }))
-                                }
-                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
-                              />
-                              <span className="text-xs font-semibold text-slate-700">
-                                Item Code
-                              </span>
-                            </label>
-
-                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
-                              <input
-                                type="checkbox"
-                                checked={columnSettings.showHsnSac}
-                                onChange={(e) =>
-                                  setColumnSettings((prev) => ({
-                                    ...prev,
-                                    showHsnSac: e.target.checked,
-                                  }))
-                                }
-                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
-                              />
-                              <span className="text-xs font-semibold text-slate-700">
-                                HSN/SAC Code
-                              </span>
-                            </label>
-
-                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
-                              <input
-                                type="checkbox"
-                                checked={columnSettings.showDescription}
-                                onChange={(e) =>
-                                  setColumnSettings((prev) => ({
-                                    ...prev,
-                                    showDescription: e.target.checked,
-                                  }))
-                                }
-                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
-                              />
-                              <span className="text-xs font-semibold text-slate-700">
-                                Description
-                              </span>
-                            </label>
-
-                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
-                              <input
-                                type="checkbox"
-                                checked={columnSettings.showDiscount}
-                                onChange={(e) =>
-                                  setColumnSettings((prev) => ({
-                                    ...prev,
-                                    showDiscount: e.target.checked,
-                                  }))
-                                }
-                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
-                              />
-                              <span className="text-xs font-semibold text-slate-700">
-                                Discount
-                              </span>
-                            </label>
-                          </div>
-
-                          <div className="my-1.5 border-t border-slate-100" />
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowColumnCustomizePopover(false);
-                              toast.info(
-                                "Configure template and column styles",
-                              );
-                            }}
-                            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs font-bold text-[#33077C] hover:bg-purple-50 transition-colors cursor-pointer"
-                          >
-                            <Settings className="w-3.5 h-3.5 text-[#33077C]" />
-                            <span>More Settings</span>
-                          </button>
-                        </div>
-                      )}
-                    </th>
-                    <th className="py-2.5 px-2 text-center w-10 text-slate-400"></th>
-                  </tr>
-                </thead>
-
-                {/* Table Body */}
-                <tbody className="divide-y divide-slate-200 bg-white">
-                  {formData.items.map((row, idx) => (
-                    <tr
-                      key={row.id}
-                      className="align-top hover:bg-purple-50/20 transition-colors group"
-                    >
-                      {/* Row Number */}
-                      <td className="py-2 px-2 text-center font-bold text-slate-500 border-r border-slate-200 bg-slate-50/30">
-                        {idx + 1}
-                      </td>
-
-                      {/* ITEM (Product Selector / Input) */}
-                      <td className="p-1.5 border-r border-slate-200 proforma-product-cell">
-                        <div className="relative">
-                          <div
-                            onClick={() => {
-                              setOpenProductDropdownRow(idx);
-                              setProductSearchQuery(row.productName || "");
-                              if (liveProducts.length === 0) {
-                                fetchLiveProducts();
-                              }
-                            }}
-                            className="w-full h-8 px-2 flex items-center justify-between bg-transparent hover:bg-slate-50 focus-within:bg-white border border-transparent focus-within:border-[#33077C] rounded-lg cursor-pointer transition-colors"
-                          >
-                            <input
-                              type="text"
-                              value={row.productName}
-                              {...fieldAttr(`items.${idx}.product`)}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenProductDropdownRow(idx);
-                                setProductSearchQuery(row.productName || "");
-                                if (liveProducts.length === 0) {
-                                  fetchLiveProducts();
-                                }
-                              }}
-                              onFocus={() => {
-                                setOpenProductDropdownRow(idx);
-                                setProductSearchQuery(row.productName || "");
-                                if (liveProducts.length === 0) {
-                                  fetchLiveProducts();
-                                }
-                              }}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                fe.clearError(`items.${idx}.product`);
-                                handleRowChange(idx, "productName", val);
-                                setProductSearchQuery(val);
-                                setOpenProductDropdownRow(idx);
-                                if (productSearchTimerRef.current) {
-                                  clearTimeout(productSearchTimerRef.current);
-                                }
-                                if (val.trim().length >= 1) {
-                                  productSearchTimerRef.current = setTimeout(
-                                    () => {
-                                      fetchLiveProducts(val.trim());
-                                    },
-                                    300,
-                                  );
-                                }
-                              }}
-                              placeholder="Type or select product item..."
-                              className="w-full bg-transparent text-xs font-semibold text-slate-800 outline-none cursor-pointer"
-                            />
-                            {isLoadingProducts ? (
-                              <Loader2 className="w-3.5 h-3.5 text-[#33077C] animate-spin shrink-0 ml-1" />
-                            ) : (
-                              <div
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (openProductDropdownRow === idx) {
-                                    setOpenProductDropdownRow(null);
-                                  } else {
-                                    setOpenProductDropdownRow(idx);
-                                    setProductSearchQuery(
-                                      row.productName || "",
-                                    );
-                                    if (liveProducts.length === 0) {
-                                      fetchLiveProducts();
-                                    }
-                                  }
-                                }}
-                                className="p-0.5 hover:bg-slate-100 rounded cursor-pointer shrink-0 ml-1"
-                              >
-                                <ChevronDown
-                                  className={`w-3.5 h-3.5 text-slate-400 transition-transform ${
-                                    openProductDropdownRow === idx
-                                      ? "rotate-180 text-[#33077C]"
-                                      : ""
-                                  }`}
-                                />
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Searchable Dropdown Popover matching user screenshot */}
-                          {openProductDropdownRow === idx && (
-                            <div
-                              ref={productDropdownRef}
-                              className="product-dropdown-popover absolute left-0 top-full mt-1.5 w-80 sm:w-96 max-w-[90vw] bg-white rounded-2xl shadow-2xl shadow-purple-900/15 border border-purple-100 z-50 p-2 text-xs animate-in fade-in zoom-in-95 duration-100 overflow-hidden"
-                            >
-                              {/* Search Bar matching Customer Dropdown */}
-                              <div className="relative mb-2">
-                                <div className="flex items-center w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-xl focus-within:border-[#33077C] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#33077C]/10 transition-all">
-                                  <Search className="w-3.5 h-3.5 text-slate-400 shrink-0 mr-2" />
-                                  <input
-                                    type="text"
-                                    placeholder="Search product by name, SKU or category..."
-                                    value={productSearchQuery}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      setProductSearchQuery(val);
-                                      if (productSearchTimerRef.current) {
-                                        clearTimeout(
-                                          productSearchTimerRef.current,
-                                        );
-                                      }
-                                      if (val.trim().length >= 1) {
-                                        productSearchTimerRef.current =
-                                          setTimeout(() => {
-                                            fetchLiveProducts(val.trim());
-                                          }, 300);
-                                      }
-                                    }}
-                                    autoFocus
-                                    className="w-full bg-transparent text-xs font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                                  />
-                                  {productSearchQuery && (
-                                    <button
-                                      type="button"
-                                      onClick={() => setProductSearchQuery("")}
-                                      className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
-                                    >
-                                      <X className="w-3.5 h-3.5" />
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-
-                              {/* 1. Add New Product Button */}
-                              <div className="pb-1.5 mb-1 border-b border-slate-100">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setActiveItemRowIndex(idx);
-                                    setOpenProductDropdownRow(null);
-                                    setIsAddItemModalOpen(true);
-                                  }}
-                                  className="w-full py-1.5 px-2.5 rounded-xl bg-purple-50 hover:bg-purple-100/80 text-[#33077C] font-bold text-xs flex items-center justify-center gap-1.5 transition-colors border border-purple-200/80 cursor-pointer"
-                                >
-                                  <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                                  <span>Add New Product</span>
-                                </button>
-                              </div>
-
-                              {/* 2. Options List */}
-                              <div className="max-h-64 overflow-y-auto p-0.5 space-y-0.5 divide-y divide-slate-100/60 custom-scrollbar">
-                                {/* Option: Clear / None */}
-                                <div
-                                  onClick={() => {
-                                    handleRowChange(idx, "productId", "");
-                                    handleRowChange(idx, "productName", "");
-                                    setOpenProductDropdownRow(null);
-                                  }}
-                                  className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between text-xs transition-colors cursor-pointer ${
-                                    !row.productName
-                                      ? "bg-purple-50 text-[#33077C] font-bold"
-                                      : "hover:bg-slate-50 text-slate-600"
-                                  }`}
-                                >
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-slate-400 italic">
-                                      None / Clear Product
-                                    </span>
-                                  </div>
-                                  {!row.productName && (
-                                    <Check className="w-4 h-4 text-[#33077C]" />
-                                  )}
-                                </div>
-
-                                {isLoadingProducts &&
-                                matchingProducts.length === 0 ? (
-                                  <div className="py-6 text-center text-slate-400 text-xs flex items-center justify-center gap-2">
-                                    <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
-                                    <span>Loading products...</span>
-                                  </div>
-                                ) : matchingProducts.length === 0 ? (
-                                  <div className="py-6 px-3 text-center text-slate-400">
-                                    <p className="text-xs font-semibold text-slate-600">
-                                      No products found
-                                    </p>
-                                    <p className="text-[11px] text-slate-400 mt-0.5">
-                                      Try typing a different name, category, or
-                                      SKU
-                                    </p>
-                                    {productSearchQuery.trim() && (
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setActiveItemRowIndex(idx);
-                                          setOpenProductDropdownRow(null);
-                                          setIsAddItemModalOpen(true);
-                                        }}
-                                        className="mt-2.5 inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-[#33077C] text-white text-[11px] font-bold hover:bg-[#4309A2] transition-colors"
-                                      >
-                                        <Plus className="w-3 h-3" />
-                                        <span>
-                                          Add "{productSearchQuery.trim()}"
-                                        </span>
-                                      </button>
-                                    )}
-                                  </div>
-                                ) : (
-                                  matchingProducts.map((p) => {
-                                    const isSelected =
-                                      row.productId === p.productId ||
-                                      (row.productName &&
-                                        row.productName === p.productName);
-                                    const imgUrl =
-                                      (p as any).imageUrl || (p as any).image;
-                                    return (
-                                      <div
-                                        key={p.productId || (p as any).id}
-                                        onClick={() =>
-                                          handleSelectProduct(idx, p)
-                                        }
-                                        className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-3 text-xs transition-colors cursor-pointer text-left ${
-                                          isSelected
-                                            ? "bg-purple-50 text-[#33077C] font-semibold border border-purple-200/60"
-                                            : "hover:bg-slate-50/80 text-slate-800"
-                                        }`}
-                                      >
-                                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                          {/* Avatar Initials / Image Circle matching SalesRepSearchableSelect */}
-                                          <div className="w-8 h-8 rounded-full bg-purple-100 text-[#33077C] font-bold text-xs flex items-center justify-center shrink-0 border border-purple-200/60 overflow-hidden">
-                                            {imgUrl ? (
-                                              <img
-                                                src={imgUrl}
-                                                alt={p.productName}
-                                                className="w-full h-full object-cover"
-                                              />
-                                            ) : (
-                                              <span>
-                                                {getInitials(
-                                                  p.productName,
-                                                  "PR",
-                                                )}
-                                              </span>
-                                            )}
-                                          </div>
-
-                                          <div className="min-w-0 flex-1">
-                                            <div className="flex items-center gap-2 flex-wrap">
-                                              <span className="font-bold text-slate-900 truncate">
-                                                {p.productName}
-                                              </span>
-                                              {p.category && (
-                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium truncate max-w-[120px]">
-                                                  {p.category}
-                                                </span>
-                                              )}
-                                              {(p as any).status ? (
-                                                <span
-                                                  className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
-                                                    String((p as any).status).toLowerCase() === "inactive"
-                                                      ? "bg-rose-50 text-rose-700 border-rose-200/60"
-                                                      : "bg-emerald-50 text-emerald-700 border-emerald-200/60"
-                                                  }`}
-                                                >
-                                                  {(p as any).status}
-                                                </span>
-                                              ) : (
-                                                <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
-                                                  Active
-                                                </span>
-                                              )}
-                                            </div>
-                                            <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5 flex-wrap">
-                                              <span className="font-mono text-slate-600">
-                                                SKU:{" "}
-                                                {p.sku ||
-                                                  (p as any).productCode ||
-                                                  "PRD"}
-                                              </span>
-                                              <ProductStockLabel
-                                                qty={p.stockQty}
-                                                unit={p.unit}
-                                              />
-                                              {p.hsnCode && (
-                                                <span className="text-slate-400 font-mono text-[10px]">
-                                                  • HSN: {p.hsnCode}
-                                                </span>
-                                              )}
-                                            </div>
-                                          </div>
-                                        </div>
-
-                                        <div className="flex items-center gap-2 shrink-0">
-                                          <span className="font-bold text-[#33077C] text-xs">
-                                            ₹
-                                            {Number(
-                                              p.unitPrice || 0,
-                                            ).toLocaleString("en-IN")}
-                                          </span>
-                                          {isSelected && (
-                                            <Check className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
-                                          )}
-                                        </div>
-                                      </div>
-                                    );
-                                  })
-                                )}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                        <FormError
-                          message={fe.errors[`items.${idx}.product`]}
-                        />
-                      </td>
-
-                      {/* ITEM CATEGORY (optional column) */}
-                      {columnSettings.showItemCategory && (
-                        <td className="p-1.5 border-r border-slate-200">
-                          <input
-                            type="text"
-                            value={row.category || ""}
-                            onChange={(e) =>
-                              handleRowChange(idx, "category", e.target.value)
-                            }
-                            placeholder="Category"
-                            className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none transition-colors"
-                          />
-                        </td>
-                      )}
-
-                      {/* ITEM CODE (optional column) */}
-                      {columnSettings.showItemCode && (
-                        <td className="p-1.5 border-r border-slate-200">
-                          <input
-                            type="text"
-                            value={row.itemCode || row.sku || ""}
-                            onChange={(e) =>
-                              handleRowChange(idx, "itemCode", e.target.value)
-                            }
-                            placeholder="Code / SKU"
-                            className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-mono font-medium text-slate-700 outline-none transition-colors"
-                          />
-                        </td>
-                      )}
-
-                      {/* HSN/SAC CODE (optional column) */}
-                      {columnSettings.showHsnSac && (
-                        <td className="p-1.5 border-r border-slate-200">
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            value={row.hsnCode || ""}
-                            onChange={(e) =>
-                              handleRowChange(idx, "hsnCode", sanitizeHsnCodeInput(e.target.value))
-                            }
-                            placeholder="HSN / SAC"
-                            className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-mono font-medium text-slate-700 outline-none transition-colors"
-                          />
-                        </td>
-                      )}
-
-                      {/* DESCRIPTION (optional column) */}
-                      {columnSettings.showDescription && (
-                        <td className="p-1.5 border-r border-slate-200">
-                          <input
-                            type="text"
-                            value={row.description || ""}
-                            onChange={(e) =>
-                              handleRowChange(
-                                idx,
-                                "description",
-                                e.target.value,
-                              )
-                            }
-                            placeholder="Item description"
-                            className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none transition-colors"
-                          />
-                        </td>
-                      )}
-
-                      {/* BATCH NO */}
-                      <td className="p-1.5 border-r border-slate-200">
-                        {(() => {
-                          const matchedProduct = availableProducts.find(
-                            (s) =>
-                              (row.productId &&
-                                (s.productId === row.productId ||
-                                  s.id === row.productId)) ||
-                              (row.productName &&
-                                s.productName.toLowerCase() ===
-                                  row.productName.trim().toLowerCase()),
-                          );
-                          const cleanName = (row.productName || "")
-                            .trim()
-                            .replace(/[^a-zA-Z0-9]/g, "")
-                            .toUpperCase();
-                          const prefix =
-                            row.itemCode ||
-                            row.sku ||
-                            cleanName.substring(0, 4) ||
-                            "BAT";
-                          // Option list: the selected product's own batches. The stock figure
-                          // shown comes only from the backend batch-stock hook.
-                          const hookBatches = batchStock.getBatches(
-                            row.productId,
-                          );
-                          const batches: Array<{ batchNo: string }> =
-                            hookBatches.length > 0
-                              ? hookBatches.map((hb) => ({
-                                  batchNo: hb.batchNo,
-                                }))
-                              : matchedProduct?.batches &&
-                                  matchedProduct.batches.length > 0
-                                ? matchedProduct.batches
-                                : [{ batchNo: `BAT-${prefix}-01` }];
-
-                          // If the user selected to manually type a custom batch
-                          if (row.isCustomBatch) {
-                            return (
-                              <div className="flex items-center gap-1">
-                                <input
-                                  type="text"
-                                  value={row.batch || ""}
-                                  onChange={(e) =>
-                                    handleRowChange(
-                                      idx,
-                                      "batch",
-                                      e.target.value,
-                                    )
-                                  }
-                                  placeholder="Batch No"
-                                  className="w-full h-8 px-2 text-center bg-white border border-[#33077C] rounded-lg text-xs font-semibold font-mono text-[#33077C] outline-none"
-                                  autoFocus
-                                />
-                                <button
-                                  type="button"
-                                  title="Back to dropdown"
-                                  onClick={() =>
-                                    handleRowChange(idx, "isCustomBatch", false)
-                                  }
-                                  className="h-8 px-1.5 text-slate-400 hover:text-slate-600 text-xs font-bold transition-colors cursor-pointer"
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                            );
-                          }
-
-                          // If a product is selected in this row
-                          if (row.productName || row.productId) {
-                            return (
-                              <select
-                                value={row.batch || ""}
-                                onChange={(e) => {
-                                  if (e.target.value === "__custom__") {
-                                    handleRowChange(idx, "isCustomBatch", true);
-                                    handleRowChange(idx, "batch", "");
-                                  } else {
-                                    handleRowChange(
-                                      idx,
-                                      "batch",
-                                      e.target.value,
-                                    );
-                                  }
-                                }}
-                                className="w-full h-8 px-2 bg-purple-50/70 hover:bg-purple-100/70 focus:bg-white text-[#33077C] border border-purple-200 focus:border-[#33077C] rounded-lg text-xs font-bold font-mono outline-none cursor-pointer transition-colors"
-                              >
-                                <option value="">Select Batch...</option>
-                                {batches.map((b) => (
-                                  <option key={b.batchNo} value={b.batchNo}>
-                                    {b.batchNo}{" "}
-                                    {(() => {
-                                      const av = batchStock.getAvailable(
-                                        row.productId,
-                                        b.batchNo,
-                                      );
-                                      return av === null
-                                        ? ""
-                                        : `(${av} in stock)`;
-                                    })()}
-                                  </option>
-                                ))}
-                                {row.batch &&
-                                  !batches.some(
-                                    (b) => b.batchNo === row.batch,
-                                  ) && (
-                                    <option value={row.batch}>
-                                      {row.batch}
-                                    </option>
-                                  )}
-                              </select>
-                            );
-                          }
-
-                          // If no product is selected yet in this row
-                          return (
-                            <input
-                              type="text"
-                              value={row.batch || ""}
-                              onChange={(e) =>
-                                handleRowChange(idx, "batch", e.target.value)
-                              }
-                              placeholder="Batch No"
-                              className="w-full h-8 px-2 text-center bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-semibold font-mono text-[#33077C] outline-none transition-colors"
-                            />
-                          );
-                        })()}
-                      </td>
-
-                      {/* QTY */}
-                      <td className="p-1.5 border-r border-slate-200">
-                        <input
-                          type="number"
-                          min="1"
-                          value={row.quantity || ""}
-                          {...fieldAttr(`items.${idx}.quantity`)}
-                          onKeyDown={handleNonNegativeKeyDown}
-                          onChange={(e) => {
-                            fe.clearError(`items.${idx}.quantity`);
-                            handleRowChange(
-                              idx,
-                              "quantity",
-                              Number(e.target.value),
-                            );
-                          }}
-                          className={`w-full h-8 px-2 text-center bg-transparent hover:bg-slate-50 focus:bg-white border ${fe.errors[`items.${idx}.quantity`] || liveStockErrors[`items.${idx}.quantity`] ? "border-rose-400" : "border-transparent"} focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors`}
-                        />
-                        <FormError
-                          message={
-                            fe.errors[`items.${idx}.quantity`] ||
-                            liveStockErrors[`items.${idx}.quantity`]
-                          }
-                        />
-                      </td>
-
-                      {/* UNIT */}
-                      <td className="p-1.5 border-r border-slate-200">
-                        <select
-                          value={row.unit || "NONE"}
-                          onChange={(e) =>
-                            handleRowChange(idx, "unit", e.target.value)
-                          }
-                          className="w-full h-8 px-1 text-center bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-700 outline-none cursor-pointer uppercase transition-colors"
-                        >
-                          {UNIT_OPTIONS.map((u) => (
-                            <option key={u} value={u}>
-                              {u}
-                            </option>
-                          ))}
-                          {row.unit && !UNIT_OPTIONS.includes(row.unit) && (
-                            <option value={row.unit}>{row.unit}</option>
-                          )}
-                        </select>
-                      </td>
-
-                      {/* PRICE / UNIT */}
-                      <td className="p-1.5 border-r border-slate-200">
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          value={row.unitPrice === 0 ? "" : row.unitPrice}
-                          placeholder="0.00"
-                          {...fieldAttr(`items.${idx}.price`)}
-                          onKeyDown={handleNonNegativeKeyDown}
-                          onChange={(e) => {
-                            fe.clearError(`items.${idx}.price`);
-                            handleRowChange(
-                              idx,
-                              "unitPrice",
-                              Number(e.target.value),
-                            );
-                          }}
-                          className={`w-full h-8 px-2 text-right bg-transparent hover:bg-slate-50 focus:bg-white border ${fe.errors[`items.${idx}.price`] ? "border-rose-400" : "border-transparent"} focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors`}
-                        />
-                        <FormError message={fe.errors[`items.${idx}.price`]} />
-                      </td>
-
-                      {/* DISCOUNT % and AMOUNT (conditional) */}
-                      {columnSettings.showDiscount && (
-                        <>
-                          <td className="p-1.5 border-r border-slate-200 w-24 min-w-[96px]">
-                            <input
-                              type="number"
-                              min="0"
-                              max="100"
-                              value={
-                                row.discountPercent === 0
-                                  ? ""
-                                  : row.discountPercent
-                              }
-                              placeholder="0"
-                              {...fieldAttr(`items.${idx}.discountPercent`)}
-                              onKeyDown={handleNonNegativeKeyDown}
-                              onChange={(e) => {
-                                fe.clearError(`items.${idx}.discountPercent`);
-                                handleRowChange(
-                                  idx,
-                                  "discountPercent",
-                                  Number(e.target.value),
-                                );
-                              }}
-                              className={`w-full h-8 px-1.5 text-center bg-transparent hover:bg-slate-50 focus:bg-white border ${fe.errors[`items.${idx}.discountPercent`] ? "border-rose-400" : "border-transparent"} focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none transition-colors`}
-                            />
-                            <FormError
-                              message={
-                                fe.errors[`items.${idx}.discountPercent`]
-                              }
-                            />
-                          </td>
-
-                          <td className="p-1.5 border-r border-slate-200 w-28 min-w-[120px]">
-                            <input
-                              type="number"
-                              step="0.01"
-                              min="0"
-                              value={
-                                row.discountAmount === 0
-                                  ? ""
-                                  : row.discountAmount
-                              }
-                              placeholder="0.00"
-                              {...fieldAttr(`items.${idx}.discountAmount`)}
-                              onKeyDown={handleNonNegativeKeyDown}
-                              onChange={(e) => {
-                                fe.clearError(`items.${idx}.discountAmount`);
-                                handleRowChange(
-                                  idx,
-                                  "discountAmount",
-                                  Number(e.target.value),
-                                );
-                              }}
-                              className={`w-full h-8 px-2 text-right bg-transparent hover:bg-slate-50 focus:bg-white border ${fe.errors[`items.${idx}.discountAmount`] ? "border-rose-400" : "border-transparent"} focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none transition-colors`}
-                            />
-                            <FormError
-                              message={fe.errors[`items.${idx}.discountAmount`]}
-                            />
-                          </td>
-                        </>
-                      )}
-
-                      {/* TAX % (Select) */}
-                      <td className="p-1.5 border-r border-slate-200 w-28 min-w-[110px]">
-                        <select
-                          value={row.taxPercent}
-                          {...fieldAttr(`items.${idx}.taxPercent`)}
-                          onChange={(e) => {
-                            fe.clearError(`items.${idx}.taxPercent`);
-                            handleRowChange(
-                              idx,
-                              "taxPercent",
-                              Number(e.target.value),
-                            );
-                          }}
-                          className="w-full h-8 px-1.5 text-center bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none cursor-pointer transition-colors"
-                        >
-                          {TAX_RATE_OPTIONS.map((t) => (
-                            <option key={t.label} value={t.rate}>
-                              {t.label}
-                            </option>
-                          ))}
-                          {!TAX_RATE_OPTIONS.some((t) => t.rate === Number(row.taxPercent || 0)) && (
-                            <option value={row.taxPercent}>
-                              GST @ {row.taxPercent}% (old slab)
-                            </option>
-                          )}
-                        </select>
-                        <FormError
-                          message={fe.errors[`items.${idx}.taxPercent`]}
-                        />
-                      </td>
-
-                      {/* TAX AMOUNT */}
-                      <td className="p-1.5 border-r border-slate-200 w-28 min-w-[110px] text-right pr-3 font-medium text-slate-700">
-                        {row.taxAmount ? Number(row.taxAmount).toFixed(2) : "0"}
-                      </td>
-
-                      {/* AMOUNT (ROW TOTAL) */}
-                      <td className="p-1.5 border-r border-slate-200 min-w-[130px] text-right pr-3 font-bold text-slate-900">
-                        {Number(row.total || 0).toLocaleString("en-IN", {
-                          minimumFractionDigits: 2,
-                        })}
-                      </td>
-
-                      {/* Row Delete Button */}
-                      <td className="p-1 text-center">
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveRow(idx)}
-                          className="p-1 text-slate-300 hover:text-rose-600 rounded transition-colors"
-                          title="Delete row"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-
-                {/* Table Footer (ADD ROW + COLUMN TOTALS - CRM Theme) */}
-                <tfoot>
-                  <tr className="bg-slate-50/90 border-t border-slate-200 font-bold text-slate-800 text-xs">
-                    {/* Add Row Button Column */}
-                    <td
-                      colSpan={
-                        2 +
-                        (columnSettings.showItemCategory ? 1 : 0) +
-                        (columnSettings.showItemCode ? 1 : 0) +
-                        (columnSettings.showHsnSac ? 1 : 0) +
-                        (columnSettings.showDescription ? 1 : 0)
-                      }
-                      className="py-2.5 px-3 border-r border-slate-200"
-                    >
-                      <button
-                        type="button"
-                        onClick={handleAddRow}
-                        className="px-3 py-1.5 rounded-lg border border-[#33077C] text-[#33077C] hover:bg-purple-50 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-                      >
-                        <Plus className="w-3.5 h-3.5 stroke-[3]" />
-                        <span>ADD ROW</span>
-                      </button>
-                    </td>
-
-                    {/* Total QTY */}
-                    <td className="py-2.5 px-2 text-center border-r border-slate-200 font-extrabold text-[#33077C]">
-                      {formCalculations.totalQty}
-                    </td>
-
-                    {/* Total label */}
-                    <td className="py-2.5 px-2 text-center border-r border-slate-200 text-slate-500 uppercase text-[11px]">
-                      TOTAL
-                    </td>
-
-                    {/* Price total placeholder */}
-                    <td className="border-r border-slate-200"></td>
-
-                    {/* Discount total placeholder & amount */}
-                    {columnSettings.showDiscount && (
-                      <>
-                        <td className="border-r border-slate-200"></td>
-                        <td className="py-2.5 px-2 text-right border-r border-slate-200 pr-3 font-semibold text-slate-700">
-                          {formCalculations.totalDiscount > 0
-                            ? formCalculations.totalDiscount.toFixed(2)
-                            : "0"}
-                        </td>
-                      </>
-                    )}
-
-                    {/* Tax placeholder */}
-                    <td className="border-r border-slate-200"></td>
-
-                    {/* Total Tax Amount */}
-                    <td className="py-2.5 px-2 text-right border-r border-slate-200 pr-3 font-semibold text-slate-700">
-                      {formCalculations.totalTax > 0
-                        ? formCalculations.totalTax.toFixed(2)
-                        : "0"}
-                    </td>
-
-                    {/* Total Line Amount */}
-                    <td className="py-2.5 px-3 text-right border-r border-slate-200 font-extrabold text-[#33077C]">
-                      ₹
-                      {formCalculations.lineAmountTotal.toLocaleString(
-                        "en-IN",
-                        { minimumFractionDigits: 2 },
-                      )}
-                    </td>
-
-                    <td></td>
-                  </tr>
-                </tfoot>
-              </table>
+              <SalesDocumentItemsTable
+                items={formData.items as SalesDocumentLineItem[]}
+                withGst={formData.withGst}
+                formErrors={fe.errors}
+                liveStockErrors={liveStockErrors}
+                openProductDropdownRow={openProductDropdownRow}
+                setOpenProductDropdownRow={setOpenProductDropdownRow}
+                productDropdownRef={productDropdownRef}
+                productSearchQuery={productSearchQuery}
+                setProductSearchQuery={setProductSearchQuery}
+                productSearchTimerRef={productSearchTimerRef}
+                isLoadingProducts={isLoadingProducts}
+                hasProductsLoaded={liveProducts.length > 0}
+                matchingProducts={matchingProducts}
+                fetchLiveProducts={fetchLiveProducts}
+                onOpenAddProductModal={(rowIdx) => {
+                  setActiveItemRowIndex(rowIdx);
+                  setIsAddItemModalOpen(true);
+                }}
+                onSelectProduct={handleSelectProduct}
+                onClearProduct={handleClearProductRow}
+                onProductNameChange={(rowIdx, val) =>
+                  handleRowChange(rowIdx, "productName", val)
+                }
+                getBatchesForRow={(item) => {
+                  const hookBatches = batchStock.getBatches(item.productId);
+                  if (hookBatches.length > 0) return hookBatches;
+                  const matchedProduct = availableProducts.find(
+                    (s) =>
+                      (item.productId &&
+                        (s.productId === item.productId ||
+                          s.id === item.productId)) ||
+                      (item.productName &&
+                        s.productName.toLowerCase() ===
+                          item.productName.trim().toLowerCase()),
+                  );
+                  return (matchedProduct?.batches as any[]) || [];
+                }}
+                getBatchAvailable={(productId, batchNo) =>
+                  batchStock.getAvailable(productId, batchNo)
+                }
+                onBatchChange={(rowIdx, batchNo) =>
+                  handleRowChange(rowIdx, "batch", batchNo)
+                }
+                onUnitChange={(rowIdx, unit) =>
+                  handleRowChange(rowIdx, "unit", unit)
+                }
+                onFieldChange={(rowIdx, field, val) =>
+                  handleRowChange(rowIdx, field, val)
+                }
+                onAddRow={handleAddRow}
+                onRemoveRow={handleRemoveRow}
+                clearError={fe.clearError}
+              />
             </div>
 
             {/* 5. BOTTOM SECTION: ACTION TILES (LEFT) & ROUND OFF / TOTAL (RIGHT) */}
@@ -4703,49 +3917,28 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                 )}
               </div>
 
-              {/* Right Column: Round Off & Grand Total Box (CRM Theme) */}
-              <div className="lg:col-span-5 flex flex-col items-end gap-4">
-                {/* Round Off Input */}
-                <div className="flex items-center gap-3">
-                  <label className="flex items-center gap-2 cursor-pointer select-none text-xs font-bold text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={enableRoundOff}
-                      onChange={(e) => {
-                        setEnableRoundOff(e.target.checked);
-                        if (!e.target.checked) setManualRoundOff(0);
-                      }}
-                      className="w-4 h-4 rounded text-[#33077C] focus:ring-[#33077C] border-slate-300 accent-[#33077C]"
-                    />
-                    <span>Round Off</span>
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    disabled={!enableRoundOff}
-                    value={
-                      formCalculations.roundOffDiff
-                        ? formCalculations.roundOffDiff
-                        : ""
-                    }
-                    placeholder="0.00"
-                    onChange={(e) => setManualRoundOff(Number(e.target.value))}
-                    className="w-24 h-8 px-2.5 text-right bg-white border border-slate-200 disabled:bg-slate-50 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#33077C]"
-                  />
-                </div>
-
-                {/* Grand Total Display */}
-                <div className="flex items-center gap-4">
-                  <span className="text-sm font-bold text-slate-800">
-                    Total
-                  </span>
-                  <div className="w-48 sm:w-56 h-11 px-3.5 bg-purple-50/30 border-2 border-purple-200 rounded-xl flex items-center justify-end text-base font-extrabold text-[#33077C] shadow-2xs">
-                    ₹{" "}
-                    {formCalculations.grandTotal.toLocaleString("en-IN", {
-                      minimumFractionDigits: 2,
-                    })}
-                  </div>
-                </div>
+              {/* Right Column: GST Tax Breakdown, Round Off & Grand Total */}
+              <div className="lg:col-span-5 flex justify-end">
+                <SalesDocumentSummaryPanel
+                  withGst={formData.withGst}
+                  gstType={formData.gstType}
+                  subtotal={formCalculations.rawSubtotal}
+                  totalDiscount={formCalculations.totalDiscount}
+                  taxableAmount={formCalculations.taxableAmount}
+                  cgst={formCalculations.cgst}
+                  sgst={formCalculations.sgst}
+                  igst={formCalculations.igst}
+                  totalTax={formCalculations.totalTax}
+                  roundOff={formCalculations.roundOffDiff}
+                  grandTotal={formCalculations.grandTotal}
+                  enableRoundOff={enableRoundOff}
+                  onToggleRoundOff={(checked) => {
+                    setEnableRoundOff(checked);
+                    if (!checked) setManualRoundOff(0);
+                    else setManualRoundOff(null);
+                  }}
+                  onManualRoundOffChange={(val) => setManualRoundOff(val)}
+                />
               </div>
             </div>
           </div>
@@ -5590,7 +4783,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                       right: `${convertDropdownPos.right}px`,
                                       zIndex: 9999,
                                     }}
-                                    className="proforma-convert-dropdown-menu w-56 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
+                                    className="proforma-convert-dropdown-menu min-w-[260px] w-max bg-white rounded-xl shadow-2xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 text-left font-sans"
                                     onClick={(e) => e.stopPropagation()}
                                   >
                                     {!itemStages.isOrderConverted && (

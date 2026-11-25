@@ -242,11 +242,19 @@ export const mapDeliveryChallanRecordToPayload = (
         } else if (it.itemCode && String(it.itemCode).trim()) {
           itemPayload.sku = String(it.itemCode).trim();
         }
-        if (typeof it.discountPercent === 'number' && !isNaN(it.discountPercent) && it.discountPercent > 0) {
-          itemPayload.discountPercent = it.discountPercent;
+        const gross = itemPayload.quantity * itemPayload.unitPrice;
+        const resolvedDiscountPercent =
+          typeof it.discountPercent === 'number' && !isNaN(it.discountPercent) && it.discountPercent > 0
+            ? it.discountPercent
+            : Number(it.discountAmount) > 0 && gross > 0
+              ? Math.min(100, Math.round((Number(it.discountAmount) / gross) * 10000) / 100)
+              : 0;
+        if (resolvedDiscountPercent > 0) {
+          itemPayload.discountPercent = resolvedDiscountPercent;
         }
-        if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent >= 0) {
-          itemPayload.taxPercent = it.taxPercent;
+        const effectiveTaxPercent = challan.withGst === false ? 0 : Number(it.taxPercent);
+        if (!isNaN(effectiveTaxPercent) && effectiveTaxPercent >= 0) {
+          itemPayload.taxPercent = effectiveTaxPercent;
         }
         if (it.batch && String(it.batch).trim()) {
           itemPayload.batch = String(it.batch).trim();
@@ -289,6 +297,9 @@ export const mapDeliveryChallanRecordToPayload = (
   }
   if (typeof challan.withGst === 'boolean') {
     payload.withGst = challan.withGst;
+  }
+  if (challan.gstType) {
+    payload.gstType = challan.gstType;
   }
   if (typeof challan.roundOff === 'number' && !isNaN(challan.roundOff)) {
     payload.roundOff = Number(challan.roundOff.toFixed(2));

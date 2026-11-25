@@ -1553,14 +1553,13 @@ export const PurchaseReturnView: React.FC = () => {
       docDate: pret.returnDate,
       status: pret.returnStatus,
       statusColor: pret.returnStatus === 'Completed' ? 'emerald' : pret.returnStatus === 'Rejected' ? 'rose' : 'purple',
-      referenceNo: pret.purchaseNo,
       partyTitle: 'Supplier / Vendor',
       partyName: pret.supplierName,
       extraMeta: [
         { label: 'Return ID', value: pret.returnNo },
         ...(pret.purchaseReturnManualNo ? [{ label: 'Return No', value: pret.purchaseReturnManualNo }] : []),
-        { label: 'Original Purchase Bill', value: pret.purchaseNo || 'N/A' },
-        { label: 'Refund Method / Status', value: pret.refundStatus },
+        ...(pret.purchaseNo ? [{ label: 'Original Purchase Bill', value: pret.purchaseNo }] : []),
+        ...(pret.refundStatus ? [{ label: 'Refund Method / Status', value: pret.refundStatus }] : []),
       ],
       columns: [
         { header: 'Returned Product Item', width: '38%' },
@@ -1588,7 +1587,15 @@ export const PurchaseReturnView: React.FC = () => {
     if (!pret.id) return pret;
     try {
       const res = await commercePurchaseReturnApi.getPurchaseReturnById(pret.id);
-      if (res?.data) return { ...pret, ...mapApiPurchaseReturnToUi(res.data) };
+      if (res?.data) {
+        const mapped = mapApiPurchaseReturnToUi(res.data);
+        return {
+          ...pret,
+          ...mapped,
+          purchaseReturnManualNo:
+            mapped.purchaseReturnManualNo || pret.purchaseReturnManualNo || '',
+        };
+      }
     } catch (err) {
       console.warn('Could not fetch latest purchase return for print/download:', err);
     }
@@ -2313,7 +2320,12 @@ export const PurchaseReturnView: React.FC = () => {
                         <input
                           type="number"
                           min="0"
-                          value={it.purchasedQuantity}
+                          value={
+                            it.purchasedQuantity === 0
+                              ? ""
+                              : it.purchasedQuantity || ""
+                          }
+                          placeholder="0"
                           onChange={(e) => {
                             const val = Math.max(0, Number(e.target.value));
                             setReturnItems((prev) => {
@@ -2332,7 +2344,12 @@ export const PurchaseReturnView: React.FC = () => {
                           type="number"
                           min="1"
                           {...fieldAttr(`items.${idx}.quantity`)}
-                          value={it.returnQuantity}
+                          value={
+                            it.returnQuantity === 0
+                              ? ""
+                              : it.returnQuantity || ""
+                          }
+                          placeholder="0"
                           onKeyDown={handleNonNegativeKeyDown}
                           onChange={(e) => handleReturnQtyChange(idx, Number(e.target.value))}
                           className="w-full h-8 px-2 text-center bg-white border border-purple-300 rounded-lg text-xs font-bold text-[#33077C] outline-none focus:ring-2 focus:ring-purple-200"
@@ -2347,7 +2364,8 @@ export const PurchaseReturnView: React.FC = () => {
                           min="0"
                           step="0.01"
                           {...fieldAttr(`items.${idx}.price`)}
-                          value={it.unitPrice}
+                          value={it.unitPrice === 0 ? "" : it.unitPrice || ""}
+                          placeholder="0"
                           onKeyDown={handleNonNegativeKeyDown}
                           onChange={(e) => handleUnitPriceChange(idx, Number(e.target.value))}
                           className="w-full h-8 px-2 text-right bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-[#4309A2]"

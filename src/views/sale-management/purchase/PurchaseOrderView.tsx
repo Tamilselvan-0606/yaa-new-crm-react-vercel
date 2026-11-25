@@ -1591,7 +1591,14 @@ export const PurchaseOrderView: React.FC = () => {
         if (res?.data) {
           const fresh = mapApiPurchaseOrderToUi(res.data);
           setSelectedPurchase((prev) =>
-            prev && prev.id === po.id ? { ...prev, ...fresh } : prev,
+            prev && prev.id === po.id
+              ? {
+                  ...prev,
+                  ...fresh,
+                  purchaseBillManualNo:
+                    fresh.purchaseBillManualNo || prev.purchaseBillManualNo || "",
+                }
+              : prev,
           );
         }
       }
@@ -1771,7 +1778,12 @@ export const PurchaseOrderView: React.FC = () => {
       if (po.id) {
         const res = await workPurchaseOrderApi.getPurchaseOrderById(po.id);
         if (res?.data) {
-          targetPo = mapApiPurchaseOrderToUi(res.data);
+          const mapped = mapApiPurchaseOrderToUi(res.data);
+          targetPo = {
+            ...mapped,
+            purchaseBillManualNo:
+              mapped.purchaseBillManualNo || po.purchaseBillManualNo || "",
+          };
         }
       }
     } catch (err) {
@@ -1805,7 +1817,6 @@ export const PurchaseOrderView: React.FC = () => {
           : targetPo.purchaseStatus === "Cancelled"
             ? "rose"
             : "purple",
-      referenceNo: targetPo.purchaseInvoiceNo,
       partyTitle: "Supplier / Vendor",
       partyName: targetPo.supplierName,
       partyCompany: targetPo.supplier?.name || (matchedSup as any)?.company,
@@ -1822,11 +1833,12 @@ export const PurchaseOrderView: React.FC = () => {
         ...(targetPo.purchaseBillManualNo
           ? [{ label: "Purchase No", value: targetPo.purchaseBillManualNo }]
           : []),
-        {
-          label: "Payment Terms",
-          value: targetPo.paymentTerms || "—",
-        },
-        { label: "Payment Status", value: targetPo.paymentStatus },
+        ...(targetPo.paymentTerms
+          ? [{ label: "Payment Terms", value: targetPo.paymentTerms }]
+          : []),
+        ...(targetPo.paymentStatus
+          ? [{ label: "Payment Status", value: targetPo.paymentStatus }]
+          : []),
         ...(targetPo.expectedDeliveryDate
           ? [
               {
@@ -1866,6 +1878,7 @@ export const PurchaseOrderView: React.FC = () => {
         unit: it.unit,
         quantity: it.quantity,
         unitPrice: it.purchasePrice,
+        discountPercent: (it as any).discountPercent,
         taxPercent: isGstActive ? it.taxPercent || 0 : 0,
         total: it.total,
       })),
@@ -1873,7 +1886,7 @@ export const PurchaseOrderView: React.FC = () => {
       discount: targetPo.discount || targetPo.discountAmount || 0,
       tax: {
         withGst: isGstActive,
-        gstType: targetPo.gstType || "intra_state",
+        gstType: targetPo.gstType,
         taxAmount: targetPo.tax || targetPo.taxAmount,
         cgst: targetPo.cgst,
         sgst: targetPo.sgst,
@@ -1881,10 +1894,12 @@ export const PurchaseOrderView: React.FC = () => {
       },
       shipping: targetPo.shipping || 0,
       otherCharges: targetPo.otherCharges || 0,
+      roundOff: (targetPo as any).roundOff,
       grandTotal: targetPo.grandTotal,
       paidAmount: targetPo.paidAmount,
       balance: targetPo.balance,
       notes: targetPo.notes,
+      terms: (targetPo as any).terms,
     };
   };
 
@@ -2791,18 +2806,19 @@ export const PurchaseOrderView: React.FC = () => {
       docTypeTitle: "PAYMENT OUT VOUCHER",
       docNo: pm.paymentNo,
       docDate: pm.paymentDate,
-      status: "Paid",
+      status: (pm as any).status || "",
       statusColor: "emerald",
       partyTitle: "Paid To (Supplier)",
       partyName:
-        editingPurchase?.supplierName || formData.supplierName || "Supplier",
+        editingPurchase?.supplierName || formData.supplierName || "",
       extraMeta: [
         {
           label: "Purchase Bill #",
           value: editingPurchase?.purchaseNo || formData.purchaseNo,
         },
-        { label: "Payment Mode", value: pm.paymentMode || "Bank Transfer" },
-        { label: "Reference #", value: pm.referenceNo || "N/A" },
+        ...(pm.paymentMode
+          ? [{ label: "Payment Mode", value: pm.paymentMode }]
+          : []),
       ],
       items: [
         {
@@ -2810,7 +2826,7 @@ export const PurchaseOrderView: React.FC = () => {
           quantity: 1,
           unitPrice: pm.amount,
           total: pm.amount,
-          remarks: pm.notes || "Payment disbursement recorded successfully",
+          remarks: pm.notes || undefined,
         },
       ],
       grandTotal: pm.amount,
@@ -2834,18 +2850,19 @@ export const PurchaseOrderView: React.FC = () => {
         docTypeTitle: "PAYMENT OUT VOUCHER",
         docNo: pm.paymentNo,
         docDate: pm.paymentDate,
-        status: "Paid",
+        status: (pm as any).status || "",
         statusColor: "emerald",
         partyTitle: "Paid To (Supplier)",
         partyName:
-          editingPurchase?.supplierName || formData.supplierName || "Supplier",
+          editingPurchase?.supplierName || formData.supplierName || "",
         extraMeta: [
           {
             label: "Purchase Bill #",
             value: editingPurchase?.purchaseNo || formData.purchaseNo,
           },
-          { label: "Payment Mode", value: pm.paymentMode || "Bank Transfer" },
-          { label: "Reference #", value: pm.referenceNo || "N/A" },
+          ...(pm.paymentMode
+            ? [{ label: "Payment Mode", value: pm.paymentMode }]
+            : []),
         ],
         items: [
           {
@@ -2853,7 +2870,7 @@ export const PurchaseOrderView: React.FC = () => {
             quantity: 1,
             unitPrice: pm.amount,
             total: pm.amount,
-            remarks: pm.notes || "Payment disbursement recorded successfully",
+            remarks: pm.notes || undefined,
           },
         ],
         grandTotal: pm.amount,

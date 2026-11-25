@@ -75,14 +75,14 @@ export function printTableReport(rawOptions: PrintTableOptions): void {
   const {
   title,
   subtitle,
-  companyName = 'Yaa Creations Inc.',
-  companyDetails = 'Enterprise CRM & Sales Management Division | support@yaacreations.com',
+  companyName = '',
+  companyDetails = '',
   columns,
   data,
   summaryRow,
   metrics,
   orientation = 'landscape',
-  footerNote = 'Confidential & Proprietary • Generated automatically by YAA CRM',
+  footerNote = '',
   } = withDdMmYyyyTable(rawOptions);
   const printWindow = window.open('', '_blank', 'width=1100,height=850');
   if (!printWindow) {
@@ -534,12 +534,35 @@ export interface DocumentPrintOptions {
  * Fills any company fields the caller did not supply from the organization API profile
  * (no hardcoded fallbacks).
  */
+const isConvertedStatus = (val?: string | null): boolean =>
+  /^converted$/i.test(String(val || '').trim());
+
+const isReferenceMetaLabel = (label?: string | null): boolean =>
+  /^(ref(\.|erence)?(\s*(#|no\.?|id|\/.*))?|(utr|txn)\s*\/\s*ref(\s*no\.?)?)$/i.test(
+    String(label || '').trim(),
+  );
+
+const filterConvertedMeta = (
+  extraMeta?: { label: string; value: string }[],
+): { label: string; value: string }[] =>
+  (extraMeta || []).filter(
+    (m) =>
+      !isConvertedStatus(m.value) &&
+      !/^converted(\s+(ref|invoice|to|status))?$/i.test(String(m.label || '').trim()) &&
+      !isReferenceMetaLabel(m.label),
+  );
+
 export async function withCompanyProfile(rawOptions: DocumentPrintOptions): Promise<DocumentPrintOptions> {
   const options = withDdMmYyyyDates(rawOptions);
+  const sanitizedStatus = isConvertedStatus(options.status) ? '' : options.status;
+  const sanitizedExtraMeta = filterConvertedMeta(options.extraMeta);
   try {
     const p = await fetchOrganizationDocumentProfile();
     return {
       ...options,
+      referenceNo: undefined,
+      status: sanitizedStatus,
+      extraMeta: sanitizedExtraMeta,
       companyName: options.companyName || p.companyName,
       companySubtitle: options.companySubtitle ?? p.companySubtitle,
       companyAddress: options.companyAddress || p.companyAddress,
@@ -548,7 +571,12 @@ export async function withCompanyProfile(rawOptions: DocumentPrintOptions): Prom
       companyEmail: options.companyEmail || p.companyEmail,
     };
   } catch {
-    return options;
+    return {
+      ...options,
+      referenceNo: undefined,
+      status: sanitizedStatus,
+      extraMeta: sanitizedExtraMeta,
+    };
   }
 }
 
@@ -567,7 +595,6 @@ export async function printBusinessDocument(rawOptions: DocumentPrintOptions): P
     dueDate,
     status,
     statusColor = 'purple',
-    referenceNo,
     companyName = '',
     companySubtitle = '',
     companyAddress = '',
@@ -766,7 +793,6 @@ export async function printBusinessDocument(rawOptions: DocumentPrintOptions): P
               <div class="section-title">Record Details</div>
               <div class="meta-row"><span>Document No:</span><strong>${docNo}</strong></div>
               <div class="meta-row"><span>Date:</span><strong>${docDate}</strong></div>
-              ${referenceNo ? `<div class="meta-row"><span>Ref / Order #:</span><strong>${referenceNo}</strong></div>` : ''}
               ${extraMeta.map(m => `<div class="meta-row"><span>${m.label}:</span><strong>${m.value}</strong></div>`).join('')}
             </div>
           </div>
@@ -963,7 +989,25 @@ export async function downloadTableReport(
   rawOptions: PrintTableOptions,
   filename?: string
 ): Promise<void> {
-  const options = withDdMmYyyyTable(rawOptions);
+  let options = withDdMmYyyyTable(rawOptions);
+  if (!options.companyName) {
+    try {
+      const p = await fetchOrganizationDocumentProfile();
+      const detailsParts = [
+        p.companySubtitle,
+        p.companyGstin ? `GSTIN: ${p.companyGstin}` : '',
+        p.companyPhone ? `Phone: ${p.companyPhone}` : '',
+        p.companyEmail,
+      ].filter(Boolean);
+      options = {
+        ...options,
+        companyName: p.companyName || options.companyName,
+        companyDetails: options.companyDetails || detailsParts.join(' | '),
+      };
+    } catch {
+      // ignore if profile unavailable
+    }
+  }
   const blob = await pdf(React.createElement(TableReportPDF, { options }) as any).toBlob();
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
