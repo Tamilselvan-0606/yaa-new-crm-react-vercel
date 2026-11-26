@@ -128,7 +128,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   login: async (email: string, password?: string) => {
-    set({ isLoading: true });
     try {
       const res = await api.login(email, password);
       if (res.success && res.user) {
@@ -161,7 +160,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       toast.error('Login Failed', {
         description: error.message || 'Invalid credentials or connection error.',
       });
-      set({ isLoading: false });
       return false;
     }
   },

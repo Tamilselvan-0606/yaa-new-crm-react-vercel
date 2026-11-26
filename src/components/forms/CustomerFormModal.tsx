@@ -134,7 +134,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
     }
   }, [isOpen, isSuperAdmin, activeOrgId]);
 
-  // Fetch Sub-Organizations
+  // Fetch Sub-Organizations (filtered for Client Management)
   useEffect(() => {
     if (!isOpen) return;
     const fetchSubOrgs = async () => {
@@ -142,11 +142,16 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         setLoadingSubOrgs(true);
         const orgToQuery = isSuperAdmin ? selectedOrgId : activeOrgId;
         const res = await subOrganizationApi.getSubOrganizations(
-          { page_no: 1, page_size: 100, pagination_required: 'false' },
+          { page_no: 1, page_size: 100, pagination_required: 'false', subOrganizationType: 1 },
           orgToQuery || undefined
         );
         if (res && Array.isArray(res.data)) {
-          setSubOrganizations(res.data);
+          // Only include Client Management (1) or Both (3); exclude pure Sales Management (2)
+          const subs = res.data.filter((s: any) => {
+            const t = Number(s.subOrganizationType);
+            return isNaN(t) || t === 1 || t === 3;
+          });
+          setSubOrganizations(subs);
 
           // If sub-org admin, resolve default sub-org
           if (isSubOrgAdmin) {
@@ -155,11 +160,11 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
               (currentUser as any)?.subOrganization?.name ||
               (currentUser as any)?.subOrganizationName ||
               '';
-            const matched = res.data.find(
+            const matched = subs.find(
               (s) =>
                 s.name.toLowerCase() === savedSubName.toLowerCase() ||
                 s.id === (currentUser as any)?.subOrganizationId
-            ) || res.data[0];
+            ) || subs[0];
             if (matched) {
               setSelectedSubOrgId(matched.id);
               setSelectedSubOrgName(matched.name);
@@ -186,6 +191,14 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
       setBranchesLoadedFor('');
       return;
     }
+    // If no sub-organization has been selected, require selecting sub-organization first
+    if (!selectedSubOrgId) {
+      setBranches([]);
+      setSelectedBranchId('');
+      setBranchesLoadedFor(branchesKey);
+      setLoadingBranches(false);
+      return;
+    }
     let cancelled = false;
     const fetchBranches = async () => {
       try {
@@ -204,7 +217,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         if (cancelled) return;
         const all = excludeInactiveBranches(filterBranchesForSuite(res && Array.isArray(res.data) ? res.data : [], isSaleManagement));
         let list = !selectedSubOrgId
-          ? all
+          ? []
           : selectedSubOrgId === '__PARENT_ORG__'
             ? // Main organization: only branches not attached to a sub-organization
               all.filter((b) => !b.subOrganizationId)
@@ -968,6 +981,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
               }}
               options={
                 (() => {
+                  if (!selectedSubOrgId) return [];
                   const existingName =
                     initialCustomer?.branchName ||
                     (initialCustomer as any)?.branch?.name ||
@@ -978,16 +992,22 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                       ? [{ id: selectedBranchId, name: existingName || 'Current Branch', location: '' } as any]
                       : []),
                   ];
-                  return combined.length > 0
-                    ? combined.map((b) => ({
-                        value: b.id,
-                        label: `${b.name}${(b as any).code ? ` (${(b as any).code})` : ''}`,
-                      }))
-                    : [{ value: '', label: loadingBranches ? 'Loading branches...' : 'No branches found' }];
+                  return combined.map((b) => ({
+                    value: b.id,
+                    label: `${b.name}${(b as any).code ? ` (${(b as any).code})` : ''}`,
+                  }));
                 })()
               }
               optionVariant="strong"
-              placeholder={loadingBranches ? 'Loading branches...' : 'Select Branch'}
+              placeholder={
+                !selectedSubOrgId
+                  ? 'Select Sub-Organization first'
+                  : loadingBranches
+                  ? 'Loading branches...'
+                  : branches.length === 0
+                  ? 'No branches in this sub-organization'
+                  : 'Select Branch'
+              }
             />
             )}
             {formErrors.branch && (

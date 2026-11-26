@@ -2906,13 +2906,12 @@ export const StocksView: React.FC = () => {
                     required: "Please enter the category.",
                     validate: (val) =>
                       !val ||
-                      /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) ||
-                      "The category can contain only letters and spaces.",
+                      /^[A-Za-z0-9\s&'.-]+$/.test(String(val).trim()) ||
+                      "The category can contain only letters, numbers, and spaces.",
                   })}
-                  onKeyDown={handleTextOnlyKeyDown}
                   onInput={(e) => {
                     e.currentTarget.value = e.currentTarget.value.replace(
-                      /[^A-Za-z\s&'.-]/g,
+                      /[^A-Za-z0-9\s&'.-]/g,
                       "",
                     );
                   }}
@@ -2941,13 +2940,12 @@ export const StocksView: React.FC = () => {
                     required: "Please enter the subcategory.",
                     validate: (val) =>
                       !val ||
-                      /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) ||
-                      "The subcategory can contain only letters and spaces.",
+                      /^[A-Za-z0-9\s&'.-]+$/.test(String(val).trim()) ||
+                      "The subcategory can contain only letters, numbers, and spaces.",
                   })}
-                  onKeyDown={handleTextOnlyKeyDown}
                   onInput={(e) => {
                     e.currentTarget.value = e.currentTarget.value.replace(
-                      /[^A-Za-z\s&'.-]/g,
+                      /[^A-Za-z0-9\s&'.-]/g,
                       "",
                     );
                   }}

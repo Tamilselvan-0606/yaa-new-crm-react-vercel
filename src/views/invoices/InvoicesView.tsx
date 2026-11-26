@@ -303,6 +303,14 @@ const mapApiProformaToSavedInvoice =(api: ProformaInvoiceApiItem): SavedInvoice 
 // Newest first by sequence number (highest document number first, fallback to createdAt timestamp).
 const newestFirst = <T extends { createdAt?: string; invoiceNumber?: string }>(list: T[]): T[] =>
   [...list].sort((a, b) => {
+    // 1. If created dates are on different days, sort newer calendar date first
+    const dateA = (a.createdAt || '').slice(0, 10);
+    const dateB = (b.createdAt || '').slice(0, 10);
+    if (dateA && dateB && dateA !== dateB) {
+      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    }
+
+    // 2. Parse numeric sequence from document serial number (e.g. INV-ORG-0010 -> 10, INV-ORG-0008 -> 8)
     const parseSeq = (str?: string) => {
       const match = (str || '').match(/(?:\d{4}-)?(\d+)$/i) || (str || '').match(/(\d+)/g);
       if (match) {
@@ -314,8 +322,13 @@ const newestFirst = <T extends { createdAt?: string; invoiceNumber?: string }>(l
     const seqA = parseSeq(a.invoiceNumber);
     const seqB = parseSeq(b.invoiceNumber);
     if (seqA !== seqB) return seqB - seqA;
-    const diff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
-    return diff || String(b.invoiceNumber || '').localeCompare(String(a.invoiceNumber || ''), undefined, { numeric: true });
+
+    // 3. Fallback to exact timestamp
+    const timeA = new Date(a.createdAt || 0).getTime();
+    const timeB = new Date(b.createdAt || 0).getTime();
+    if (timeA !== timeB) return timeB - timeA;
+
+    return String(b.invoiceNumber || '').localeCompare(String(a.invoiceNumber || ''), undefined, { numeric: true });
   });
 
 const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
@@ -644,6 +657,8 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
           status: statusParam,
           sortBy: 'createdAt',
           sortOrder: 'desc',
+          sort_by: 'created_at',
+          sort_order: 'desc',
         };
 
         if (isSuperAdmin) {
@@ -694,6 +709,8 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
           status: statusParam,
           sortBy: 'createdAt',
           sortOrder: 'desc',
+          sort_by: 'created_at',
+          sort_order: 'desc',
         };
 
         if (isSuperAdmin) {

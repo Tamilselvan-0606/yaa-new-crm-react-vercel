@@ -543,7 +543,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
       (!!d.hasWholesale && d.wholesaleTaxType === "Included");
     const taxMissing = !d.taxRate || !d.taxRate.trim() || d.taxRate === "None";
     const checks: Array<[string, string | null]> = [
-      ["taxRate", anyTaxIncluded && taxMissing ? "Select a tax rate: a price is marked as tax included." : null],
+      ["taxRate", anyTaxIncluded && taxMissing ? "Select a tax rate: a price is marked as With Tax." : null],
       ["category", checkRequiredSelection(d.category, "category")],
       ["subcategory", checkRequiredSelection(d.subcategory, "subcategory")],
       ["unit", checkRequiredSelection(d.unit, "unit")],
@@ -990,8 +990,8 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                           }
                           className="shrink-0 h-full px-2.5 sm:px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
                         >
-                          <option value="Excluded">Excluded</option>
-                          <option value="Included">Included</option>
+                          <option value="Excluded">Without Tax</option>
+                          <option value="Included">With Tax</option>
                         </select>
                       </div>
                       <FormError message={fe.errors.salePrice} showIcon />
@@ -1096,8 +1096,8 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                               }
                               className="shrink-0 h-full px-2.5 sm:px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
                             >
-                              <option value="Excluded">Excluded</option>
-                              <option value="Included">Included</option>
+                              <option value="Excluded">Without Tax</option>
+                              <option value="Included">With Tax</option>
                             </select>
                           </div>
                           <FormError message={fe.errors.wholesalePrice} showIcon />
@@ -1169,8 +1169,8 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                           }
                           className="shrink-0 h-full px-2.5 sm:px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
                         >
-                          <option value="Excluded">Excluded</option>
-                          <option value="Included">Included</option>
+                          <option value="Excluded">Without Tax</option>
+                          <option value="Included">With Tax</option>
                         </select>
                       </div>
                       <FormError message={fe.errors.purchasePrice} showIcon />

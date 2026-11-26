@@ -17,6 +17,7 @@ import {
   validateBatchStock,
 } from "../../../../utils/formValidation";
 import { parseNumericValue } from "../../../../utils/validation";
+import { appendZeroStockErrors } from "../../../../utils/stockDisplay";
 
 // -----------------------------------------------------------------------------
 // Invoice form validation (pure, no API calls)
@@ -62,6 +63,8 @@ export interface InvoiceValidationContext {
     item: SaleProductItem,
     index: number,
   ) => number | null | undefined;
+  /** Overall product-level stock quantity, used to block 0-stock items even when unbatched. */
+  productStockQty?: (productId: string) => number | null | undefined;
 }
 
 export const isInvoiceRowBlank = (it: SaleProductItem) =>
@@ -148,7 +151,18 @@ export const validateInvoiceForm = (
           : undefined,
       },
     );
-    Object.entries(stockErrs).forEach(([k, v]) => {
+    const combinedStockErrs = ctx.productStockQty
+      ? appendZeroStockErrors(form.items, {
+          errors: stockErrs,
+          resolveProductId: (it) =>
+            isInvoiceRowBlank(it) ? undefined : ctx.resolveProductId(it),
+          getProductStockQty: ctx.productStockQty,
+          getCredit: ctx.stockCredit
+            ? (_l, i) => Number(ctx.stockCredit!(form.items[i], i) || 0)
+            : undefined,
+        })
+      : stockErrs;
+    Object.entries(combinedStockErrs).forEach(([k, v]) => {
       if (!errors[k]) errors[k] = String(v);
     });
   }

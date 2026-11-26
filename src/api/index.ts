@@ -222,6 +222,9 @@ export * from './commerce/collectionApi';
 
 export * from './commerce/salesDashboardTypes';
 export * from './commerce/salesDashboardApi';
+export * from './commerce/firmTypes';
+export * from './commerce/firmApi';
+export { firmApi, mapApiFirmToFirmItem } from './commerce/firmApi';
 export * from './ai/aiApi';
 
 export * from './ai/productImageApi';

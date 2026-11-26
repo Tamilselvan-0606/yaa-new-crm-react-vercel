@@ -1540,7 +1540,7 @@ export const SupplierView: React.FC = () => {
                   dataField="phone"
                   value={field.value || ""}
                   error={errors.phone?.message as string | undefined}
-                  placeholder="e.g. 9988776655"
+                  placeholder="Enter phone number"
                   onChange={(v) => field.onChange(v)}
                 />
               )}
@@ -1555,7 +1555,7 @@ export const SupplierView: React.FC = () => {
                   dataField="whatsappNumber"
                   value={field.value || ""}
                   error={errors.whatsappNumber?.message as string | undefined}
-                  placeholder="e.g. 9988776655"
+                  placeholder="Enter WhatsApp number"
                   onChange={(v) => field.onChange(v)}
                 />
               )}

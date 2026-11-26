@@ -304,17 +304,25 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
       .catch((e) => console.warn('Could not load orgs:', e));
   }, [isOpen, isSuperAdmin, activeOrgId]);
 
-  // 3. Sub-organizations depend only on the organization
+  // 3. Sub-organizations depend only on the organization (filtered for Client Management)
   useEffect(() => {
     if (!isOpen) return;
     let isMounted = true;
     setLoadingSubOrgs(true);
 
     subOrganizationApi
-      .getSubOrganizations({ page_no: 1, page_size: 100, pagination_required: 'false' }, effectiveOrgId)
+      .getSubOrganizations(
+        { page_no: 1, page_size: 100, pagination_required: 'false', subOrganizationType: 1 },
+        effectiveOrgId
+      )
       .then((res) => {
         if (!isMounted) return;
-        const subs = Array.isArray(res?.data) ? res.data : [];
+        const allSubs = Array.isArray(res?.data) ? res.data : [];
+        // Only include Client Management (1) or Both (3); exclude pure Sales Management (2)
+        const subs = allSubs.filter((s: any) => {
+          const t = Number(s.subOrganizationType);
+          return isNaN(t) || t === 1 || t === 3;
+        });
         setSubOrganizations(subs);
 
         if (isSubOrgAdmin) {
@@ -351,6 +359,14 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
       setBranchesLoadedFor('');
       return;
     }
+    // If no sub-organization has been selected, require selecting sub-organization first
+    if (!selectedSubOrgId) {
+      setBranches([]);
+      setSelectedBranchId('');
+      setBranchesLoadedFor(branchesKey);
+      setLoadingBranches(false);
+      return;
+    }
     let isMounted = true;
     setLoadingBranches(true);
 
@@ -369,7 +385,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
       .then((rows: BranchApiItem[]) => excludeInactiveBranches(filterBranchesForSuite(rows, isSaleManagement)))
       .then((all: BranchApiItem[]) => {
         let list = !selectedSubOrgId
-          ? all
+          ? []
           : selectedSubOrgId === '__PARENT_ORG__'
             ? // Main organization: only branches not attached to a sub-organization
               all.filter((b) => !b.subOrganizationId)
@@ -689,6 +705,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
               }}
               options={
                 (() => {
+                  if (!selectedSubOrgId) return [];
                   const existingName =
                     initialLead?.branchName ||
                     (initialLead as any)?.branch?.name ||
@@ -699,16 +716,22 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
                       ? [{ id: selectedBranchId, name: existingName || 'Current Branch', location: '' } as any]
                       : []),
                   ];
-                  return combined.length > 0
-                    ? combined.map((b) => ({
-                        value: b.id,
-                        label: `${b.name}${(b as any).code ? ` (${(b as any).code})` : ''}`,
-                      }))
-                    : [{ value: '', label: loadingBranches ? 'Loading branches...' : 'No branches found' }];
+                  return combined.map((b) => ({
+                    value: b.id,
+                    label: `${b.name}${(b as any).code ? ` (${(b as any).code})` : ''}`,
+                  }));
                 })()
               }
               optionVariant="strong"
-              placeholder={loadingBranches ? 'Loading branches...' : 'Select Branch'}
+              placeholder={
+                !selectedSubOrgId
+                  ? 'Select Sub-Organization first'
+                  : loadingBranches
+                  ? 'Loading branches...'
+                  : branches.length === 0
+                  ? 'No branches in this sub-organization'
+                  : 'Select Branch'
+              }
             />
             )}
             {formErrors.branch && (

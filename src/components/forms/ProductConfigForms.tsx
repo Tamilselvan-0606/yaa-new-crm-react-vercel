@@ -64,7 +64,7 @@ export const PillSelect: React.FC<PillSelectProps> = ({ options, selected, onCha
 const inputClass = "w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all";
 const labelClass = "text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5";
 
-const BILLING_CYCLE_OPTIONS = ['Monthly', 'Quarterly', 'Annually'];
+const BILLING_CYCLE_OPTIONS = ['Monthly', 'Quarterly', 'Half-Yearly', 'Yearly'];
 
 // =========================================================================
 // 1. YAACONNECT SUB-STEPS

@@ -311,15 +311,18 @@ export const Header: React.FC<HeaderProps> = ({
 
     const isMatch = (sub: { subOrganizationType?: any; organizationType?: any }) => {
       const code = Number(sub.subOrganizationType);
+      // Explicit numeric typing: 1 = Client Management, 2 = Sales Management, 3 = Both
       if (code === 3) return true;
       if (code === 1) return !isSales;
       if (code === 2) return isSales;
+
+      // Textual fallback
       const t = String(normalizeTypeString(sub.organizationType) || '').toLowerCase();
       if (t.includes('both') || t.includes('all')) return true;
       if (isSales) {
         return t.includes('sale');
       } else {
-        return t.includes('client') || !t.includes('sale');
+        return t.includes('client');
       }
     };
 
@@ -493,10 +496,11 @@ export const Header: React.FC<HeaderProps> = ({
         }
       }
       if (suite === 'all') return true;
-      return isSalesMode ? suite.includes('sale') : !suite.includes('sale');
+      return isSalesMode ? suite.includes('sale') : suite.includes('client');
     };
     return apiBranches.filter((b) => {
       if (!isMatch(b)) return false;
+      // When a specific sub-organization is selected in the header, ONLY show branches of that sub-organization
       if (currentSubOrgId) {
         return b.subOrganizationId === currentSubOrgId;
       }

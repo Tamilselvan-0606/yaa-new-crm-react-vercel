@@ -142,6 +142,7 @@ export const LoginView: React.FC = () => {
   const {
     register: registerLogin,
     handleSubmit: handleLoginSubmit,
+    setValue: setValueLogin,
     formState: { errors: loginErrors, isSubmitting: isLoginSubmitting },
     getValues: getLoginValues,
   } = useForm<LoginFields>({
@@ -321,9 +322,14 @@ export const LoginView: React.FC = () => {
         navigate('/', { replace: true });
       } else {
         setErrorMsg('Invalid email or password. Please verify and try again.');
+        // Ensure values remain populated in the inputs on login failure
+        setValueLogin('email', data.email, { shouldDirty: true, shouldTouch: true });
+        setValueLogin('password', data.password, { shouldDirty: true, shouldTouch: true });
       }
     } catch (err: any) {
       setErrorMsg(err?.message || 'Authentication failed. Please try again.');
+      setValueLogin('email', data.email, { shouldDirty: true, shouldTouch: true });
+      setValueLogin('password', data.password, { shouldDirty: true, shouldTouch: true });
     }
   };
 
@@ -562,13 +568,7 @@ export const LoginView: React.FC = () => {
                 </button>
               </div>
 
-              {/* Error Banner */}
-              {errorMsg && (
-                <div className="mb-5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2.5 animate-in fade-in zoom-in-95 duration-150">
-                  <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
-                  <div className="flex-1 font-medium">{errorMsg}</div>
-                </div>
-              )}
+
 
               {/* TAB 1: OTP LOGIN FORM */}
               {loginTab === 'otp' && (

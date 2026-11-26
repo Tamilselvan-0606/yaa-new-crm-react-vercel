@@ -709,6 +709,8 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
         status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
         sortBy: 'createdAt',
         sortOrder: 'desc',
+        sort_by: 'created_at',
+        sort_order: 'desc',
       };
 
       if (isSuperAdmin && !isOrgSuperAdmin) {
@@ -729,14 +731,32 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       if (res && res.data) {
         const mapped = res.data.map(mapApiQuoteToUi);
         mapped.sort((a, b) => {
+          // 1. If created dates are on different days, sort newer calendar date first
+          const dateA = (a.createdAt || '').slice(0, 10);
+          const dateB = (b.createdAt || '').slice(0, 10);
+          if (dateA && dateB && dateA !== dateB) {
+            return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+          }
+
+          // 2. Parse numeric sequence from quotation serial number
           const parseSeq = (str?: string) => {
-            const match = (str || '').match(/(?:EST-(?:\d{4}-)?)(\d+)/i);
-            return match ? parseInt(match[1], 10) : 0;
+            const match = (str || '').match(/(?:EST-(?:\d{4}-)?)(\d+)/i) || (str || '').match(/(\d+)/g);
+            if (match) {
+              const last = Array.isArray(match) ? match[match.length - 1] : match[1];
+              return parseInt(last, 10) || 0;
+            }
+            return 0;
           };
           const seqA = parseSeq(a.estimateNumber);
           const seqB = parseSeq(b.estimateNumber);
           if (seqA !== seqB) return seqB - seqA;
-          return (b.estimateNumber || '').localeCompare(a.estimateNumber || '');
+
+          // 3. Fallback to exact timestamp
+          const timeA = new Date(a.createdAt || 0).getTime();
+          const timeB = new Date(b.createdAt || 0).getTime();
+          if (timeA !== timeB) return timeB - timeA;
+
+          return (b.estimateNumber || '').localeCompare(a.estimateNumber || '', undefined, { numeric: true });
         });
         setQuotes(mapped);
         setTotalRecords(res.pagination?.totalRecords ?? mapped.length);

@@ -2656,7 +2656,7 @@ export const PaymentInView: React.FC = () => {
                   setNewCustomerPhone(e.target.value);
                   quickFE.clearError("quickPhone");
                 }}
-                placeholder="e.g. +91 98765 43210"
+                placeholder="Enter phone number"
                 className={FORM_INPUT_CLS}
               />
               <FormError message={quickFE.errors.quickPhone} />

@@ -1,8 +1,7 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Building2,
   Plus,
-  Search,
   Eye,
   Pencil,
   Trash2,
@@ -10,19 +9,12 @@ import {
   Ban,
   PauseCircle,
   MoreVertical,
-  Mail,
   Phone,
-  MapPin,
-  Calendar,
-  Building,
-  FileText,
   User,
-  ShieldCheck,
-  RotateCcw,
-  Upload,
   X,
   Check,
-  Image as ImageIcon,
+  RefreshCw,
+  AlertTriangle,
 } from 'lucide-react';
 import { Button } from '../../../components/common/Button';
 import { SearchBar } from '../../../components/common/SearchBar';
@@ -34,156 +26,41 @@ import { CustomSelect } from '../../../components/common/CustomSelect';
 import { DeleteConfirmationModal } from '../../../components/common/DeleteConfirmationModal';
 import { StatusChangeModal } from '../../../components/common/StatusChangeModal';
 import { PhoneField } from '../../../components/common/PhoneField';
-import { LocationFields, LocationMeta } from '../../../components/common/LocationFields';
 import { TextField, ReadOnlyField } from '../../../components/common/FormField';
 import { useAuth } from '../../../context/AuthContext';
 import { toast } from '../../../utils/toast';
 import { useRowActionMenu, ROW_MENU_TRIGGER_ATTR, ROW_MENU_ATTR } from '../../../hooks/useRowActionMenu';
 import { branchApi } from '../../../api/platform/branchApi';
 import { subOrganizationApi } from '../../../api/platform/subOrganizationApi';
-import { FirmItem } from './firmTypes';
-
-const STORAGE_KEY = 'nexus_crm_firms_catalog';
-
-const REGISTRATION_TYPES = [
-  'Proprietorship',
-  'Partnership',
-  'Private Limited (Pvt Ltd)',
-  'Limited Liability Partnership (LLP)',
-  'Public Limited',
-  'One Person Company (OPC)',
-  'Trust / Society / NGO',
-];
-
-const INITIAL_FIRMS: FirmItem[] = [
-  {
-    id: 'frm_1',
-    name: 'Apex Global Trading Co.',
-    code: 'FRM-001',
-    registrationType: 'Private Limited (Pvt Ltd)',
-    gstNumber: '33AABCA1234F1Z5',
-    panNumber: 'AABCA1234F',
-    contactPerson: 'Suresh Kumar',
-    email: 'suresh@apexglob.com',
-    phone: '9840123456',
-    whatsapp: '9840123456',
-    branchName: 'Main Branch - Chennai',
-    city: 'Chennai',
-    state: 'Tamil Nadu',
-    location: 'Chennai, Tamil Nadu',
-    pincode: '600001',
-    address: 'No 45, GST Road, Guindy Industrial Estate',
-    status: 'Active',
-    createdAt: '2026-01-15T10:00:00Z',
-  },
-  {
-    id: 'frm_2',
-    name: 'Prime Retail & Distribution',
-    code: 'FRM-002',
-    registrationType: 'Partnership',
-    gstNumber: '29ABCDE5678G2Z1',
-    panNumber: 'ABCDE5678G',
-    contactPerson: 'Ramesh Patel',
-    email: 'ramesh@primeretail.in',
-    phone: '9880198765',
-    whatsapp: '9880198765',
-    branchName: 'Bengaluru Hub',
-    city: 'Bengaluru',
-    state: 'Karnataka',
-    location: 'Bengaluru, Karnataka',
-    pincode: '560001',
-    address: '12th Cross, MG Road, Central Business District',
-    status: 'Active',
-    createdAt: '2026-02-10T11:30:00Z',
-  },
-  {
-    id: 'frm_3',
-    name: 'Zenith Logistics & Supply Firm',
-    code: 'FRM-003',
-    registrationType: 'Limited Liability Partnership (LLP)',
-    gstNumber: '36XYZAB9876H3Z8',
-    panNumber: 'XYZAB9876H',
-    contactPerson: 'Kavitha Reddy',
-    email: 'kavitha@zenithlog.com',
-    phone: '9700145678',
-    whatsapp: '9700145678',
-    branchName: 'Hyderabad Regional',
-    city: 'Hyderabad',
-    state: 'Telangana',
-    location: 'Hyderabad, Telangana',
-    pincode: '500081',
-    address: 'Cyber Towers Lane, Hitec City',
-    status: 'Active',
-    createdAt: '2026-03-05T09:15:00Z',
-  },
-];
+import { firmApi, mapApiFirmToFirmItem, FirmItem, ApiFirm } from '../../../api/commerce/firmApi';
 
 export const FirmsView: React.FC = () => {
   const { currentUser } = useAuth();
 
-  // Storage-backed state
-  const [firms, setFirms] = useState<FirmItem[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch {}
-    return INITIAL_FIRMS;
-  });
-
-  const saveFirms = (next: FirmItem[]) => {
-    setFirms(next);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    } catch {}
-  };
+  // API Data State
+  const [firms, setFirms] = useState<FirmItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [totalRecords, setTotalRecords] = useState(0);
 
   // Branch & Sub-Org options for modal dropdowns
-  const [branches, setBranches] = useState<Array<{ id: string; name: string; code?: string; subOrganizationId?: string }>>([]);
+  const [branches, setBranches] = useState<Array<{ id: string; name: string; code?: string; subOrganizationId?: string; branchType?: number | string; organizationType?: string }>>([]);
   const [subOrgs, setSubOrgs] = useState<Array<{ id: string; name: string; code?: string }>>([]);
   const [defaultOrgName] = useState<string>(() => {
     return (
       localStorage.getItem('active_organization_orgsuperadmin') ||
       localStorage.getItem('active_organization') ||
       currentUser?.name ||
-      'Yaa Creations'
+      'Main Organization'
     );
   });
-
-  useEffect(() => {
-    let alive = true;
-    branchApi
-      .getBranches({ page_no: 1, page_size: 100, pagination_required: 'false' })
-      .then((res) => {
-        if (alive && res?.data && Array.isArray(res.data)) {
-          setBranches(res.data.map((b: any) => ({ id: b.id, name: b.name, code: b.code, subOrganizationId: b.subOrganizationId })));
-        }
-      })
-      .catch(() => {});
-
-    subOrganizationApi
-      .getSubOrganizations({ page_no: 1, page_size: 100, pagination_required: 'false' })
-      .then((res) => {
-        if (alive && res?.data && Array.isArray(res.data)) {
-          setSubOrgs(res.data.map((s: any) => ({ id: s.id, name: s.name, code: s.code })));
-        }
-      })
-      .catch(() => {});
-
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   // Filter & Search states
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
-  const [pendingStatus, setPendingStatus] = useState<'All' | 'Active' | 'Inactive'>('All');
-  const [appliedStatus, setAppliedStatus] = useState<'All' | 'Active' | 'Inactive'>('All');
+  const [pendingStatus, setPendingStatus] = useState<'All' | 'Active' | 'Inactive' | 'Suspended'>('All');
+  const [appliedStatus, setAppliedStatus] = useState<'All' | 'Active' | 'Inactive' | 'Suspended'>('All');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(5);
+  const [pageSize, setPageSize] = useState(10);
 
   // Row action menu hook
   const rowMenu = useRowActionMenu(220);
@@ -193,9 +70,9 @@ export const FirmsView: React.FC = () => {
   const [editingFirm, setEditingFirm] = useState<FirmItem | null>(null);
   const [viewingFirm, setViewingFirm] = useState<FirmItem | null>(null);
   const [deletingFirm, setDeletingFirm] = useState<FirmItem | null>(null);
-  const [statusConfirmFirm, setStatusConfirmFirm] = useState<FirmItem | null>(null);
+  const [statusConfirmFirm, setStatusConfirmFirm] = useState<{ firm: FirmItem; targetStatus: 'Active' | 'Inactive' | 'Suspended' } | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const logoInputRef = useRef<HTMLInputElement>(null);
+  const [fetchingDetails, setFetchingDetails] = useState(false);
 
   // Form Fields
   const [formData, setFormData] = useState({
@@ -203,20 +80,99 @@ export const FirmsView: React.FC = () => {
     branchId: '',
     name: '',
     code: '',
-    logo: '',
     mobileNumber: '',
-    email: '',
-    gstNumber: '',
-    panNumber: '',
-    country: 'India',
-    state: '',
-    district: '',
-    city: '',
-    pincode: '',
-    address: '',
-    status: 'Active' as 'Active' | 'Inactive',
+    status: 'Active' as 'Active' | 'Inactive' | 'Suspended',
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  // Fetch branches and sub-organizations for selection
+  useEffect(() => {
+    let alive = true;
+    branchApi
+      .getBranches({ page_no: 1, page_size: 100, pagination_required: 'false' })
+      .then((res) => {
+        if (alive && res?.data && Array.isArray(res.data)) {
+          // Normalize and extract subOrgId across snake_case / camelCase
+          const mapped = res.data
+            .filter((b: any) => {
+              // Exclude pure Client Management branches if branchType / organizationType is present
+              const bt = Number(b.branchType);
+              if (bt === 1) return false;
+              const orgType = (b.organizationType || '').toLowerCase();
+              if (orgType.includes('client') && !orgType.includes('sale')) return false;
+              return true;
+            })
+            .map((b: any) => {
+              const subId = b.subOrganizationId || b.sub_organization_id || b.subOrganization?.id || null;
+              return {
+                id: b.id,
+                name: b.name,
+                code: b.code,
+                subOrganizationId: subId,
+                branchType: b.branchType,
+                organizationType: b.organizationType,
+              };
+            });
+          setBranches(mapped);
+        }
+      })
+      .catch(() => {});
+
+    // Fetch only Sales Management sub-organizations (type 2 = sales, type 3 = both)
+    subOrganizationApi
+      .getSubOrganizations({ page_no: 1, page_size: 100, pagination_required: 'false', subOrganizationType: 2 })
+      .then((res) => {
+        if (alive && res?.data && Array.isArray(res.data)) {
+          // Filter to ensure only Sales Management (2) or Both (3) are included, excluding pure Client Management (1)
+          const salesSubOrgs = res.data.filter((s: any) => {
+            const t = Number(s.subOrganizationType);
+            return isNaN(t) || t === 2 || t === 3;
+          });
+          setSubOrgs(salesSubOrgs.map((s: any) => ({ id: s.id, name: s.name, code: s.code })));
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Fetch live firms list from backend
+  const fetchFirmsList = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await firmApi.getFirms({
+        page_no: page,
+        page_size: pageSize,
+        pagination_required: 'true',
+        search: appliedSearch.trim() || undefined,
+        status: appliedStatus !== 'All' ? appliedStatus : undefined,
+        sort_by: 'created_at',
+        sort_order: 'desc',
+      });
+
+      if (res && Array.isArray(res.data)) {
+        setFirms(res.data.map(mapApiFirmToFirmItem));
+        setTotalRecords(res.pagination?.totalRecords ?? res.data.length);
+      } else {
+        setFirms([]);
+        setTotalRecords(0);
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch firms:', err);
+      const errMsg = err.response?.data?.error?.message || err.message || 'Failed to load firms';
+      toast.error(errMsg);
+      setFirms([]);
+      setTotalRecords(0);
+    } finally {
+      setLoading(false);
+    }
+  }, [page, pageSize, appliedSearch, appliedStatus]);
+
+  useEffect(() => {
+    fetchFirmsList();
+  }, [fetchFirmsList]);
 
   const updateField = (field: string, value: any) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -225,96 +181,68 @@ export const FirmsView: React.FC = () => {
     }
   };
 
-  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 2 * 1024 * 1024) {
-      toast.error('Logo file size must be less than 2MB');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      updateField('logo', reader.result as string);
-    };
-    reader.readAsDataURL(file);
-  };
-
-  // Filtered & Paginated records
-  const filteredFirms = useMemo(() => {
-    let result = [...firms];
-    if (appliedStatus !== 'All') {
-      result = result.filter((f) => f.status === appliedStatus);
-    }
-    const q = appliedSearch.trim().toLowerCase();
-    if (q) {
-      result = result.filter(
-        (f) =>
-          f.name.toLowerCase().includes(q) ||
-          f.code.toLowerCase().includes(q) ||
-          (f.contactPerson && f.contactPerson.toLowerCase().includes(q)) ||
-          (f.gstNumber && f.gstNumber.toLowerCase().includes(q)) ||
-          (f.city && f.city.toLowerCase().includes(q)) ||
-          (f.phone && f.phone.includes(q)) ||
-          (f.email && f.email.toLowerCase().includes(q))
-      );
-    }
-    return result;
-  }, [firms, appliedStatus, appliedSearch]);
-
-  const totalRecords = filteredFirms.length;
-  const paginatedFirms = useMemo(() => {
-    const start = (page - 1) * pageSize;
-    return filteredFirms.slice(start, start + pageSize);
-  }, [filteredFirms, page, pageSize]);
-
   // Handlers for Add / Edit
   const handleOpenAdd = () => {
     setEditingFirm(null);
     setFormErrors({});
-    const generatedCode = `FRM-${String(firms.length + 1).padStart(3, '0')}`;
     setFormData({
       subOrganizationId: '',
       branchId: '',
       name: '',
-      code: generatedCode,
-      logo: '',
+      code: 'Auto-generated',
       mobileNumber: '',
-      email: '',
-      gstNumber: '',
-      panNumber: '',
-      country: 'India',
-      state: '',
-      district: '',
-      city: '',
-      pincode: '',
-      address: '',
       status: 'Active',
     });
     setIsFormModalOpen(true);
   };
 
-  const handleOpenEdit = (firm: FirmItem) => {
-    setEditingFirm(firm);
+  const handleOpenEdit = async (firm: FirmItem) => {
     setFormErrors({});
+    setIsFormModalOpen(true);
+    setEditingFirm(firm);
     setFormData({
       subOrganizationId: firm.subOrganizationId || '',
       branchId: firm.branchId || '',
       name: firm.name,
       code: firm.code || '',
-      logo: firm.logo || '',
-      mobileNumber: firm.phone || '',
-      email: firm.email || '',
-      gstNumber: firm.gstNumber || '',
-      panNumber: firm.panNumber || '',
-      country: firm.country || 'India',
-      state: firm.state || '',
-      district: firm.district || '',
-      city: firm.city || '',
-      pincode: firm.pincode || '',
-      address: firm.address || '',
+      mobileNumber: firm.mobileNumber || firm.phone || '',
       status: firm.status,
     });
-    setIsFormModalOpen(true);
+
+    // Fetch full firm details by ID to ensure latest data
+    try {
+      setFetchingDetails(true);
+      const res = await firmApi.getFirmById(firm.id);
+      if (res?.data) {
+        const full = mapApiFirmToFirmItem(res.data);
+        setEditingFirm(full);
+        setFormData({
+          subOrganizationId: full.subOrganizationId || '',
+          branchId: full.branchId || '',
+          name: full.name,
+          code: full.code || '',
+          mobileNumber: full.mobileNumber || '',
+          status: full.status,
+        });
+      }
+    } catch (err) {
+      console.warn('Could not load detailed firm item, using list item:', err);
+    } finally {
+      setFetchingDetails(false);
+    }
+  };
+
+  // View details modal handler
+  const handleOpenView = async (firm: FirmItem) => {
+    setViewingFirm(firm);
+    try {
+      const res = await firmApi.getFirmById(firm.id);
+      if (res?.data) {
+        setViewingFirm(mapApiFirmToFirmItem(res.data));
+      }
+    } catch (err) {
+      console.warn('Could not load detailed firm item for view modal:', err);
+    }
   };
 
   const validateForm = () => {
@@ -322,102 +250,88 @@ export const FirmsView: React.FC = () => {
     if (!formData.name.trim()) errs.name = 'Firm name is required';
     if (!formData.mobileNumber.trim()) {
       errs.mobileNumber = 'Mobile number is required';
+    } else if (formData.mobileNumber.trim().length < 7) {
+      errs.mobileNumber = 'Please enter a valid mobile number';
     }
 
     setFormErrors(errs);
     return Object.keys(errs).length === 0;
   };
 
-  const handleSaveFirm = (e: React.FormEvent) => {
+  // Save (Create or Update)
+  const handleSaveFirm = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validateForm()) return;
     setSubmitting(true);
 
     try {
-      const matchedBranch = branches.find((b) => b.id === formData.branchId);
-      const matchedSub = formData.subOrganizationId === '__PARENT_ORG__'
-      ? { id: '__PARENT_ORG__', name: defaultOrgName ? `${defaultOrgName} (Main Organization)` : 'Main Organization' }
-      : subOrgs.find((s) => s.id === formData.subOrganizationId);
-      const locationStr = [formData.city, formData.state].filter(Boolean).join(', ');
+      const subOrgVal = formData.subOrganizationId && formData.subOrganizationId !== '__PARENT_ORG__'
+        ? formData.subOrganizationId
+        : null;
 
       if (editingFirm) {
-        const updated: FirmItem = {
-          ...editingFirm,
-          name: formData.name,
-          code: formData.code || editingFirm.code,
-          logo: formData.logo,
-          subOrganizationId: formData.subOrganizationId,
-          subOrganizationName: matchedSub?.name || editingFirm.subOrganizationName,
-          branchId: formData.branchId,
-          branchName: matchedBranch?.name || editingFirm.branchName,
-          phone: formData.mobileNumber,
-          email: formData.email,
-          gstNumber: formData.gstNumber,
-          panNumber: formData.panNumber,
-          country: formData.country,
-          state: formData.state,
-          district: formData.district,
-          city: formData.city,
-          pincode: formData.pincode,
-          address: formData.address,
+        // PUT /firms/{id} Update firm
+        await firmApi.updateFirm(editingFirm.id, {
+          firm_name: formData.name.trim(),
+          mobile_number: formData.mobileNumber.trim(),
+          sub_organization_id: subOrgVal,
+          branch_id: formData.branchId || null,
           status: formData.status,
-          location: locationStr || editingFirm.location,
-          updatedAt: new Date().toISOString(),
-        };
-        const nextList = firms.map((f) => (f.id === editingFirm.id ? updated : f));
-        saveFirms(nextList);
+        });
         toast.success(`Firm "${formData.name}" updated successfully.`);
       } else {
-        const nextCode = formData.code || `FRM-${String(firms.length + 1).padStart(3, '0')}`;
-        const newFirm: FirmItem = {
-          id: `frm_${Date.now()}`,
-          name: formData.name,
-          code: nextCode,
-          logo: formData.logo,
-          subOrganizationId: formData.subOrganizationId,
-          subOrganizationName: matchedSub?.name,
-          branchId: formData.branchId,
-          branchName: matchedBranch?.name,
-          phone: formData.mobileNumber,
-          email: formData.email,
-          gstNumber: formData.gstNumber,
-          panNumber: formData.panNumber,
-          country: formData.country,
-          state: formData.state,
-          district: formData.district,
-          city: formData.city,
-          pincode: formData.pincode,
-          address: formData.address,
+        // POST /firms Create firm
+        await firmApi.createFirm({
+          firm_name: formData.name.trim(),
+          mobile_number: formData.mobileNumber.trim(),
+          sub_organization_id: subOrgVal,
+          branch_id: formData.branchId || null,
           status: formData.status,
-          location: locationStr,
-          createdAt: new Date().toISOString(),
-        };
-        saveFirms([newFirm, ...firms]);
+        });
         toast.success(`Firm "${formData.name}" created successfully.`);
       }
+
       setIsFormModalOpen(false);
+      fetchFirmsList();
+    } catch (err: any) {
+      console.error('Failed to save firm:', err);
+      const errMsg = err.response?.data?.error?.message || err.message || 'Failed to save firm';
+      toast.error(errMsg);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleConfirmDelete = () => {
+  // DELETE /firms/{id}
+  const handleConfirmDelete = async () => {
     if (!deletingFirm) return;
-    const nextList = firms.filter((f) => f.id !== deletingFirm.id);
-    saveFirms(nextList);
-    toast.success(`Firm "${deletingFirm.name}" removed successfully.`);
-    setDeletingFirm(null);
+    try {
+      await firmApi.deleteFirm(deletingFirm.id);
+      toast.success(`Firm "${deletingFirm.name}" deleted successfully.`);
+      setDeletingFirm(null);
+      fetchFirmsList();
+    } catch (err: any) {
+      console.error('Failed to delete firm:', err);
+      const errMsg = err.response?.data?.error?.message || err.message || 'Failed to delete firm';
+      toast.error(errMsg);
+    }
   };
 
-  const handleConfirmStatusChange = () => {
+  // PATCH /firms/{id}/status - Update status
+  const handleConfirmStatusChange = async () => {
     if (!statusConfirmFirm) return;
-    const nextStatus = statusConfirmFirm.status === 'Active' ? 'Inactive' : 'Active';
-    const nextList = firms.map((f) =>
-      f.id === statusConfirmFirm.id ? { ...f, status: nextStatus, updatedAt: new Date().toISOString() } : f
-    );
-    saveFirms(nextList);
-    toast.success(`Firm marked as ${nextStatus}.`);
-    setStatusConfirmFirm(null);
+    try {
+      await firmApi.updateFirmStatus(statusConfirmFirm.firm.id, {
+        status: statusConfirmFirm.targetStatus,
+      });
+      toast.success(`Firm status updated to ${statusConfirmFirm.targetStatus}.`);
+      setStatusConfirmFirm(null);
+      fetchFirmsList();
+    } catch (err: any) {
+      console.error('Failed to update firm status:', err);
+      const errMsg = err.response?.data?.error?.message || err.message || 'Failed to update status';
+      toast.error(errMsg);
+    }
   };
 
   const formatDate = (dateStr?: string) => {
@@ -446,6 +360,18 @@ export const FirmsView: React.FC = () => {
 
         <div className="flex items-center gap-3 shrink-0 w-full sm:w-auto">
           <Button
+            variant="secondary"
+            size="md"
+            onClick={fetchFirmsList}
+            disabled={loading}
+            icon={<RefreshCw className={`w-4 h-4 text-slate-600 ${loading ? 'animate-spin' : ''}`} />}
+            className="w-full sm:w-auto justify-center"
+            title="Refresh firms list"
+          >
+            Refresh
+          </Button>
+
+          <Button
             variant="primary"
             size="md"
             onClick={handleOpenAdd}
@@ -461,7 +387,7 @@ export const FirmsView: React.FC = () => {
       <SearchBar
         value={pendingSearch}
         onChange={(val) => setPendingSearch(val)}
-        placeholder="Search firms by name, code, contact person, GSTIN, city..."
+        placeholder="Search firms by name, code, mobile number..."
         onSubmit={() => {
           setAppliedSearch(pendingSearch);
           setAppliedStatus(pendingStatus);
@@ -480,6 +406,7 @@ export const FirmsView: React.FC = () => {
               { label: 'Status : All', value: 'All' },
               { label: 'Active', value: 'Active', dotColor: '#10b981' },
               { label: 'Inactive', value: 'Inactive', dotColor: '#f43f5e' },
+              { label: 'Suspended', value: 'Suspended', dotColor: '#f59e0b' },
             ]}
             value={pendingStatus}
             onChange={(val) => setPendingStatus(val as any)}
@@ -495,41 +422,42 @@ export const FirmsView: React.FC = () => {
       {/* 3. Firms Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse border border-slate-200 min-w-[1100px]">
+          <table className="w-full text-left border-collapse border border-slate-200 min-w-[900px]">
             <thead>
               <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">FIRM NAME & CODE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">REGISTRATION TYPE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CONTACT PERSON</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">GSTIN / PAN</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">LOCATION</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">SUB-ORGANIZATION</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">BRANCH</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">MOBILE NUMBER</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CREATED DATE</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-24">ACTIONS</th>
               </tr>
             </thead>
             <tbody className="text-sm">
-              {paginatedFirms.length === 0 ? (
+              {loading ? (
                 <tr>
-                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={7} className="py-16 text-center text-slate-500 border border-slate-200 font-medium">
+                    <RefreshCw className="w-8 h-8 mx-auto text-[#33077C] animate-spin mb-3" />
+                    Loading firms from server...
+                  </td>
+                </tr>
+              ) : firms.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <Building2 className="w-10 h-10 mx-auto text-slate-300 mb-2" />
-                    No firms found matching your search.
+                    No firms found. Click "+ Add Firm" to create your first firm.
                   </td>
                 </tr>
               ) : (
-                paginatedFirms.map((firm) => (
+                firms.map((firm) => (
                   <tr key={firm.id} className="hover:bg-slate-50/80 transition-colors border-b border-slate-200 font-sans">
+                    {/* Firm Name & Code */}
                     <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
                       <div className="flex items-center gap-3">
-                        {firm.logo ? (
-                          <div className="w-10 h-10 rounded-full border border-slate-200 overflow-hidden shadow-xs shrink-0 select-none">
-                            <img src={firm.logo} alt={firm.name} className="w-full h-full object-cover" />
-                          </div>
-                        ) : (
-                          <div className="w-10 h-10 rounded-full bg-[#33077C] text-white flex items-center justify-center font-medium text-xs tracking-wider shadow-xs shrink-0 select-none">
-                            {firm.name.slice(0, 2).toUpperCase()}
-                          </div>
-                        )}
+                        <div className="w-10 h-10 rounded-full bg-[#33077C] text-white flex items-center justify-center font-bold text-xs tracking-wider shadow-xs shrink-0 select-none">
+                          {firm.name.slice(0, 2).toUpperCase()}
+                        </div>
                         <div className="flex flex-col">
                           <span className="font-bold text-slate-900 text-xs sm:text-[14px]">{firm.name}</span>
                           <span className="text-[11px] font-bold text-[#33077C] tracking-wide mt-0.5">{firm.code}</span>
@@ -537,60 +465,52 @@ export const FirmsView: React.FC = () => {
                       </div>
                     </td>
 
+                    {/* Sub-Organization */}
                     <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
                       <div className="flex flex-col">
-                        <span className="font-bold text-slate-900 text-xs sm:text-[13px]">{firm.registrationType || '-'}</span>
-                        <span className="text-[11px] text-slate-500 font-medium mt-0.5">Registration Type</span>
+                        <span className="font-bold text-slate-900 text-xs sm:text-[13px]">
+                          {firm.subOrganizationName || (firm.subOrganizationId ? 'Sub-Organization' : defaultOrgName || 'Main Organization')}
+                        </span>
+                        <span className="text-[11px] text-slate-500 font-medium mt-0.5">Sub-Organization</span>
                       </div>
                     </td>
 
+                    {/* Branch */}
                     <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center shrink-0">
-                          <User className="w-4 h-4 text-[#33077C]" />
-                        </div>
-                        <div>
-                          <span className="font-bold text-slate-900 text-xs sm:text-[13px] block">{firm.contactPerson || '-'}</span>
-                          <span className="text-[10px] text-slate-400 font-medium block">
-                            {firm.phone || firm.email || 'Contact Person'}
-                          </span>
-                        </div>
+                      <div className="flex flex-col">
+                        <span className="font-bold text-slate-900 text-xs sm:text-[13px]">
+                          {firm.branchName || (firm.branchId ? 'Branch Assigned' : 'All Branches')}
+                        </span>
+                        <span className="text-[11px] text-slate-500 font-medium mt-0.5">Branch</span>
                       </div>
                     </td>
 
+                    {/* Mobile Number */}
                     <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
-                      <div>
-                        <div className="text-slate-800 text-[11px] sm:text-xs font-semibold">
-                          {firm.gstNumber ? `GST: ${firm.gstNumber}` : '-'}
-                        </div>
-                        {firm.panNumber && (
-                          <div className="text-slate-500 text-[10px] sm:text-[11px] font-medium mt-0.5">PAN: {firm.panNumber}</div>
-                        )}
+                      <div className="flex items-center gap-2 text-xs font-semibold text-slate-800">
+                        <Phone className="w-3.5 h-3.5 text-[#33077C] shrink-0" />
+                        <span>{firm.mobileNumber || firm.phone || '-'}</span>
                       </div>
                     </td>
 
-                    <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
-                      <div className="flex items-center gap-1.5 text-xs text-slate-700 font-medium">
-                        <MapPin className="w-3.5 h-3.5 text-[#33077C] shrink-0" />
-                        <span>{firm.city ? `${firm.city}${firm.state ? `, ${firm.state}` : ''}` : '-'}</span>
-                      </div>
-                    </td>
-
+                    {/* Status */}
                     <td className="py-4 px-5 border border-slate-200 whitespace-nowrap text-center">
-                      <StatusBadge status={firm.status} />
+                      <StatusBadge status={firm.status as any} />
                     </td>
 
+                    {/* Created Date */}
                     <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
                       <div>
                         <span className="font-bold text-slate-900 text-xs sm:text-[13px] block">
                           {formatDate(firm.createdAt)}
                         </span>
                         <span className="text-[11px] text-slate-400 font-medium block mt-0.5">
-                          {firm.status === 'Active' ? 'Active Firm' : 'Inactive Firm'}
+                          {firm.status === 'Active' ? 'Active Firm' : firm.status === 'Suspended' ? 'Suspended' : 'Inactive Firm'}
                         </span>
                       </div>
                     </td>
 
+                    {/* Actions Menu */}
                     <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
                       <div className="relative inline-block text-left" {...{ [ROW_MENU_TRIGGER_ATTR]: '' }}>
                         <button
@@ -635,7 +555,7 @@ export const FirmsView: React.FC = () => {
                               type="button"
                               onClick={() => {
                                 rowMenu.close();
-                                setViewingFirm(firm);
+                                handleOpenView(firm);
                               }}
                               className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
                             >
@@ -648,12 +568,13 @@ export const FirmsView: React.FC = () => {
                               <span>View</span>
                             </button>
 
-                            {/* Inactive / Active Toggle */}
+                            {/* Active / Inactive Toggle (PATCH /firms/{id}/status) */}
                             <button
                               type="button"
                               onClick={() => {
                                 rowMenu.close();
-                                setStatusConfirmFirm(firm);
+                                const nextTarget = firm.status === 'Active' ? 'Inactive' : 'Active';
+                                setStatusConfirmFirm({ firm, targetStatus: nextTarget });
                               }}
                               className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-700 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
                             >
@@ -667,20 +588,16 @@ export const FirmsView: React.FC = () => {
                                   <Ban style={{ width: '13px', height: '13px' }} className="text-white stroke-[2.2]" />
                                 )}
                               </span>
-                              <span>{firm.status === 'Inactive' ? 'Active' : 'Inactive'}</span>
+                              <span>{firm.status === 'Active' ? 'Inactive' : 'Active'}</span>
                             </button>
 
-                            {/* Suspend / Resume */}
+                            {/* Suspend / Resume (PATCH /firms/{id}/status) */}
                             <button
                               type="button"
                               onClick={() => {
                                 rowMenu.close();
-                                const nextState = (firm as any).status === 'Suspended' ? 'Active' : 'Suspended';
-                                const nextList = firms.map((f) =>
-                                  f.id === firm.id ? { ...f, status: nextState as any, updatedAt: new Date().toISOString() } : f
-                                );
-                                saveFirms(nextList);
-                                toast.success(`Firm marked as ${nextState}.`);
+                                const nextTarget = firm.status === 'Suspended' ? 'Active' : 'Suspended';
+                                setStatusConfirmFirm({ firm, targetStatus: nextTarget });
                               }}
                               className="w-full px-3 py-2 text-left text-[13px] font-bold text-amber-800 hover:bg-amber-50/60 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
                             >
@@ -688,18 +605,18 @@ export const FirmsView: React.FC = () => {
                                 style={{ width: '26px', height: '26px' }}
                                 className="rounded-full bg-amber-500 flex items-center justify-center shrink-0 shadow-2xs"
                               >
-                                {(firm as any).status === 'Suspended' ? (
+                                {firm.status === 'Suspended' ? (
                                   <CheckCircle2 style={{ width: '13px', height: '13px' }} className="text-white stroke-[2.2]" />
                                 ) : (
                                   <PauseCircle style={{ width: '13px', height: '13px' }} className="text-white stroke-[2.2]" />
                                 )}
                               </span>
-                              <span>{(firm as any).status === 'Suspended' ? 'Resume' : 'Suspend'}</span>
+                              <span>{firm.status === 'Suspended' ? 'Resume' : 'Suspend'}</span>
                             </button>
 
                             <div className="my-1 mx-2 border-t border-slate-100" />
 
-                            {/* Delete */}
+                            {/* Delete (DELETE /firms/{id}) */}
                             <button
                               type="button"
                               onClick={() => {
@@ -758,63 +675,121 @@ export const FirmsView: React.FC = () => {
         onBack={() => setIsFormModalOpen(false)}
       >
         <form noValidate onSubmit={handleSaveFirm} className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
+          {fetchingDetails && (
+            <div className="flex items-center gap-2 p-3 bg-purple-50 text-[#33077C] text-xs font-medium rounded-xl">
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              Loading latest firm details from server...
+            </div>
+          )}
+
           {/* Form Fields: 3 fields per row */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Field 1: Select Sub-Organization */}
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Select Sub-Organization
+                Sub-Organization
               </label>
-              <CustomSelect
-                value={formData.subOrganizationId}
-                onChange={(val) => {
-                  updateField('subOrganizationId', val);
-                  // Auto-reset or select valid branch under this sub-org
-                  const availableBranches = branches.filter((b) => !val || val === '__PARENT_ORG__' || !b.subOrganizationId || b.subOrganizationId === val);
-                  if (availableBranches.length > 0 && !availableBranches.some((b) => b.id === formData.branchId)) {
-                    updateField('branchId', availableBranches[0].id);
-                  }
-                }}
-                options={(() => {
-                  const parentOrgLabel = defaultOrgName ? `${defaultOrgName} (Main Organization)` : 'Main Organization';
-                  const list: { value: string; label: string }[] = [];
-                  if (defaultOrgName) {
-                    list.push({ value: '__PARENT_ORG__', label: parentOrgLabel });
-                  }
-                  if (subOrgs.length > 0) {
-                    subOrgs.forEach((sub) => {
-                      list.push({
-                        value: sub.id,
-                        label: `${sub.name}${sub.code ? ` (${sub.code})` : ''}`,
-                      });
+              {editingFirm ? (
+                <ReadOnlyField
+                  label=""
+                  value={(() => {
+                    if (!formData.subOrganizationId || formData.subOrganizationId === '__PARENT_ORG__') {
+                      return defaultOrgName ? `${defaultOrgName} (Main Organization)` : 'Main Organization';
+                    }
+                    const found = subOrgs.find((s) => s.id === formData.subOrganizationId);
+                    return found ? `${found.name}${found.code ? ` (${found.code})` : ''}` : editingFirm.subOrganizationName || 'Main Organization';
+                  })()}
+                  placeholder="Sub-Organization"
+                />
+              ) : (
+                <CustomSelect
+                  value={formData.subOrganizationId}
+                  onChange={(val) => {
+                    updateField('subOrganizationId', val);
+                    // When sub-org changes, clear or pick the first branch belonging to this sub-org
+                    const matchedBranches = branches.filter((b) => {
+                      if (val === '__PARENT_ORG__') {
+                        return !b.subOrganizationId;
+                      }
+                      return b.subOrganizationId === val;
                     });
-                  }
-                  return list;
-                })()}
-                placeholder="Select Sub-Organization"
-                optionVariant="strong"
-                activeColor="brand"
-              />
+                    if (matchedBranches.length > 0) {
+                      updateField('branchId', matchedBranches[0].id);
+                    } else {
+                      updateField('branchId', '');
+                    }
+                  }}
+                  options={(() => {
+                    const parentOrgLabel = defaultOrgName ? `${defaultOrgName} (Main Organization)` : 'Main Organization';
+                    const list: { value: string; label: string }[] = [];
+                    if (defaultOrgName) {
+                      list.push({ value: '__PARENT_ORG__', label: parentOrgLabel });
+                    }
+                    if (subOrgs.length > 0) {
+                      subOrgs.forEach((sub) => {
+                        list.push({
+                          value: sub.id,
+                          label: `${sub.name}${sub.code ? ` (${sub.code})` : ''}`,
+                        });
+                      });
+                    }
+                    return list;
+                  })()}
+                  placeholder="Select Sub-Organization"
+                  optionVariant="strong"
+                  activeColor="brand"
+                />
+              )}
             </div>
 
             {/* Field 2: Select Branch */}
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Select Branch
+                Branch
               </label>
-              <CustomSelect
-                value={formData.branchId}
-                onChange={(val) => updateField('branchId', val)}
-                options={branches
-                  .filter((b) => !formData.subOrganizationId || formData.subOrganizationId === '__PARENT_ORG__' || !b.subOrganizationId || b.subOrganizationId === formData.subOrganizationId)
-                  .map((b) => ({
-                    value: b.id,
-                    label: `${b.name}${b.code ? ` (${b.code})` : ''}`,
-                  }))}
-                placeholder="Select Branch"
-                optionVariant="strong"
-                activeColor="brand"
-              />
+              {editingFirm ? (
+                <ReadOnlyField
+                  label=""
+                  value={(() => {
+                    const found = branches.find((b) => b.id === formData.branchId);
+                    return found ? `${found.name}${found.code ? ` (${found.code})` : ''}` : editingFirm.branchName || 'All Branches';
+                  })()}
+                  placeholder="Branch"
+                />
+              ) : (
+                <CustomSelect
+                  value={formData.branchId}
+                  onChange={(val) => updateField('branchId', val)}
+                  options={(() => {
+                    if (!formData.subOrganizationId) {
+                      return [];
+                    }
+                    const filtered = branches.filter((b) => {
+                      if (formData.subOrganizationId === '__PARENT_ORG__') {
+                        return !b.subOrganizationId;
+                      }
+                      return b.subOrganizationId === formData.subOrganizationId;
+                    });
+                    return filtered.map((b) => ({
+                      value: b.id,
+                      label: `${b.name}${b.code ? ` (${b.code})` : ''}`,
+                    }));
+                  })()}
+                  placeholder={
+                    !formData.subOrganizationId
+                      ? 'Select Sub-Organization first'
+                      : branches.filter((b) =>
+                          formData.subOrganizationId === '__PARENT_ORG__'
+                            ? !b.subOrganizationId
+                            : b.subOrganizationId === formData.subOrganizationId
+                        ).length === 0
+                      ? 'No branches in this sub-organization'
+                      : 'Select Branch'
+                  }
+                  optionVariant="strong"
+                  activeColor="brand"
+                />
+              )}
             </div>
 
             {/* Field 3: Firm Name */}
@@ -838,7 +813,7 @@ export const FirmsView: React.FC = () => {
             <PhoneField
               label="Mobile Number"
               required
-              placeholder="e.g. 9876543210"
+              placeholder="Enter mobile number"
               value={formData.mobileNumber}
               error={formErrors.mobileNumber}
               onChange={(v) => updateField('mobileNumber', v)}
@@ -851,10 +826,11 @@ export const FirmsView: React.FC = () => {
               </label>
               <CustomSelect
                 value={formData.status}
-                onChange={(val) => updateField('status', val as 'Active' | 'Inactive')}
+                onChange={(val) => updateField('status', val as any)}
                 options={[
                   { label: 'Active', value: 'Active' },
                   { label: 'Inactive', value: 'Inactive' },
+                  { label: 'Suspended', value: 'Suspended' },
                 ]}
                 placeholder="Select Status"
                 optionVariant="strong"
@@ -900,61 +876,48 @@ export const FirmsView: React.FC = () => {
         {viewingFirm && (
           <div className="space-y-5 text-xs text-slate-700">
             <div className="p-4 rounded-xl bg-purple-50/50 border border-purple-100 flex items-center gap-3.5">
-              {viewingFirm.logo ? (
-                <div className="w-12 h-12 rounded-2xl border border-slate-200 overflow-hidden shadow-sm shrink-0">
-                  <img src={viewingFirm.logo} alt={viewingFirm.name} className="w-full h-full object-cover" />
-                </div>
-              ) : (
-                <div className="w-12 h-12 rounded-2xl bg-[#33077C] text-white flex items-center justify-center font-bold text-base shadow-sm shrink-0">
-                  {viewingFirm.name.slice(0, 2).toUpperCase()}
-                </div>
-              )}
+              <div className="w-12 h-12 rounded-2xl bg-[#33077C] text-white flex items-center justify-center font-bold text-base shadow-sm shrink-0">
+                {viewingFirm.name.slice(0, 2).toUpperCase()}
+              </div>
               <div>
                 <h3 className="text-base font-extrabold text-slate-900">{viewingFirm.name}</h3>
                 <div className="text-xs font-semibold text-[#33077C] flex items-center gap-2">
                   <span>Code: {viewingFirm.code}</span>
                   <span>&bull;</span>
-                  <StatusBadge status={viewingFirm.status} />
+                  <StatusBadge status={viewingFirm.status as any} />
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[10px] font-bold text-slate-400 uppercase block">Registration</span>
-                <span className="font-semibold text-slate-900 mt-0.5 block">{viewingFirm.registrationType || '-'}</span>
-              </div>
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[10px] font-bold text-slate-400 uppercase block">GSTIN</span>
-                <span className="font-mono font-semibold text-slate-900 mt-0.5 block">{viewingFirm.gstNumber || '-'}</span>
-              </div>
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[10px] font-bold text-slate-400 uppercase block">PAN</span>
-                <span className="font-mono font-semibold text-slate-900 mt-0.5 block">{viewingFirm.panNumber || '-'}</span>
-              </div>
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[10px] font-bold text-slate-400 uppercase block">Contact Person</span>
-                <span className="font-semibold text-slate-900 mt-0.5 block">{viewingFirm.contactPerson || '-'}</span>
-              </div>
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[10px] font-bold text-slate-400 uppercase block">Phone</span>
-                <span className="font-semibold text-slate-900 mt-0.5 block">{viewingFirm.phone || '-'}</span>
-              </div>
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[10px] font-bold text-slate-400 uppercase block">Email</span>
-                <span className="font-semibold text-slate-900 mt-0.5 block truncate">{viewingFirm.email || '-'}</span>
-              </div>
-            </div>
-
-            {viewingFirm.address && (
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[10px] font-bold text-slate-400 uppercase block">Address</span>
-                <span className="font-medium text-slate-800 mt-0.5 block">
-                  {viewingFirm.address}
-                  {viewingFirm.pincode ? ` - ${viewingFirm.pincode}` : ''}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                <span className="text-[10px] font-bold text-slate-400 uppercase block">Sub-Organization</span>
+                <span className="font-semibold text-slate-900 mt-1 block">
+                  {viewingFirm.subOrganizationName || (viewingFirm.subOrganizationId ? 'Sub-Organization' : defaultOrgName || 'Main Organization')}
                 </span>
               </div>
-            )}
+
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                <span className="text-[10px] font-bold text-slate-400 uppercase block">Branch</span>
+                <span className="font-semibold text-slate-900 mt-1 block">
+                  {viewingFirm.branchName || (viewingFirm.branchId ? 'Branch Assigned' : 'All Branches')}
+                </span>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                <span className="text-[10px] font-bold text-slate-400 uppercase block">Mobile Number</span>
+                <span className="font-semibold text-slate-900 mt-1 block">
+                  {viewingFirm.mobileNumber || viewingFirm.phone || '-'}
+                </span>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                <span className="text-[10px] font-bold text-slate-400 uppercase block">Created Date</span>
+                <span className="font-semibold text-slate-900 mt-1 block">
+                  {formatDate(viewingFirm.createdAt)}
+                </span>
+              </div>
+            </div>
 
             <div className="flex justify-end pt-2">
               <button
@@ -983,9 +946,9 @@ export const FirmsView: React.FC = () => {
         isOpen={!!statusConfirmFirm}
         onClose={() => setStatusConfirmFirm(null)}
         onConfirm={handleConfirmStatusChange}
-        nextStatus={statusConfirmFirm?.status === 'Active' ? 'Inactive' : 'Active'}
+        nextStatus={statusConfirmFirm?.targetStatus === 'Active' ? 'Active' : statusConfirmFirm?.targetStatus === 'Suspended' ? 'Suspended' : 'Inactive'}
         entityName="Firm"
-        itemName={statusConfirmFirm?.name}
+        itemName={statusConfirmFirm?.firm?.name}
       />
     </div>
   );

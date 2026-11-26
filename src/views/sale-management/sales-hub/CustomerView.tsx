@@ -1,4 +1,5 @@
 import { fetchAllReportRows, runReport } from "../../../utils/reportData";
+import { alphabetsOnly, lettersOnly } from "../../../utils/fieldValidators";
 import { PhoneField } from "../../../components/common/PhoneField";
 import {
   LocationFields,
@@ -548,15 +549,44 @@ export const CustomerView: React.FC = () => {
     districtRequired: true,
     cityRequired: true,
   });
+  const locationMetaRef = useRef(locationMeta);
+  locationMetaRef.current = locationMeta;
+
   useEffect(() => {
-    register("country");
-    register("state");
-    register("city");
+    register("country", {
+      validate: (val) => (val?.trim() ? true : "Please select a country"),
+    });
+    register("state", {
+      validate: (val) =>
+        !locationMetaRef.current.stateRequired || val?.trim()
+          ? true
+          : "Please select a state",
+    });
+    register("city", {
+      validate: (val) =>
+        !locationMetaRef.current.cityRequired || val?.trim()
+          ? true
+          : "Please select a city",
+    });
   }, [register, isFormModalOpen, editingCustomer]);
+
+  useEffect(() => {
+    if (!locationMeta.stateRequired) clearErrors("state");
+    if (!locationMeta.districtRequired) setDistrictError(undefined);
+    if (!locationMeta.cityRequired) clearErrors("city");
+  }, [
+    locationMeta.stateRequired,
+    locationMeta.districtRequired,
+    locationMeta.cityRequired,
+    clearErrors,
+  ]);
 
   // The customer form always opens and closes without leftover errors.
   useEffect(() => {
-    if (!isFormModalOpen) clearErrors();
+    if (!isFormModalOpen) {
+      clearErrors();
+      setDistrictError(undefined);
+    }
   }, [isFormModalOpen, clearErrors]);
 
   // Keystroke sanitizer: disallow typing numeric characters in text-only fields
@@ -1025,6 +1055,8 @@ export const CustomerView: React.FC = () => {
         if (!fullName) errors.push("Full Name is required");
         else if (fullName.length < 2)
           errors.push("Full Name must be at least 2 characters");
+        else if (alphabetsOnly("Full Name")(fullName))
+          errors.push("Full Name should contain alphabets only");
         if (
           !cleanMobile ||
           cleanMobile.length !== 10 ||
@@ -1301,7 +1333,12 @@ export const CustomerView: React.FC = () => {
 
   // Handle form validation errors: inline only (no toast); focus the first offending field.
   const onFormInvalid = (formErrors: any) => {
-    // Surface the out-of-rule sales-rep error in the same pass as every other error.
+    // Surface the out-of-rule sales-rep and district errors in the same pass as every other error.
+    setDistrictError(
+      locationMetaRef.current.districtRequired && !locationDistrict.trim()
+        ? "Please select a district"
+        : undefined,
+    );
     const repId = watch("salesRepresentativeId");
     if (
       repId &&
@@ -1331,7 +1368,11 @@ export const CustomerView: React.FC = () => {
   const onFormSubmit = (data: CustomerFormValues) => {
     // Re-check every rule here (not only through field rules / disabled buttons).
     const submitChecks: Array<[keyof CustomerFormValues, string | null]> = [
-      ["name", checkRequiredText(data.name, "customer name", 2)],
+      [
+        "name",
+        checkRequiredText(data.name, "customer name", 2) ||
+          alphabetsOnly("Full Name / Contact Person")(data.name),
+      ],
       ["phone", checkPhone(data.phone, isValidIntlPhone, true)],
       [
         "alternatePhone",
@@ -2833,6 +2874,7 @@ export const CustomerView: React.FC = () => {
                                 onClick: () =>
                                   navigate(
                                     `/sale-management/sales/sale?customerId=${cust.id}&createSale=true`,
+                                    { state: { preselectedCustomer: cust } },
                                   ),
                               },
                               {
@@ -2928,7 +2970,12 @@ export const CustomerView: React.FC = () => {
                     type="text"
                     {...register("name", {
                       validate: (val) =>
-                        checkRequiredText(val, "customer name", 2) || true,
+                        checkRequiredText(val, "customer name", 2) ||
+                        alphabetsOnly("Full Name / Contact Person")(val) ||
+                        true,
+                      onChange: (e) => {
+                        e.target.value = lettersOnly(e.target.value);
+                      },
                     })}
                     placeholder="e.g. Marcus Vance or Acme Corp"
                     className={
@@ -3014,7 +3061,7 @@ export const CustomerView: React.FC = () => {
                       dataField="phone"
                       value={field.value || ""}
                       error={errors.phone?.message as string | undefined}
-                      placeholder="e.g. 9876543210"
+                      placeholder="Enter phone number"
                       onChange={(v) => field.onChange(v)}
                     />
                   )}
@@ -3034,7 +3081,7 @@ export const CustomerView: React.FC = () => {
                       dataField="alternatePhone"
                       value={field.value || ""}
                       error={errors.alternatePhone?.message as string | undefined}
-                      placeholder="e.g. 9876543211"
+                      placeholder="Enter WhatsApp number"
                       onChange={(v) => field.onChange(v)}
                     />
                   )}
@@ -3121,7 +3168,13 @@ export const CustomerView: React.FC = () => {
                       });
                     if (patch.district !== undefined) {
                       setLocationDistrict(patch.district);
-                      setDistrictError(undefined);
+                      setDistrictError(
+                        isSubmitted &&
+                          locationMetaRef.current.districtRequired &&
+                          !patch.district.trim()
+                          ? "Please select a district"
+                          : undefined,
+                      );
                     }
                     if (patch.city !== undefined)
                       setValue("city", patch.city, {
@@ -3621,6 +3674,7 @@ export const CustomerView: React.FC = () => {
                     setIsDetailModalOpen(false);
                     navigate(
                       `/sale-management/sales/sale?customerId=${selectedCustomer.id}&createSale=true`,
+                      { state: { preselectedCustomer: selectedCustomer } },
                     );
                   }}
                   className="h-9 px-3.5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-md shadow-[#33077C]/20 cursor-pointer"
@@ -4711,6 +4765,7 @@ export const CustomerView: React.FC = () => {
                         setIsDetailModalOpen(false);
                         navigate(
                           `/sale-management/sales/sale?customerId=${selectedCustomer.id}&createSale=true`,
+                          { state: { preselectedCustomer: selectedCustomer } },
                         );
                       }}
                       className="mt-3 px-4 py-2 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold shadow-sm"

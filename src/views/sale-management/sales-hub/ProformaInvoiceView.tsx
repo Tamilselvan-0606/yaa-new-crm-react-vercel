@@ -1,5 +1,5 @@
 import { ProductStockLabel } from "../../../components/common/ProductStockLabel";
-import { attachStockQty } from "../../../utils/stockDisplay";
+import { attachStockQty, appendZeroStockErrors } from "../../../utils/stockDisplay";
 import { CommonTableHead } from "../../../components/common/CommonTableHead";
 import { CustomerSearchableSelect } from "../../../components/common/paginated-select";
 import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
@@ -2182,6 +2182,15 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docProductKey]);
 
+  const getProductStockQty = (productId: string): number | undefined => {
+    const matched = availableProducts.find(
+      (pr: any) => pr.productId === productId || pr.id === productId,
+    );
+    return matched?.stockQty;
+  };
+
+  // Stock validation is used only when converting a Proforma into Sale Order / Delivery Challan / Sales Invoice.
+  // Creating or editing a Proforma Invoice itself allows zero-stock products.
   const computeStockErrors = (
     items: Array<{
       productId?: string;
@@ -2190,8 +2199,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       quantity?: unknown;
     }>,
     resolve?: (it: any) => string | undefined,
-  ): FieldErrors =>
-    validateBatchStock(
+  ): FieldErrors => {
+    const errs = validateBatchStock(
       items.map((it) => ({
         productId: (resolve ? resolve(it) : undefined) || it.productId,
         productName: it.productName,
@@ -2200,28 +2209,21 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       })),
       { getAvailable: (l) => batchStock.getAvailable(l.productId, l.batch) },
     );
-  // Live (shown before any submit attempt): recomputed when quantity / product / batch / stock change.
-  const liveStockErrors = useMemo(
-    () => computeStockErrors(formData.items, resolveProductIdForItem),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [formData.items, batchStock.getAvailable],
-  );
+    return appendZeroStockErrors(items, {
+      errors: errs,
+      resolveProductId: resolve,
+      getProductStockQty,
+    });
+  };
+  const liveStockErrors: FieldErrors = {};
 
   const computeProformaErrors = () => {
-    const errs = validateProformaForm(formData, {
+    return validateProformaForm(formData, {
       isInclusive: priceTaxMode === "With Tax",
       finalAmount: formCalculations.grandTotal,
       roundOff: formCalculations.roundOffDiff,
       resolveProductId: resolveProductIdForItem,
     });
-    const stockErrs = computeStockErrors(
-      formData.items,
-      resolveProductIdForItem,
-    );
-    Object.entries(stockErrs).forEach(([k, v]) => {
-      if (!errs[k]) errs[k] = v;
-    });
-    return errs;
   };
   // After the first submit attempt, keep errors in sync with the current values.
   useRevalidateAfterSubmit(fe, computeProformaErrors, [
@@ -2261,9 +2263,21 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   // Save Proforma Invoice Handler
   const handleSaveProforma = (andConvert = false) =>
     runOnce(async () => {
-      // Re-read batch stock for every distinct product so stock changed elsewhere is checked.
-      await batchStock.refresh(docProductIds);
-      if (!fe.validateAll(computeProformaErrors())) return;
+      if (andConvert) {
+        // Converting immediately into an invoice requires available stock.
+        await batchStock.refresh(docProductIds);
+        const errs = computeProformaErrors();
+        const stockErrs = computeStockErrors(
+          formData.items,
+          resolveProductIdForItem,
+        );
+        Object.entries(stockErrs).forEach(([k, v]) => {
+          if (!errs[k]) errs[k] = v;
+        });
+        if (!fe.validateAll(errs)) return;
+      } else if (!fe.validateAll(computeProformaErrors())) {
+        return;
+      }
       const validItems = formData.items.filter(
         (it) => it.productName.trim() || Number(it.unitPrice) > 0,
       );

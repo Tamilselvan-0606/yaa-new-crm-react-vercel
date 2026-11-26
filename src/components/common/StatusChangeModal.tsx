@@ -1,143 +1,134 @@
 import React from 'react';
-import { Modal } from './Modal';
-import { Button } from './Button';
-import { ArrowRight, Ban, CheckCircle2, Info, Loader2, X } from 'lucide-react';
+import { Ban, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 
 export interface StatusChangeModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: () => void | Promise<void>;
   /** Status the record will move to. */
-  nextStatus: 'Active' | 'Inactive';
-  /** Record type, e.g. "Customer". */
+  nextStatus: 'Active' | 'Inactive' | 'Suspended';
+  /** Record type, e.g. "Branch" or "Firm". */
   entityName: string;
   recordName?: string;
+  itemName?: string;
   isLoading?: boolean;
 }
 
-const TONE = {
-  Active: { accent: '#10B981', hover: '#059669', soft: 'bg-emerald-50', ring: 'ring-emerald-100', text: 'text-emerald-700', dot: 'bg-emerald-500', pill: 'bg-emerald-50 border-emerald-200 text-emerald-700' },
-  Inactive: { accent: '#64748B', hover: '#475569', soft: 'bg-slate-100', ring: 'ring-slate-200/70', text: 'text-slate-700', dot: 'bg-slate-500', pill: 'bg-slate-100 border-slate-200 text-slate-600' },
-} as const;
-
-const StatusPill: React.FC<{ status: 'Active' | 'Inactive'; muted?: boolean }> = ({ status, muted }) => (
-  <span
-    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-bold ${TONE[status].pill} ${muted ? 'opacity-60' : 'shadow-2xs'}`}
-  >
-    <span className={`w-1.5 h-1.5 rounded-full ${TONE[status].dot}`} />
-    {status}
-  </span>
-);
-
 /**
- * Activate / Deactivate confirmation for the sale-management modules. Built on the same `Modal`
- * (deep-purple #33077C gradient header, back arrow, subtitle) and button styling as DeleteConfirmationModal,
- * with the Actions-menu colours: Activate = emerald #10B981, Deactivate = slate #64748B.
+ * Clean centered Confirmation Modal for status changes (Active / Inactive / Suspended)
+ * exactly matching the design in the user's reference image:
+ * - Centered circular icon in soft rounded background
+ * - Bold title "Deactivate Branch" / "Suspend Branch" / "Activate Branch"
+ * - Clear prompt "Are you sure you want to mark {name} as {status}?"
+ * - White Cancel button + Colored solid action button side-by-side
  */
 export const StatusChangeModal: React.FC<StatusChangeModalProps> = ({
   isOpen,
   onClose,
   onConfirm,
-  nextStatus,
+  nextStatus = 'Active',
   entityName,
   recordName,
+  itemName,
   isLoading = false,
 }) => {
+  if (!isOpen) return null;
+
+  const displayName = recordName || itemName || `this ${entityName.toLowerCase()}`;
   const activating = nextStatus === 'Active';
-  const currentStatus = activating ? 'Inactive' : 'Active';
-  const tone = TONE[nextStatus];
-  const Icon = activating ? CheckCircle2 : Ban;
-  const verb = activating ? 'Activate' : 'Deactivate';
-  const entityLower = entityName.toLowerCase();
-  const close = () => {
-    if (!isLoading) onClose();
-  };
+  const suspending = nextStatus === 'Suspended';
+
+  // Title: "Activate Firm", "Deactivate Firm", "Suspend Firm"
+  const title = activating
+    ? `Activate ${entityName}`
+    : suspending
+    ? `Suspend ${entityName}`
+    : `Deactivate ${entityName}`;
+
+  // Button text
+  const confirmButtonText = activating
+    ? 'Yes, Activate'
+    : suspending
+    ? 'Yes, Suspend'
+    : 'Yes, Inactive';
+
+  // Styling based on action type
+  const iconContainerClass = activating
+    ? 'bg-emerald-50 text-emerald-600'
+    : suspending
+    ? 'bg-amber-50 text-amber-600'
+    : 'bg-slate-100 text-slate-600';
+
+  const buttonClass = activating
+    ? 'bg-emerald-600 hover:bg-emerald-700'
+    : suspending
+    ? 'bg-amber-600 hover:bg-amber-700'
+    : 'bg-[#3e4c5e] hover:bg-[#323d4b]';
 
   return (
-    <Modal
-      isOpen={isOpen}
-      onClose={close}
-      title={`${verb} ${entityName}`}
-      subtitle={`Confirm ${entityLower} status change`}
-      maxWidth="md"
-      headerGradient={true}
-      showBackIcon={true}
-      hideCloseButton={isLoading}
-      onBack={close}
-      closeOnOutsideClick={!isLoading}
-      closeOnEscape={!isLoading}
+    <div
+      className="fixed inset-0 z-[10000] flex items-center justify-center p-3 sm:p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto"
+      onClick={() => {
+        if (!isLoading) onClose();
+      }}
     >
-      <div className="p-0.5 sm:p-1 text-xs font-sans animate-in fade-in zoom-in-95 duration-150">
-        {/* Hero */}
-        <div className="flex flex-col items-center text-center">
-          <div className={`w-16 h-16 rounded-full ${tone.soft} ring-8 ${tone.ring} flex items-center justify-center`}>
-            <Icon className="w-8 h-8 stroke-[2.2]" style={{ color: tone.accent }} />
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-100 overflow-y-auto max-h-[92dvh] transform scale-100 p-6 sm:p-8 text-center animate-in zoom-in-95 duration-150 my-auto"
+      >
+        {/* Top Centered Circular Icon */}
+        <div className="mx-auto mb-5 w-16 h-16 rounded-full flex items-center justify-center">
+          <div className={`w-16 h-16 rounded-full ${iconContainerClass} flex items-center justify-center`}>
+            {activating ? (
+              <CheckCircle2 className="w-8 h-8 stroke-[2]" />
+            ) : suspending ? (
+              <AlertCircle className="w-8 h-8 stroke-[2]" />
+            ) : (
+              <Ban className="w-8 h-8 stroke-[2]" />
+            )}
           </div>
-          <h4 className="mt-4 text-[15px] font-bold text-slate-900 tracking-tight">
-            Mark this {entityLower} as {nextStatus}?
-          </h4>
-          {recordName && (
-            <span className="mt-2 max-w-full truncate font-bold text-slate-900 bg-slate-50 px-3 py-1 rounded-lg border border-slate-200 text-[13px]">
-              {recordName}
-            </span>
-          )}
         </div>
 
-        {/* Status transition */}
-        <div className="mt-5 flex items-center justify-center gap-3 rounded-2xl border border-slate-100 bg-slate-50/70 px-4 py-3.5">
-          <StatusPill status={currentStatus} muted />
-          <ArrowRight className="w-4 h-4 text-slate-400 shrink-0" />
-          <StatusPill status={nextStatus} />
-        </div>
+        {/* Modal Title */}
+        <h3 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
+          {title}
+        </h3>
 
-        {/* Note */}
-        <div className="mt-3 flex items-start gap-2 px-1 text-[11.5px] leading-relaxed text-slate-500">
-          <Info className="w-3.5 h-3.5 mt-0.5 shrink-0 text-slate-400" />
-          <p>
-            {activating
-              ? `The ${entityLower} will be marked Active again.`
-              : `The ${entityLower} will be marked Inactive.`}{' '}
-            You can change this back at any time from the Actions menu.
-          </p>
-        </div>
+        {/* Question Prompt */}
+        <p className="mt-2 text-xs sm:text-[13px] text-slate-500 leading-relaxed">
+          Are you sure you want to mark{' '}
+          <span className="font-bold text-slate-800">{displayName}</span> as{' '}
+          <span className="font-semibold text-slate-800">{nextStatus}</span>?
+        </p>
 
-        {/* Actions */}
-        <div className="mt-5 pt-4 flex flex-col-reverse sm:flex-row justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
-          <Button
+        {/* Action Buttons */}
+        <div className="mt-7 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-center gap-3">
+          <button
             type="button"
-            variant="secondary"
-            size="md"
             disabled={isLoading}
-            onClick={close}
-            icon={<X className="w-4 h-4 text-slate-500" />}
-            className="w-full sm:w-auto h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs"
+            onClick={onClose}
+            className="w-full sm:flex-1 h-11 px-5 rounded-xl border border-slate-200 hover:border-slate-300 disabled:opacity-50 disabled:cursor-not-allowed text-xs sm:text-[13px] font-bold text-slate-700 hover:bg-slate-50 transition-all cursor-pointer shadow-2xs"
           >
             Cancel
-          </Button>
-
+          </button>
           <button
             type="button"
             disabled={isLoading}
             onClick={onConfirm}
-            className="w-full sm:w-auto h-10 px-5 rounded-xl active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2"
-            style={{ backgroundColor: tone.accent }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = tone.hover;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = tone.accent;
-            }}
+            className={`w-full sm:flex-1 h-11 px-5 rounded-xl text-white text-xs sm:text-[13px] font-bold shadow-sm hover:shadow transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2 ${buttonClass}`}
           >
             {isLoading ? (
-              <Loader2 className="w-4 h-4 animate-spin text-white" />
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-white" />
+                <span>Updating...</span>
+              </>
             ) : (
-              <Icon className="w-4 h-4 stroke-[2.2] text-white" />
+              <span>{confirmButtonText}</span>
             )}
-            <span>{isLoading ? 'Updating...' : activating ? 'Yes, Activate' : 'Yes, Inactive'}</span>
           </button>
         </div>
       </div>
-    </Modal>
+    </div>
   );
 };
 

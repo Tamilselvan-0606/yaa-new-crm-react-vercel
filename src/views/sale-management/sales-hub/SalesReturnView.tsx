@@ -188,7 +188,6 @@ export const SalesReturnView: React.FC = () => {
   const dispatch = useAppDispatch();
   const {
     saveSalesReturn,
-    updateSalesReturnStatus: updateStoreReturnStatus,
     deleteSalesReturn: deleteStoreSalesReturn,
   } = useSalesManagementStore();
   // Customers and invoices shown in the UI come only from the Commerce API
@@ -201,9 +200,7 @@ export const SalesReturnView: React.FC = () => {
   const [isFetching, setIsFetching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const retFE = useFieldErrors();
-  const statusFE = useFieldErrors();
   const saveGuard = useSubmitGuard();
-  const statusGuard = useSubmitGuard();
   const deleteGuard = useSubmitGuard();
   const [serverTotal, setServerTotal] = useState(0);
   const [apiSummary, setApiSummary] = useState<NonNullable<
@@ -274,13 +271,6 @@ export const SalesReturnView: React.FC = () => {
   const [deleteTxError, setDeleteTxError] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
-
-  // Status Change Modal
-  const [statusModalReturn, setStatusModalReturn] =
-    useState<SalesReturn | null>(null);
-  const [newStatusValue, setNewStatusValue] =
-    useState<SalesReturnStatus>("Approved");
-  const [rejectionReasonText, setRejectionReasonText] = useState("");
 
   // Create / Edit Form State
   const [selectedInvoiceId, setSelectedInvoiceId] = useState("");
@@ -1269,87 +1259,6 @@ export const SalesReturnView: React.FC = () => {
     }
   };
 
-  // Open Status Update Modal
-  const handleOpenStatusModal = (ret: SalesReturn) => {
-    setActiveMenuId(null);
-    setStatusModalReturn(ret);
-    setNewStatusValue(ret.returnStatus || "Approved");
-    setRejectionReasonText(ret.rejectionReason || "");
-    statusFE.reset();
-  };
-
-  const validateStatusUpdate = (): FieldErrors =>
-    collectErrors([
-      [
-        "status",
-        ["Approved", "Received", "Refunded", "Requested", "Rejected"].includes(
-          newStatusValue,
-        )
-          ? null
-          : "Please select a valid return status.",
-      ],
-      [
-        "rejectionReason",
-        newStatusValue === "Rejected"
-          ? checkRequiredText(rejectionReasonText, "rejection reason")
-          : null,
-      ],
-    ]);
-  useRevalidateAfterSubmit(statusFE, validateStatusUpdate, [
-    newStatusValue,
-    rejectionReasonText,
-  ]);
-  useEffect(() => {
-    statusFE.reset();
-  }, [statusModalReturn, statusFE.reset]);
-
-  // Submit Status Update via PATCH /commerce/returns/{id}/status
-  const handleSaveStatusUpdate = () =>
-    statusGuard.runOnce(async () => {
-      if (!statusModalReturn) return;
-      if (!statusFE.validateAll(validateStatusUpdate())) return;
-
-      try {
-        if (UUID_REGEX.test(statusModalReturn.id)) {
-          await commerceSalesReturnApi.updateStatus(
-            statusModalReturn.id,
-            newStatusValue,
-            newStatusValue === "Rejected"
-              ? rejectionReasonText.trim()
-              : undefined,
-          );
-        }
-        updateStoreReturnStatus(
-          statusModalReturn.id,
-          newStatusValue,
-          newStatusValue === "Rejected"
-            ? rejectionReasonText.trim()
-            : undefined,
-        );
-        dispatch(
-          baseApi.util.invalidateTags([
-            { type: "SalesReturn", id: statusModalReturn.id },
-            { type: "SalesReturn", id: "LIST" },
-            { type: "Stock", id: "LIST" },
-            "Dashboard",
-          ]),
-        );
-        toast.success(
-          `Sales Return ${statusModalReturn.returnNo} status updated to ${newStatusValue}`,
-        );
-        setStatusModalReturn(null);
-        fetchSalesReturns();
-      } catch (err: any) {
-        console.error("Failed to update status:", err);
-        toast.error(
-          getApiErrorMessage(
-            err,
-            "We could not update the return status. Please try again.",
-          ),
-        );
-      }
-    });
-
   // Generate e-Invoice
   const handleGenerateEInvoice = (tx: UnifiedTransactionRecord) => {
     setActiveMenuId(null);
@@ -2067,13 +1976,6 @@ export const SalesReturnView: React.FC = () => {
                                 onClick: () => handleOpenHistory(row),
                               },
                               {
-                                label: "Change Status...",
-                                variant: "adjust",
-                                hidden: !row.originalReturn,
-                                onClick: () =>
-                                  handleOpenStatusModal(row.originalReturn!),
-                              },
-                              {
                                 label: "Void / Delete",
                                 variant: "delete",
                                 onClick: () => handleOpenDeleteModal(row),
@@ -2412,8 +2314,8 @@ export const SalesReturnView: React.FC = () => {
               <FormError message={retFE.errors.items} className="px-3 pb-2" />
             </div>
 
-            {/* Row 3: Refund Method, Refund Status, Return Status */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+            {/* Row 3: Refund Method, Refund Status */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
               <div>
                 <FormLabel>Refund Method</FormLabel>
                 <select
@@ -2441,21 +2343,6 @@ export const SalesReturnView: React.FC = () => {
                   <option value="Pending">Pending</option>
                   <option value="Store Credit">Store Credit</option>
                   <option value="Cancelled">Cancelled</option>
-                </select>
-              </div>
-
-              <div>
-                <FormLabel>Return Lifecycle Status</FormLabel>
-                <select
-                  value={returnStatus}
-                  onChange={(e) => setReturnStatus(e.target.value as any)}
-                  className={FORM_SELECT_CLS}
-                >
-                  <option value="Approved">Approved (Restores Stock)</option>
-                  <option value="Received">Received (Restores Stock)</option>
-                  <option value="Refunded">Refunded (Restores Stock)</option>
-                  <option value="Requested">Requested</option>
-                  <option value="Rejected">Rejected</option>
                 </select>
               </div>
             </div>
@@ -2689,81 +2576,7 @@ export const SalesReturnView: React.FC = () => {
         </Modal>
       )}
 
-      {/* 8. Change Status Modal */}
-      {statusModalReturn && (
-        <Modal
-          isOpen={Boolean(statusModalReturn)}
-          onClose={() => setStatusModalReturn(null)}
-          title={`Update Status: ${statusModalReturn.returnNo}`}
-          subtitle={`Current Status: ${statusModalReturn.returnStatus}`}
-          maxWidth="md"
-        >
-          <div className="p-4 space-y-4 pt-5 text-xs sm:text-sm font-sans">
-            <div>
-              <FormLabel>New Status</FormLabel>
-              <select
-                value={newStatusValue}
-                data-field="status"
-                onChange={(e) => {
-                  setNewStatusValue(e.target.value as SalesReturnStatus);
-                  statusFE.reset();
-                }}
-                className={FORM_SELECT_CLS}
-              >
-                <option value="Approved">Approved (Restores Stock)</option>
-                <option value="Received">Received (Restores Stock)</option>
-                <option value="Refunded">Refunded (Restores Stock)</option>
-                <option value="Requested">
-                  Requested (Removes restored stock)
-                </option>
-                <option value="Rejected">
-                  Rejected (Removes restored stock)
-                </option>
-              </select>
-            </div>
-
-            {newStatusValue === "Rejected" && (
-              <div className="pt-2">
-                <FormLabel required>Rejection Reason</FormLabel>
-                <textarea
-                  rows={3}
-                  value={rejectionReasonText}
-                  data-field="rejectionReason"
-                  onChange={(e) => {
-                    setRejectionReasonText(e.target.value);
-                    statusFE.clearError("rejectionReason");
-                  }}
-                  placeholder="Explain why this return was rejected (e.g. Item damaged by customer misuse, seal already opened)..."
-                  className={FORM_TEXTAREA_CLS}
-                />
-                <FormError message={statusFE.errors.rejectionReason} />
-              </div>
-            )}
-
-            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
-              <Button
-                variant="secondary"
-                size="md"
-                type="button"
-                onClick={() => setStatusModalReturn(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                size="md"
-                type="button"
-                onClick={handleSaveStatusUpdate}
-                className="bg-[#33077C] hover:bg-[#280563]"
-              >
-                Update Status
-              </Button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {/* 9. History Audit Modal */}
+      {/* 8. History Audit Modal */}
       {historyTx && (
         <Modal
           isOpen={!!historyTx}

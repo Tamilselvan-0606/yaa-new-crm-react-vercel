@@ -1,5 +1,5 @@
 import { ProductStockLabel } from "../../../components/common/ProductStockLabel";
-import { attachStockQty } from "../../../utils/stockDisplay";
+import { attachStockQty, appendZeroStockErrors } from "../../../utils/stockDisplay";
 import { CommonTableHead } from "../../../components/common/CommonTableHead";
 import { CustomerSearchableSelect } from "../../../components/common/paginated-select";
 import { getNextDeliveryChallanNumber } from "../../../utils/documentNumbering";
@@ -188,24 +188,32 @@ const computeChallanStockErrors = (
   ctx: {
     resolveProductId: (it: ExtendedChallanItem) => string | undefined;
     getAvailable?: (productId: string, batch: string) => number | null;
+    getProductStockQty?: (productId: string) => number | null | undefined;
   },
 ): FieldErrors => {
   const getAvailable = ctx.getAvailable;
-  if (!getAvailable) return {};
-  return validateBatchStock(
-    items.map((it) => ({
-      productId: ctx.resolveProductId(it) || "",
-      productName: it.productName,
-      batch: it.batch,
-      quantity: it.quantity,
-    })),
-    {
-      getAvailable: (line) =>
-        line.productId && line.batch
-          ? getAvailable(line.productId, line.batch)
-          : null,
-    },
-  );
+  const batchErrs = getAvailable
+    ? validateBatchStock(
+        items.map((it) => ({
+          productId: ctx.resolveProductId(it) || "",
+          productName: it.productName,
+          batch: it.batch,
+          quantity: it.quantity,
+        })),
+        {
+          getAvailable: (line) =>
+            line.productId && line.batch
+              ? getAvailable(line.productId, line.batch)
+              : null,
+        },
+      )
+    : {};
+  if (!ctx.getProductStockQty) return batchErrs;
+  return appendZeroStockErrors(items, {
+    errors: batchErrs,
+    resolveProductId: ctx.resolveProductId,
+    getProductStockQty: ctx.getProductStockQty,
+  });
 };
 
 /** Maps backend field paths (e.g. `items.0.quantity`) onto this form's error keys. */
@@ -263,6 +271,8 @@ const validateChallanForm = (
     resolveProductId: (it: ExtendedChallanItem) => string | undefined;
     /** Batch stock from the backend (null = unknown, never an error). */
     getAvailable?: (productId: string, batch: string) => number | null;
+    /** Overall product stock quantity (used to block 0-stock items even when unbatched). */
+    getProductStockQty?: (productId: string) => number | null | undefined;
     finalAmount: number;
     roundOff: number;
   },
@@ -1798,11 +1808,19 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     return matched && UUID_REGEX.test(matched.id) ? matched.id : undefined;
   };
 
+  const getProductStockQty = (productId: string): number | undefined => {
+    const matched = allStockItems.find(
+      (s: any) => s.productId === productId || s.id === productId,
+    );
+    return matched?.stockQty;
+  };
+
   const computeChallanErrors = () =>
     validateChallanForm(activeTab.formData, {
       resolveCustomerId: resolveCustomerIdForForm,
       resolveProductId: resolveProductIdForItem,
       getAvailable: getBatchAvailable,
+      getProductStockQty,
       finalAmount: currentCalculations.finalAmount,
       roundOff: currentCalculations.roundOff,
     });
@@ -1821,6 +1839,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       computeChallanStockErrors(activeTab.formData.items, {
         resolveProductId: resolveProductIdForItem,
         getAvailable: getBatchAvailable,
+        getProductStockQty,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [activeTab.formData.items, getBatchAvailable, allStockItems],
@@ -3236,6 +3255,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
               <SalesDocumentItemsTable
                 items={activeTab.formData.items as SalesDocumentLineItem[]}
                 withGst={activeTab.formData.withGst}
+                restrictZeroStock={true}
                 formErrors={fe.errors}
                 liveStockErrors={liveStockErrors}
                 openProductDropdownRow={openProductDropdownRow}
@@ -3438,7 +3458,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                         </label>
                         <input
                           type="text"
-                          placeholder="e.g. +91 98401 23456"
+                          placeholder="Enter driver phone"
                           value={activeTab.formData.driverPhone || ""}
                           onChange={(e) =>
                             updateActiveTabFormData((prev) => ({

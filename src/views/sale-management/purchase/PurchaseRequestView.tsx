@@ -435,11 +435,10 @@ export const PurchaseRequestView: React.FC = () => {
       const base: any = await (zodResolver(PurchaseRequestSchema) as any)(values, ctx, opts);
       const extra = collectErrors([
         ['requestedBy', checkRequiredText(values.requestedBy, 'name of the person requesting', 2)],
-        ['department', checkRequiredSelection(values.department, 'department')],
         ['supplierId', checkRequiredSelection(values.supplierId, 'supplier')],
       ]);
       const errs: any = { ...(base.errors || {}) };
-      for (const k of ['requestedBy', 'department', 'supplierId']) {
+      for (const k of ['requestedBy', 'supplierId']) {
         if (extra[k]) errs[k] = { type: 'validate', message: extra[k] };
         else delete errs[k];
       }
@@ -1907,7 +1906,7 @@ export const PurchaseRequestView: React.FC = () => {
 
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Department <span className="text-rose-500">*</span>
+                Department
               </label>
               <CustomSelect
                 value={watch('department') || ''}

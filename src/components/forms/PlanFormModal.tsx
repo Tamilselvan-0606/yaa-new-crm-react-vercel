@@ -31,6 +31,8 @@ import {
   Truck,
 } from 'lucide-react';
 
+import { getApiErrorMessage } from '../../utils/apiErrorMessage';
+
 const GST_RATE_OPTIONS = [
   { value: '18', label: '18% (Standard GST)' },
   { value: '12', label: '12% GST' },
@@ -41,8 +43,8 @@ const GST_RATE_OPTIONS = [
 const BILLING_CYCLE_OPTIONS = [
   'Monthly',
   'Quarterly',
-  'Annually',
-  'One-Time',
+  'Half-Yearly',
+  'Yearly',
 ];
 
 const PLAN_TYPE_OPTIONS = [
@@ -471,7 +473,7 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
       onClose();
     } catch (err: any) {
       console.error('Plan save error in modal:', err);
-      const msg = err?.response?.data?.message || err?.response?.data?.error?.message || err?.message || 'Failed to save plan';
+      const msg = getApiErrorMessage(err, 'Failed to save plan');
       setSubmitError(msg);
     }
   };

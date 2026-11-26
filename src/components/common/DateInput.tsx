@@ -45,7 +45,7 @@ export const DateInput: React.FC<DateInputProps> = ({
   return (
     <div
       title={title}
-      className={`relative flex items-center justify-between gap-2 px-3.5 w-full min-w-[140px] ${heightClass} ${disabled ? 'bg-slate-50 opacity-70' : 'bg-white'} rounded-xl transition-all focus-within:ring-4 ${
+      className={`relative flex items-center justify-between gap-2 px-4 w-full min-w-[140px] ${heightClass} ${disabled ? 'bg-slate-50 opacity-70' : 'bg-white'} rounded-xl overflow-hidden transition-all focus-within:ring-4 ${
         error
           ? 'border border-red-500 focus-within:border-red-500 focus-within:ring-red-500/10'
           : 'border border-slate-200 hover:border-slate-300 focus-within:border-[#4309A2] focus-within:ring-[#4309A2]/10'

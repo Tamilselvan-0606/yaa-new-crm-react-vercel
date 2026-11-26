@@ -1,5 +1,5 @@
 import { ProductStockLabel } from "../../../components/common/ProductStockLabel";
-import { attachStockQty } from "../../../utils/stockDisplay";
+import { attachStockQty, appendZeroStockErrors } from "../../../utils/stockDisplay";
 import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
 import { CommonTableHead } from "../../../components/common/CommonTableHead";
 import { CustomerSearchableSelect } from "../../../components/common/paginated-select";
@@ -208,24 +208,32 @@ const computeSaleOrderStockErrors = (
   ctx: {
     resolveProductId: (it: ExtendedSaleOrderItem) => string | undefined;
     getAvailable?: (productId: string, batch: string) => number | null;
+    getProductStockQty?: (productId: string) => number | null | undefined;
   },
 ): FieldErrors => {
   const getAvailable = ctx.getAvailable;
-  if (!getAvailable) return {};
-  return validateBatchStock(
-    items.map((it) => ({
-      productId: ctx.resolveProductId(it) || "",
-      productName: it.productName,
-      batch: it.batch,
-      quantity: it.quantity,
-    })),
-    {
-      getAvailable: (line) =>
-        line.productId && line.batch
-          ? getAvailable(line.productId, line.batch)
-          : null,
-    },
-  );
+  const batchErrs = getAvailable
+    ? validateBatchStock(
+        items.map((it) => ({
+          productId: ctx.resolveProductId(it) || "",
+          productName: it.productName,
+          batch: it.batch,
+          quantity: it.quantity,
+        })),
+        {
+          getAvailable: (line) =>
+            line.productId && line.batch
+              ? getAvailable(line.productId, line.batch)
+              : null,
+        },
+      )
+    : {};
+  if (!ctx.getProductStockQty) return batchErrs;
+  return appendZeroStockErrors(items, {
+    errors: batchErrs,
+    resolveProductId: ctx.resolveProductId,
+    getProductStockQty: ctx.getProductStockQty,
+  });
 };
 
 /**
@@ -247,6 +255,8 @@ const validateSaleOrderForm = (
     resolveProductId: (it: ExtendedSaleOrderItem) => string | undefined;
     /** Batch stock from the backend (null = unknown, never an error). */
     getAvailable?: (productId: string, batch: string) => number | null;
+    /** Overall product stock quantity (used to block 0-stock items even when unbatched). */
+    getProductStockQty?: (productId: string) => number | null | undefined;
     finalAmount: number;
     roundOff: number;
   },
@@ -1809,10 +1819,18 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         : undefined;
   };
 
+  const getProductStockQty = (productId: string): number | undefined => {
+    const matched = allStockItems.find(
+      (s: any) => s.productId === productId || s.id === productId,
+    );
+    return matched?.stockQty;
+  };
+
   const computeSaleOrderErrors = () =>
     validateSaleOrderForm(activeTab.formData, {
       resolveProductId: resolveProductIdForItem,
       getAvailable: getBatchAvailable,
+      getProductStockQty,
       finalAmount: currentCalculations.finalAmount,
       roundOff: currentCalculations.roundOff,
     });
@@ -1831,6 +1849,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       computeSaleOrderStockErrors(activeTab.formData.items, {
         resolveProductId: resolveProductIdForItem,
         getAvailable: getBatchAvailable,
+        getProductStockQty,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [activeTab.formData.items, getBatchAvailable, allStockItems],
@@ -2155,13 +2174,17 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       })),
     );
     await refreshBatchStock(lines.map((l) => l.productId));
-    const errs = validateBatchStock(lines, {
+    const batchErrs = validateBatchStock(lines, {
       getAvailable: (l) =>
         l.productId && l.batch ? getBatchAvailable(l.productId, l.batch) : null,
     });
+    const errs = appendZeroStockErrors(lines, {
+      errors: batchErrs,
+      getProductStockQty,
+    });
     return Object.entries(errs).map(([key, msg]) => {
       const l = lines[Number(key.split(".")[1])];
-      return `${l.orderNo} - ${l.productName || "Item"} (batch ${l.batch}): ${msg}`;
+      return `${l.orderNo} - ${l.productName || "Item"}${l.batch ? ` (batch ${l.batch})` : ""}: ${msg}`;
     });
   };
 
@@ -3132,6 +3155,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               <SalesDocumentItemsTable
                 items={activeTab.formData.items as SalesDocumentLineItem[]}
                 withGst={activeTab.formData.withGst}
+                restrictZeroStock={true}
                 formErrors={fe.errors}
                 liveStockErrors={liveStockErrors}
                 openProductDropdownRow={openProductDropdownRow}

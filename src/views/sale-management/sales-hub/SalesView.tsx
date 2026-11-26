@@ -1,4 +1,4 @@
-import { attachStockQty } from "../../../utils/stockDisplay";
+import { attachStockQty, appendZeroStockErrors } from "../../../utils/stockDisplay";
 import { getNextSalesInvoiceNumber } from "../../../utils/documentNumbering";
 import React, {
   useState,
@@ -1656,46 +1656,110 @@ export const SalesView: React.FC = () => {
     };
   }, [formData.customerId, customerList]);
 
-  // Handle URL Query Params for creating sale with preselected customer
+  const pendingPreselectCustIdRef = useRef<string | null>(null);
+
+  const buildCustomerFormPatch = useCallback(
+    (cust: any, fallbackTerms = "Net 15 Days") => ({
+      customerId: cust.id,
+      customerName:
+        cust.name || cust.contactPerson || cust.company || "",
+      customerCompany: cust.company || cust.name || "",
+      customerPhone: cust.phone || "",
+      customerEmail: cust.email || "",
+      billingAddress:
+        cust.billingAddress ||
+        cust.address ||
+        `${cust.city || ""} ${cust.state || ""}`.trim() ||
+        "Address on file",
+      shippingAddress:
+        cust.shippingAddress ||
+        cust.billingAddress ||
+        cust.address ||
+        `${cust.city || ""} ${cust.state || ""}`.trim() ||
+        "Address on file",
+      paymentTerms:
+        cust.paymentTerms || cust.paymentDuePeriod || fallbackTerms,
+    }),
+    [],
+  );
+
+  // Handle URL Query Params / navigation state for creating sale with preselected customer
   useEffect(() => {
     const custId = searchParams.get("customerId");
     const shouldCreate = searchParams.get("createSale");
-    if (custId && shouldCreate === "true") {
-      handleOpenCreateModal();
-      setTimeout(() => {
-        handleCustomerChange(custId);
-      }, 50);
+    if (!custId || shouldCreate !== "true") return;
+
+    const navCustomer = (location.state as any)?.preselectedCustomer;
+    const matched =
+      (navCustomer && navCustomer.id === custId ? navCustomer : null) ||
+      customerList.find((c) => c.id === custId) ||
+      null;
+
+    handleOpenCreateModal();
+
+    if (matched) {
+      pendingPreselectCustIdRef.current = null;
+      setCustomerList((prev) =>
+        prev.some((c) => c.id === matched.id) ? prev : [matched, ...prev],
+      );
+      setFormData((prev) => ({
+        ...prev,
+        ...buildCustomerFormPatch(matched, prev.paymentTerms || "Net 15 Days"),
+      }));
+    } else {
+      pendingPreselectCustIdRef.current = custId;
+      if (UUID_REGEX.test(custId)) {
+        customerApi
+          .getCustomerById(custId)
+          .then((res) => {
+            if (!res?.data || pendingPreselectCustIdRef.current !== custId) return;
+            const mapped = mapApiCustomerToSalesCustomer(res.data);
+            pendingPreselectCustIdRef.current = null;
+            setCustomerList((prev) =>
+              prev.some((c) => c.id === mapped.id) ? prev : [mapped, ...prev],
+            );
+            setFormData((prev) => ({
+              ...prev,
+              ...buildCustomerFormPatch(
+                mapped,
+                prev.paymentTerms || "Net 15 Days",
+              ),
+            }));
+          })
+          .catch((err) => {
+            console.warn("Could not prefill customer by ID in SalesView:", err);
+          });
+      }
     }
+
+    navigate(location.pathname, { replace: true, state: {} });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
+
+  // Complete deferred customer preselection if customerList finishes loading first
+  useEffect(() => {
+    const pendingId = pendingPreselectCustIdRef.current;
+    if (!pendingId || customerList.length === 0) return;
+    const found = customerList.find((c) => c.id === pendingId);
+    if (!found) return;
+    pendingPreselectCustIdRef.current = null;
+    setFormData((prev) => ({
+      ...prev,
+      ...buildCustomerFormPatch(found, prev.paymentTerms || "Net 15 Days"),
+    }));
+  }, [customerList, buildCustomerFormPatch]);
 
   // Customer Select Change
   const handleCustomerChange = (custId: string) => {
+    pendingPreselectCustIdRef.current = null;
     clearFormError("customer");
     const cust = customerList.find((c) => c.id === custId);
     if (cust) {
       setFormData((prev) => ({
         ...prev,
-        customerId: cust.id,
-        customerName:
-          cust.name || (cust as any).contactPerson || cust.company || "",
-        customerCompany: cust.company || cust.name || "",
-        customerPhone: cust.phone || "",
-        customerEmail: cust.email || "",
-        billingAddress:
-          (cust as any).billingAddress ||
-          cust.address ||
-          `${(cust as any).city || ""} ${(cust as any).state || ""}`.trim() ||
-          "Address on file",
-        shippingAddress:
-          (cust as any).shippingAddress ||
-          (cust as any).billingAddress ||
-          cust.address ||
-          `${(cust as any).city || ""} ${(cust as any).state || ""}`.trim() ||
-          "Address on file",
-        paymentTerms:
-          (cust as any).paymentTerms || prev.paymentTerms || "Net 15 Days",
+        ...buildCustomerFormPatch(cust, prev.paymentTerms || "Net 15 Days"),
       }));
-    } else {
+    } else if (!custId) {
       setFormData((prev) => ({
         ...prev,
         customerId: "",
@@ -1706,6 +1770,10 @@ export const SalesView: React.FC = () => {
         billingAddress: "",
         shippingAddress: "",
       }));
+    } else {
+      // Customer picked from paginated CustomerSearchableSelect (not in initial 100-item list);
+      // InvoiceDetailsSection sets the customer fields from the selected option object.
+      setFormData((prev) => ({ ...prev, customerId: custId }));
     }
   };
 
@@ -2096,6 +2164,13 @@ export const SalesView: React.FC = () => {
       .reduce((acc, o) => acc + (Number(o.quantity) || 0), 0);
   };
 
+  const getProductStockQty = (productId: string): number | undefined => {
+    const matched = availableProducts.find(
+      (p: any) => p.productId === productId || p.id === productId,
+    );
+    return matched?.stockQty;
+  };
+
   const buildInvoiceValidationContext = (
     checkStock: boolean,
   ): InvoiceValidationContext => ({
@@ -2104,13 +2179,14 @@ export const SalesView: React.FC = () => {
     resolveProductId,
     availableStock: getLineAvailableStock,
     stockCredit: getLineStockCredit,
+    productStockQty: getProductStockQty,
   });
 
   // LIVE stock errors (explicit exception to submit-first): recomputed whenever quantities, products,
   // batches or the loaded stock change, so the Qty cell reacts immediately. Never a toast.
   const liveStockErrors = useMemo<FieldErrors>(() => {
     if (!isFormModalOpen) return {};
-    return validateBatchStock(
+    const batchErrs = validateBatchStock(
       formData.items.map((it) =>
         isInvoiceRowBlank(it)
           ? {}
@@ -2127,8 +2203,21 @@ export const SalesView: React.FC = () => {
         credit: (_l, i) => getLineStockCredit(formData.items[i]),
       },
     );
+    return appendZeroStockErrors(formData.items, {
+      errors: batchErrs,
+      resolveProductId: (it) =>
+        isInvoiceRowBlank(it) ? undefined : resolveProductId(it),
+      getProductStockQty,
+      getCredit: (_l, i) => getLineStockCredit(formData.items[i]),
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isFormModalOpen, formData.items, editingSale, batchStock.version]);
+  }, [
+    isFormModalOpen,
+    formData.items,
+    editingSale,
+    batchStock.version,
+    availableProducts,
+  ]);
 
   // Submit-first: errors appear only after a submit attempt, then stay in sync with the values.
   const lastCheckStockRef = useRef(true);

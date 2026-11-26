@@ -168,13 +168,6 @@ export const SubcategoryView: React.FC = () => {
   const { requestStatusChange, statusConfirmModal } = useStatusConfirm();
   const deleteGuard = useSubmitGuard();
 
-  // Keystroke sanitizer: disallow typing numeric characters in text-only fields
-  const handleTextOnlyKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key >= "0" && e.key <= "9") {
-      e.preventDefault();
-    }
-  };
-
   // Detail Modal State (GET /commerce/subcategories/:id)
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [selectedSubcategoryDetail, setSelectedSubcategoryDetail] =
@@ -1194,10 +1187,9 @@ export const SubcategoryView: React.FC = () => {
                       val.trim().length >= 2 ||
                       "The subcategory name must be at least 2 characters.",
                   })}
-                  onKeyDown={handleTextOnlyKeyDown}
                   onInput={(e) => {
                     e.currentTarget.value = e.currentTarget.value.replace(
-                      /[^A-Za-z\s&'-]/g,
+                      /[^A-Za-z0-9\s&'-]/g,
                       "",
                     );
                   }}

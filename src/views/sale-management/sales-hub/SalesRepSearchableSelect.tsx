@@ -659,7 +659,7 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
                   required
                   value={watchForm("mobile") || ""}
                   error={formErrors.mobile?.message as string | undefined}
-                  placeholder="e.g. 9876543210"
+                  placeholder="Enter mobile number"
                   onChange={(v) => setFormValue("mobile", v, { shouldValidate: !!formErrors.mobile })}
                 />
               </div>

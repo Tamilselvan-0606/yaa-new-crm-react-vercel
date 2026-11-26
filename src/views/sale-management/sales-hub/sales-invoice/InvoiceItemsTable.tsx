@@ -6,6 +6,7 @@ import { Loader2, ChevronDown, Search, X, Plus, Check, Trash2 } from "lucide-rea
 import { ProductStockLabel } from "../../../../components/common/ProductStockLabel";
 import { FormError } from "../../../../components/common/FormError";
 import { SearchableSelect } from "../../../../components/common/SearchableSelect";
+import { GstRateSelect } from "../../../../components/common/GstRateSelect";
 import { handleNonNegativeKeyDown } from "../../utils/formUtils";
 import { getInitials, FORM_ERROR_INPUT_CLS } from "./salesInvoiceFormat";
 import type { SalesInvoiceFormData } from "./salesInvoiceTypes";
@@ -109,7 +110,7 @@ export const InvoiceItemsTable: React.FC<InvoiceItemsTableProps> = ({
               <col className="w-auto min-w-[240px]" />
               <col className="w-[160px]" />
               <col className="w-[85px]" />
-              <col className="w-[95px]" />
+              <col className="w-[105px]" />
               <col className="w-[110px]" />
               <col className="w-[80px]" />
               <col className="w-[110px]" />
@@ -434,17 +435,31 @@ export const InvoiceItemsTable: React.FC<InvoiceItemsTableProps> = ({
                                   const pPrice = Number(
                                     p.price || p.unitPrice || 0,
                                   );
+                                  const isOutOfStock =
+                                    !isSelected &&
+                                    p.stockQty !== undefined &&
+                                    p.stockQty !== null &&
+                                    Number(p.stockQty) <= 0;
 
                                   return (
                                     <div
                                       key={p.id}
-                                      onClick={() =>
-                                        handleSelectProduct(idx, p)
+                                      onClick={() => {
+                                        if (isOutOfStock) return;
+                                        handleSelectProduct(idx, p);
+                                      }}
+                                      aria-disabled={isOutOfStock || undefined}
+                                      title={
+                                        isOutOfStock
+                                          ? "Out of stock — cannot be added to sales invoice"
+                                          : undefined
                                       }
-                                      className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-3 text-xs transition-colors cursor-pointer text-left ${
-                                        isSelected
-                                          ? "bg-purple-50 text-[#33077C] font-semibold border border-purple-200/60"
-                                          : "hover:bg-slate-50/80 text-slate-800"
+                                      className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-3 text-xs transition-colors text-left ${
+                                        isOutOfStock
+                                          ? "opacity-55 bg-slate-50/70 text-slate-400 cursor-not-allowed"
+                                          : isSelected
+                                            ? "bg-purple-50 text-[#33077C] font-semibold border border-purple-200/60 cursor-pointer"
+                                            : "hover:bg-slate-50/80 text-slate-800 cursor-pointer"
                                       }`}
                                     >
                                       <div className="flex items-center gap-2.5 min-w-0 flex-1">
@@ -640,34 +655,16 @@ export const InvoiceItemsTable: React.FC<InvoiceItemsTableProps> = ({
 
                     {/* 3. GST (%) */}
                     <td className="px-2 py-3.5 align-top border border-slate-200">
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        disabled={!formData.withGst}
-                        value={
-                          formData.withGst
-                            ? item.taxPercent === 0
-                              ? ""
-                              : item.taxPercent || ""
-                            : ""
-                        }
-                        placeholder="0"
-                        {...fieldAttr(`items.${idx}.taxPercent`)}
-                        onKeyDown={handleNonNegativeKeyDown}
-                        onChange={(e) =>
-                          handleItemFieldChange(
-                            idx,
-                            "taxPercent",
-                            Number(e.target.value),
-                          )
-                        }
-                        className={`w-full h-10 px-2 text-center rounded-xl text-xs font-semibold outline-none shadow-2xs transition-all ${
-                          formData.withGst
-                            ? "bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] text-slate-800 focus:ring-3 focus:ring-[#4309A2]/10"
-                            : "bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed"
-                        }`}
-                      />
+                      <div {...fieldAttr(`items.${idx}.taxPercent`)}>
+                        <GstRateSelect
+                          disabled={!formData.withGst}
+                          error={Boolean(formErrors[`items.${idx}.taxPercent`])}
+                          value={formData.withGst ? item.taxPercent : 0}
+                          onChange={(rate) =>
+                            handleItemFieldChange(idx, "taxPercent", rate)
+                          }
+                        />
+                      </div>
                       <FormError
                         message={
                           formErrors[`items.${idx}.taxPercent`]

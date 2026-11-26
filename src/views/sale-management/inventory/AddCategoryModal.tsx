@@ -56,25 +56,6 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
     });
   }, [isOpen, reset]);
 
-  // Keystroke sanitizer: disallow typing numeric characters in text-only fields
-  const handleTextOnlyKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (
-      e.key === 'Backspace' ||
-      e.key === 'Delete' ||
-      e.key === 'ArrowLeft' ||
-      e.key === 'ArrowRight' ||
-      e.key === 'Tab' ||
-      e.key === 'Enter' ||
-      e.ctrlKey ||
-      e.metaKey
-    ) {
-      return;
-    }
-    if (e.key >= '0' && e.key <= '9') {
-      e.preventDefault();
-    }
-  };
-
   const handleSaveCategory = (data: CategoryFormValues) => runOnce(async () => {
     const trimmedName = (data.categoryName || '').trim();
 
@@ -144,9 +125,8 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
                 validate: (val) =>
                   val.trim().length >= 2 || 'The category name must be at least 2 characters.',
               })}
-              onKeyDown={handleTextOnlyKeyDown}
               onInput={(e) => {
-                e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'-]/g, '');
+                e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z0-9\s&'-]/g, '');
               }}
               placeholder="Enter category name"
               className={errors.categoryName ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}

@@ -59,7 +59,7 @@ export interface DocumentItem {
   file?: File;
 }
 
-export type BillingCycle = 'Monthly' | 'Quarterly' | 'Annually' | 'One-Time' | 'Custom';
+export type BillingCycle = 'Monthly' | 'Quarterly' | 'Half-Yearly' | 'Yearly' | 'Annually' | 'One-Time' | 'Custom';
 export type PricingType = 'Fixed' | 'Per-User' | 'Usage-Based' | 'Custom Quote' | 'Tiered';
 
 export interface ProductPlan {

@@ -1,4 +1,5 @@
 import { PhoneField } from "../../../components/common/PhoneField";
+import { alphabetsOnly, lettersOnly } from "../../../utils/fieldValidators";
 import {
   LocationFields,
   LocationMeta,
@@ -144,11 +145,37 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
     districtRequired: true,
     cityRequired: true,
   });
+  const locationMetaRef = useRef(locationMeta);
+  locationMetaRef.current = locationMeta;
+
   useEffect(() => {
-    register("country");
-    register("state");
-    register("city");
+    register("country", {
+      validate: (val) => (val?.trim() ? true : "Please select a country"),
+    });
+    register("state", {
+      validate: (val) =>
+        !locationMetaRef.current.stateRequired || val?.trim()
+          ? true
+          : "Please select a state",
+    });
+    register("city", {
+      validate: (val) =>
+        !locationMetaRef.current.cityRequired || val?.trim()
+          ? true
+          : "Please select a city",
+    });
   }, [register, isOpen]);
+
+  useEffect(() => {
+    if (!locationMeta.stateRequired) clearErrors("state");
+    if (!locationMeta.districtRequired) setDistrictError(undefined);
+    if (!locationMeta.cityRequired) clearErrors("city");
+  }, [
+    locationMeta.stateRequired,
+    locationMeta.districtRequired,
+    locationMeta.cityRequired,
+    clearErrors,
+  ]);
 
   // Guards: never run two rep loads at once, and do not re-fetch on every open once loaded.
   const isFetchingRepsRef = useRef(false);
@@ -197,8 +224,10 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
       });
       // Every time the form opens, read the live list so a representative added elsewhere is included.
       loadSalesReps(true);
+      setDistrictError(undefined);
     } else {
       clearErrors();
+      setDistrictError(undefined);
     }
   }, [isOpen, reset, clearErrors]);
 
@@ -222,8 +251,13 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
     }
   };
 
-  // Submit attempted with field-rule failures: also surface the out-of-rule rep error in the same pass.
+  // Submit attempted with field-rule failures: also surface the out-of-rule rep and district errors in the same pass.
   const onInvalid = () => {
+    setDistrictError(
+      locationMetaRef.current.districtRequired && !locationDistrict.trim()
+        ? "Please select a district"
+        : undefined,
+    );
     const repId = watch("salesRepresentativeId");
     if (
       repId &&
@@ -241,7 +275,11 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
     runOnce(async () => {
       // Re-check every rule here (not only through field rules) so nothing invalid reaches the API.
       const submitErrors: Array<[keyof CustomerFormData, string | null]> = [
-        ["name", checkRequiredText(data.name, "customer name", 2)],
+        [
+          "name",
+          checkRequiredText(data.name, "customer name", 2) ||
+            alphabetsOnly("Full Name / Contact Person")(data.name),
+        ],
         ["phone", checkIntlPhone(data.phone, true, "phone number")],
         [
           "alternatePhone",
@@ -498,7 +536,12 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   type="text"
                   {...register("name", {
                     validate: (val) =>
-                      checkRequiredText(val, "customer name", 2) || true,
+                      checkRequiredText(val, "customer name", 2) ||
+                      alphabetsOnly("Full Name / Contact Person")(val) ||
+                      true,
+                    onChange: (e) => {
+                      e.target.value = lettersOnly(e.target.value);
+                    },
                   })}
                   placeholder="e.g. Marcus Vance or Acme Corp"
                   className={
@@ -595,7 +638,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                     dataField="phone"
                     value={field.value || ""}
                     error={errors.phone?.message as string | undefined}
-                    placeholder="e.g. 9876543210"
+                    placeholder="Enter phone number"
                     onChange={(v) => field.onChange(v)}
                   />
                 )}
@@ -615,7 +658,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                     dataField="alternatePhone"
                     value={field.value || ""}
                     error={errors.alternatePhone?.message as string | undefined}
-                    placeholder="e.g. 9876543211"
+                    placeholder="Enter WhatsApp number"
                     onChange={(v) => field.onChange(v)}
                   />
                 )}
@@ -702,7 +745,13 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                     });
                   if (patch.district !== undefined) {
                     setLocationDistrict(patch.district);
-                    setDistrictError(undefined);
+                    setDistrictError(
+                      isSubmitted &&
+                        locationMetaRef.current.districtRequired &&
+                        !patch.district.trim()
+                        ? "Please select a district"
+                        : undefined,
+                    );
                   }
                   if (patch.city !== undefined)
                     setValue("city", patch.city, {

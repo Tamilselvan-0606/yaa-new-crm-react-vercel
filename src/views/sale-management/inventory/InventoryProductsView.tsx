@@ -154,6 +154,10 @@ export interface ProductFormValues {
   expDate?: string;
 }
 
+/** Formats API tax type ("Included" / "Excluded") for UI display ("With Tax" / "Without Tax"). */
+const formatTaxTypeLabel = (taxType?: string): string =>
+  taxType === "Included" ? "With Tax" : "Without Tax";
+
 export const defaultProductFormValues: ProductFormValues = {
   itemType: "Product",
   productCode: "",
@@ -3307,7 +3311,7 @@ export const InventoryProductsView: React.FC = () => {
       category: p.category,
       subcategory: p.subcategory || "-",
       salePrice: Number(p.salePrice || 0),
-      salePriceTaxType: p.salePriceTaxType,
+      salePriceTaxType: formatTaxTypeLabel(p.salePriceTaxType),
       purchasePrice: Number(p.purchasePrice || 0),
       taxRate: (() => {
         const m = String(p.taxRate ?? "").match(/(\d+(?:\.\d+)?)\s*%/);
@@ -3830,7 +3834,7 @@ export const InventoryProductsView: React.FC = () => {
                           ₹{Number(item.salePrice).toLocaleString("en-IN")}
                         </div>
                         <div className="text-[10px] font-normal text-slate-400">
-                          {item.salePriceTaxType}
+                          {formatTaxTypeLabel(item.salePriceTaxType)}
                         </div>
                       </td>
 
@@ -3845,7 +3849,7 @@ export const InventoryProductsView: React.FC = () => {
                               )}
                             </div>
                             <div className="text-[10px] font-normal text-slate-400">
-                              {item.purchasePriceTaxType}
+                              {formatTaxTypeLabel(item.purchasePriceTaxType)}
                             </div>
                           </>
                         ) : (
@@ -4337,8 +4341,8 @@ export const InventoryProductsView: React.FC = () => {
                               }
                               className="shrink-0 h-full px-2.5 sm:px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
                             >
-                              <option value="Excluded">Excluded</option>
-                              <option value="Included">Included</option>
+                              <option value="Excluded">Without Tax</option>
+                              <option value="Included">With Tax</option>
                             </select>
                           </div>
                           {errors.salePrice && (
@@ -4480,8 +4484,8 @@ export const InventoryProductsView: React.FC = () => {
                                   }
                                   className="shrink-0 h-full px-2.5 sm:px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
                                 >
-                                  <option value="Excluded">Excluded</option>
-                                  <option value="Included">Included</option>
+                                  <option value="Excluded">Without Tax</option>
+                                  <option value="Included">With Tax</option>
                                 </select>
                               </div>
                               {errors.wholesalePrice && (
@@ -4602,8 +4606,8 @@ export const InventoryProductsView: React.FC = () => {
                             }
                             className="shrink-0 h-full px-2.5 sm:px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
                           >
-                            <option value="Excluded">Excluded</option>
-                            <option value="Included">Included</option>
+                            <option value="Excluded">Without Tax</option>
+                            <option value="Included">With Tax</option>
                           </select>
                         </div>
                         {errors.purchasePrice && (
@@ -5615,8 +5619,8 @@ export const InventoryProductsView: React.FC = () => {
                                   }
                                   className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-700 outline-none cursor-pointer transition-all"
                                 >
-                                  <option value="Excluded">Excluded</option>
-                                  <option value="Included">Included</option>
+                                  <option value="Excluded">Without Tax</option>
+                                  <option value="Included">With Tax</option>
                                 </select>
                               </td>
 
@@ -5656,8 +5660,8 @@ export const InventoryProductsView: React.FC = () => {
                                   }
                                   className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-700 outline-none cursor-pointer transition-all"
                                 >
-                                  <option value="Excluded">Excluded</option>
-                                  <option value="Included">Included</option>
+                                  <option value="Excluded">Without Tax</option>
+                                  <option value="Included">With Tax</option>
                                 </select>
                               </td>
 
@@ -6080,7 +6084,7 @@ export const InventoryProductsView: React.FC = () => {
                         )}
                       </span>
                       <span className="text-[10px] text-slate-400 block mt-0.5">
-                        ({selectedProductDetail.salePriceTaxType})
+                        ({formatTaxTypeLabel(selectedProductDetail.salePriceTaxType)})
                       </span>
                     </div>
                     <div className="p-3 bg-white rounded-xl border border-slate-200">
@@ -6095,8 +6099,10 @@ export const InventoryProductsView: React.FC = () => {
                       </span>
                       <span className="text-[10px] text-slate-400 block mt-0.5">
                         (
-                        {selectedProductDetail.purchasePriceTaxType ||
-                          "Excluded"}
+                        {formatTaxTypeLabel(
+                          selectedProductDetail.purchasePriceTaxType ||
+                            "Excluded",
+                        )}
                         )
                       </span>
                     </div>
@@ -6159,7 +6165,7 @@ export const InventoryProductsView: React.FC = () => {
                           ).toLocaleString("en-IN")}
                         </span>
                         <span className="text-[10px] text-slate-400 block">
-                          ({selectedProductDetail.wholesaleTaxType})
+                          ({formatTaxTypeLabel(selectedProductDetail.wholesaleTaxType)})
                         </span>
                       </div>
                     </div>

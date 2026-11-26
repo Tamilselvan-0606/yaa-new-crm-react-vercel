@@ -29,3 +29,47 @@ export function attachStockQty<T extends { productId?: string; id?: string }>(
     return byProduct.has(pid) ? { ...it, stockQty: byProduct.get(pid) } : it;
   });
 }
+
+/**
+ * Appends `items.{i}.quantity` errors for any non-blank product line whose known
+ * product-level stock is zero or negative (`stockQty + credit <= 0`), covering
+ * unbatched rows or missing batch records that batch-only stock validation skips.
+ */
+export function appendZeroStockErrors(
+  items: Array<{
+    productId?: string;
+    productName?: string;
+    quantity?: unknown;
+  }>,
+  opts: {
+    errors: Record<string, string>;
+    resolveProductId?: (item: any) => string | undefined;
+    getProductStockQty: (productId: string) => number | null | undefined;
+    getCredit?: (item: any, index: number) => number;
+  },
+): Record<string, string> {
+  const out = { ...opts.errors };
+  items.forEach((it, i) => {
+    const key = `items.${i}.quantity`;
+    if (out[key]) return;
+    const hasLine = Boolean(it.productName?.trim() || it.productId);
+    if (!hasLine) return;
+    const pid =
+      (opts.resolveProductId ? opts.resolveProductId(it) : undefined) ||
+      it.productId;
+    if (!pid) return;
+    const stockQty = opts.getProductStockQty(pid);
+    if (
+      stockQty === null ||
+      stockQty === undefined ||
+      !Number.isFinite(Number(stockQty))
+    ) {
+      return;
+    }
+    const credit = opts.getCredit ? opts.getCredit(it, i) : 0;
+    if (Number(stockQty) + credit <= 0) {
+      out[key] = 'This product is out of stock (0 available).';
+    }
+  });
+  return out;
+}

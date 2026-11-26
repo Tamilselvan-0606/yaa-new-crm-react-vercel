@@ -1632,7 +1632,7 @@ export const SalesRepresentativeView: React.FC = () => {
                 required
                 value={watch("mobile") || ""}
                 error={errors.mobile?.message as string | undefined}
-                placeholder="e.g. 9876543210"
+                placeholder="Enter mobile number"
                 onChange={(v) => setValue("mobile", v, { shouldValidate: isSubmitted })}
               />
             </div>

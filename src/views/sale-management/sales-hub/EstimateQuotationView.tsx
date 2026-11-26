@@ -1,5 +1,5 @@
 import { ProductStockLabel } from "../../../components/common/ProductStockLabel";
-import { attachStockQty } from "../../../utils/stockDisplay";
+import { attachStockQty, appendZeroStockErrors } from "../../../utils/stockDisplay";
 import { CommonTableHead } from "../../../components/common/CommonTableHead";
 import { CustomerSearchableSelect } from "../../../components/common/paginated-select";
 import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
@@ -323,28 +323,25 @@ const validateEstimateForm = (
 
   if (Object.keys(errors).length === 0) {
     const expected = round2(
-      realRows.reduce(
-        (sum, it) => {
-          const useAmt =
-            it.discountType === "amount" ||
-            (Number(it.discountAmount) > 0 && Number(it.discountPercent) === 0);
-          return (
-            sum +
-            calculateLineItem(
-              {
-                quantity: it.quantity,
-                unitPrice: it.unitPrice,
-                discountPercent: useAmt ? 0 : it.discountPercent,
-                discountAmount: useAmt ? it.discountAmount : 0,
-                taxPercent: it.taxPercent,
-                isTaxInclusive: ctx.isInclusive,
-              },
-              { withGst: form.withGst !== false, gstType: form.gstType },
-            ).lineTotal
-          );
-        },
-        0,
-      ),
+      realRows.reduce((sum, it) => {
+        const useAmt =
+          it.discountType === "amount" ||
+          (Number(it.discountAmount) > 0 && Number(it.discountPercent) === 0);
+        return (
+          sum +
+          calculateLineItem(
+            {
+              quantity: it.quantity,
+              unitPrice: it.unitPrice,
+              discountPercent: useAmt ? 0 : it.discountPercent,
+              discountAmount: useAmt ? it.discountAmount : 0,
+              taxPercent: it.taxPercent,
+              isTaxInclusive: ctx.isInclusive,
+            },
+            { withGst: form.withGst !== false, gstType: form.gstType },
+          ).lineTotal
+        );
+      }, 0),
     );
     const totalErr = checkTotalConsistency(
       expected,
@@ -1211,7 +1208,12 @@ export const EstimateQuotationView: React.FC = () => {
       const addBatch = (b: any) => {
         if (!b) return;
         const batchNo = String(b.batchNo || b.batch || "").trim();
-        if (!batchNo || /^(null|undefined)$/i.test(batchNo) || seenBatchNos.has(batchNo.toLowerCase())) return;
+        if (
+          !batchNo ||
+          /^(null|undefined)$/i.test(batchNo) ||
+          seenBatchNos.has(batchNo.toLowerCase())
+        )
+          return;
         seenBatchNos.add(batchNo.toLowerCase());
         resultBatches.push({
           id: b.id || `bat_${batchNo}`,
@@ -1399,28 +1401,28 @@ export const EstimateQuotationView: React.FC = () => {
   const applyQuotationFilters = useCallback(
     (enrichedList: SaleQuotation[]) =>
       enrichedList.filter((item) => {
-      const q = appliedSearch.toLowerCase().trim();
-      const matchesSearch =
-        q === "" ||
-        item.partyName.toLowerCase().includes(q) ||
-        (item.referenceNo &&
-          String(item.referenceNo).toLowerCase().includes(q)) ||
-        item.quotationNo.toLowerCase().includes(q) ||
-        (item.estimateManualNo || "").toLowerCase().includes(q) ||
-        (item.customerPhone && item.customerPhone.includes(q)) ||
-        (item.customerCompany &&
-          item.customerCompany.toLowerCase().includes(q)) ||
-        (item.items &&
-          item.items.some((it) => it.productName.toLowerCase().includes(q)));
+        const q = appliedSearch.toLowerCase().trim();
+        const matchesSearch =
+          q === "" ||
+          item.partyName.toLowerCase().includes(q) ||
+          (item.referenceNo &&
+            String(item.referenceNo).toLowerCase().includes(q)) ||
+          item.quotationNo.toLowerCase().includes(q) ||
+          (item.estimateManualNo || "").toLowerCase().includes(q) ||
+          (item.customerPhone && item.customerPhone.includes(q)) ||
+          (item.customerCompany &&
+            item.customerCompany.toLowerCase().includes(q)) ||
+          (item.items &&
+            item.items.some((it) => it.productName.toLowerCase().includes(q)));
 
-      const matchesStatus =
-        appliedStatus === "ALL" ||
-        item.status?.toLowerCase() === appliedStatus.toLowerCase();
+        const matchesStatus =
+          appliedStatus === "ALL" ||
+          item.status?.toLowerCase() === appliedStatus.toLowerCase();
 
-      const matchesPeriod = checkDateMatchesPeriod(item.date, appliedPeriod);
+        const matchesPeriod = checkDateMatchesPeriod(item.date, appliedPeriod);
 
-      return matchesSearch && matchesStatus && matchesPeriod;
-    }),
+        return matchesSearch && matchesStatus && matchesPeriod;
+      }),
     [appliedSearch, appliedStatus, appliedPeriod],
   );
   const displayQuotations = useMemo(
@@ -1602,7 +1604,9 @@ export const EstimateQuotationView: React.FC = () => {
           : {}),
         items: rows.length > 0 ? rows : prev.items,
       }));
-      toast.success(`Draft restored with ${rows.length} item${rows.length === 1 ? "" : "s"}.`);
+      toast.success(
+        `Draft restored with ${rows.length} item${rows.length === 1 ? "" : "s"}.`,
+      );
     } finally {
       setIsResumingDraft(false);
     }
@@ -1738,7 +1742,8 @@ export const EstimateQuotationView: React.FC = () => {
         const mapped = mapApiQuotationToSaleQuotation(res.data);
         targetQuot = {
           ...mapped,
-          estimateManualNo: mapped.estimateManualNo || quot.estimateManualNo || "",
+          estimateManualNo:
+            mapped.estimateManualNo || quot.estimateManualNo || "",
         };
       }
     } catch (err) {
@@ -1754,7 +1759,8 @@ export const EstimateQuotationView: React.FC = () => {
           : determineGstType(targetQuot.stateOfSupply);
     const mappedItems: ExtendedEstimateItem[] = targetQuot.items.map((it) => {
       const useAmt =
-        Number((it as any).discountAmount) > 0 && Number(it.discountPercent) === 0;
+        Number((it as any).discountAmount) > 0 &&
+        Number(it.discountPercent) === 0;
       const lineRes = calculateLineItem(
         {
           quantity: Number(it.quantity) || 0,
@@ -2293,6 +2299,15 @@ export const EstimateQuotationView: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docProductKey]);
 
+  const getProductStockQty = (productId: string): number | undefined => {
+    const matched = availableProducts.find(
+      (pr: any) => pr.productId === productId || pr.id === productId,
+    );
+    return matched?.stockQty;
+  };
+
+  // Stock validation is used only when converting an estimate into Sale Order / Delivery Challan / Sales Invoice.
+  // Creating or editing an Estimation/Quotation itself allows zero-stock products.
   const computeStockErrors = (
     items: Array<{
       productId?: string;
@@ -2300,8 +2315,8 @@ export const EstimateQuotationView: React.FC = () => {
       batch?: string;
       quantity?: unknown;
     }>,
-  ): FieldErrors =>
-    validateBatchStock(
+  ): FieldErrors => {
+    const errs = validateBatchStock(
       items.map((it) => ({
         productId: it.productId,
         productName: it.productName,
@@ -2310,15 +2325,15 @@ export const EstimateQuotationView: React.FC = () => {
       })),
       { getAvailable: (l) => batchStock.getAvailable(l.productId, l.batch) },
     );
-  // Live (shown before any submit attempt): recomputed when quantity / product / batch / stock change.
-  const liveStockErrors = useMemo(
-    () => computeStockErrors(formData.items),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [formData.items, batchStock.getAvailable],
-  );
+    return appendZeroStockErrors(items, {
+      errors: errs,
+      getProductStockQty,
+    });
+  };
+  const liveStockErrors: FieldErrors = {};
 
   const computeEstimateErrors = () => {
-    const errs = validateEstimateForm(formData, {
+    return validateEstimateForm(formData, {
       isInclusive: priceTaxMode === "With Tax",
       finalAmount: formCalculations.grandTotal,
       roundOff: formCalculations.roundOffDiff,
@@ -2326,11 +2341,6 @@ export const EstimateQuotationView: React.FC = () => {
         availableProducts.find((pr: any) => pr.productId === id || pr.id === id)
           ?.productName,
     });
-    const stockErrs = computeStockErrors(formData.items);
-    Object.entries(stockErrs).forEach(([k, v]) => {
-      if (!errs[k]) errs[k] = v;
-    });
-    return errs;
   };
   const computeConvertErrors = (): FieldErrors => {
     const errs: FieldErrors = {};
@@ -2343,8 +2353,8 @@ export const EstimateQuotationView: React.FC = () => {
         )
       : null;
     if (msg) errs.convertDueDate = msg;
-    if (convertTargetQuotation) {
-      // The converted lines keep productId, batch and quantity: check them against batch stock.
+    if (convertTargetQuotation && convertType !== "Proforma") {
+      // Converting to Sale Order / Delivery Challan / Sales Invoice requires available stock.
       const stockErrs = computeStockErrors(convertTargetQuotation.items || []);
       const first = Object.entries(stockErrs)[0];
       if (first) {
@@ -2686,12 +2696,14 @@ export const EstimateQuotationView: React.FC = () => {
         );
         return;
       }
-      // Converted lines keep productId / batch / quantity: check them against fresh batch stock first.
-      await batchStock.refresh(
-        (quot.items || [])
-          .map((it) => it.productId)
-          .filter((id): id is string => !!id),
-      );
+      if (convertType !== "Proforma") {
+        // Converted lines keep productId / batch / quantity: check them against fresh batch stock first.
+        await batchStock.refresh(
+          (quot.items || [])
+            .map((it) => it.productId)
+            .filter((id): id is string => !!id),
+        );
+      }
       if (!fe.validateAll(computeConvertErrors())) return;
       setIsConverting(true);
 
@@ -3366,7 +3378,9 @@ export const EstimateQuotationView: React.FC = () => {
         ? "inter_state"
         : item.gstType === "intra_state"
           ? "intra_state"
-          : determineGstType(item.stateOfSupply)) as "intra_state" | "inter_state",
+          : determineGstType(item.stateOfSupply)) as
+        | "intra_state"
+        | "inter_state",
       items: copiedItems,
       notes: item.notes || "",
       terms: item.terms || "",
@@ -3455,7 +3469,8 @@ export const EstimateQuotationView: React.FC = () => {
         const mapped = mapApiQuotationToSaleQuotation(res.data);
         setPreviewQuotation({
           ...mapped,
-          estimateManualNo: mapped.estimateManualNo || item.estimateManualNo || "",
+          estimateManualNo:
+            mapped.estimateManualNo || item.estimateManualNo || "",
         });
       } else {
         setPreviewQuotation(item);
@@ -3477,122 +3492,134 @@ export const EstimateQuotationView: React.FC = () => {
     runReport<SaleQuotation>({
       label: "quotations",
       load: async () =>
-        applyQuotationFilters(await fetchAllReportRows<SaleQuotation>(fetchQuotationsReportPage)),
+        applyQuotationFilters(
+          await fetchAllReportRows<SaleQuotation>(fetchQuotationsReportPage),
+        ),
       onRows: (rows) => {
-    const excelRows = rows.map((q) => {
-      const created = formatDateTime(q.createdAt || q.date);
-      const qStages = getQuotationStages(q);
-      const isActuallyConverted = Boolean(
-        q.convertedAt ||
-        q.convertedToInvoiceNo ||
-        q.convertedToId ||
-        qStages.isFullyConverted ||
-        (q.status === "Converted" &&
-          (qStages.isInvoiceConverted ||
-            qStages.isOrderConverted ||
-            qStages.isChallanConverted ||
-            qStages.isProformaConverted)),
-      );
-      const converted = isActuallyConverted
-        ? formatDateTime(
+        const excelRows = rows.map((q) => {
+          const created = formatDateTime(q.createdAt || q.date);
+          const qStages = getQuotationStages(q);
+          const isActuallyConverted = Boolean(
             q.convertedAt ||
-              (q.status === "Converted" && q.updatedAt !== q.createdAt
-                ? q.updatedAt
-                : null),
-          )
-        : null;
-      const code =
-        q.customerCode ||
-        customers.find(
-          (c) =>
-            (q.customerId && c.id === q.customerId) ||
-            (c.phone && q.customerPhone && c.phone === q.customerPhone) ||
-            (c.name &&
-              q.partyName &&
-              c.name.toLowerCase() === q.partyName.toLowerCase()),
-        )?.customerCode ||
-        "";
+            q.convertedToInvoiceNo ||
+            q.convertedToId ||
+            qStages.isFullyConverted ||
+            (q.status === "Converted" &&
+              (qStages.isInvoiceConverted ||
+                qStages.isOrderConverted ||
+                qStages.isChallanConverted ||
+                qStages.isProformaConverted)),
+          );
+          const converted = isActuallyConverted
+            ? formatDateTime(
+                q.convertedAt ||
+                  (q.status === "Converted" && q.updatedAt !== q.createdAt
+                    ? q.updatedAt
+                    : null),
+              )
+            : null;
+          const code =
+            q.customerCode ||
+            customers.find(
+              (c) =>
+                (q.customerId && c.id === q.customerId) ||
+                (c.phone && q.customerPhone && c.phone === q.customerPhone) ||
+                (c.name &&
+                  q.partyName &&
+                  c.name.toLowerCase() === q.partyName.toLowerCase()),
+            )?.customerCode ||
+            "";
 
-      return {
-        estimateNo: q.quotationNo,
-        estimateManualNo: q.estimateManualNo || "—",
-        createdDateTime: created ? created.full : q.date,
-        convertedDateTime: converted ? converted.full : "—",
-        customerCode: code || "—",
-        partyName: q.partyName,
-        customerPhone: q.customerPhone || "-",
-        amount: Number(q.amount || 0),
-        balance: Number(q.balance || 0),
-        status: q.status,
-      };
-    });
+          return {
+            estimateNo: q.quotationNo,
+            estimateManualNo: q.estimateManualNo || "—",
+            createdDateTime: created ? created.full : q.date,
+            convertedDateTime: converted ? converted.full : "—",
+            customerCode: code || "—",
+            partyName: q.partyName,
+            customerPhone: q.customerPhone || "-",
+            amount: Number(q.amount || 0),
+            balance: Number(q.balance || 0),
+            status: q.status,
+          };
+        });
 
-    exportTableToExcel({
-      filename: `Estimates_Quotations_Report_${new Date().toISOString().split("T")[0]}`,
-      sheetName: "Estimates & Quotations",
-      title: "YAA CREATIONS CRM - ESTIMATE & QUOTATION REPORT",
-      subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${rows.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
-      columns: [
-        {
-          header: "Estimate ID",
-          key: "estimateNo",
-          align: "center",
-          width: 18,
-        },
-        {
-          header: "Estimate No.",
-          key: "estimateManualNo",
-          align: "center",
-          width: 18,
-        },
-        {
-          header: "Created Date & Time",
-          key: "createdDateTime",
-          align: "center",
-          width: 22,
-        },
-        {
-          header: "Converted Date & Time",
-          key: "convertedDateTime",
-          align: "center",
-          width: 22,
-        },
-        {
-          header: "Customer ID",
-          key: "customerCode",
-          align: "center",
-          width: 15,
-        },
-        { header: "Customer Name", key: "partyName", align: "left", width: 25 },
-        { header: "Contact", key: "customerPhone", align: "left", width: 18 },
-        {
-          header: "Amount (₹)",
-          key: "amount",
-          align: "right",
-          type: "currency",
-          width: 18,
-        },
-        {
-          header: "Balance (₹)",
-          key: "balance",
-          align: "right",
-          type: "currency",
-          width: 18,
-        },
-        { header: "Status", key: "status", align: "center", width: 14 },
-      ],
-      data: excelRows,
-      summaryRow: {
-        estimateNo: "TOTAL",
-        partyName: `${rows.length} Quotations`,
-        amount: reportTotals(rows).totalAmount,
-        balance: reportTotals(rows).openAmount,
-      },
-    });
+        exportTableToExcel({
+          filename: `Estimates_Quotations_Report_${new Date().toISOString().split("T")[0]}`,
+          sheetName: "Estimates & Quotations",
+          title: "YAA CREATIONS CRM - ESTIMATE & QUOTATION REPORT",
+          subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${rows.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
+          columns: [
+            {
+              header: "Estimate ID",
+              key: "estimateNo",
+              align: "center",
+              width: 18,
+            },
+            {
+              header: "Estimate No.",
+              key: "estimateManualNo",
+              align: "center",
+              width: 18,
+            },
+            {
+              header: "Created Date & Time",
+              key: "createdDateTime",
+              align: "center",
+              width: 22,
+            },
+            {
+              header: "Converted Date & Time",
+              key: "convertedDateTime",
+              align: "center",
+              width: 22,
+            },
+            {
+              header: "Customer ID",
+              key: "customerCode",
+              align: "center",
+              width: 15,
+            },
+            {
+              header: "Customer Name",
+              key: "partyName",
+              align: "left",
+              width: 25,
+            },
+            {
+              header: "Contact",
+              key: "customerPhone",
+              align: "left",
+              width: 18,
+            },
+            {
+              header: "Amount (₹)",
+              key: "amount",
+              align: "right",
+              type: "currency",
+              width: 18,
+            },
+            {
+              header: "Balance (₹)",
+              key: "balance",
+              align: "right",
+              type: "currency",
+              width: 18,
+            },
+            { header: "Status", key: "status", align: "center", width: 14 },
+          ],
+          data: excelRows,
+          summaryRow: {
+            estimateNo: "TOTAL",
+            partyName: `${rows.length} Quotations`,
+            amount: reportTotals(rows).totalAmount,
+            balance: reportTotals(rows).openAmount,
+          },
+        });
 
-    toast.success(
-      `Estimates Excel report downloaded (${rows.length} records)!`,
-    );
+        toast.success(
+          `Estimates Excel report downloaded (${rows.length} records)!`,
+        );
       },
     });
 
@@ -3601,123 +3628,125 @@ export const EstimateQuotationView: React.FC = () => {
     runReport<SaleQuotation>({
       label: "quotations",
       load: async () =>
-        applyQuotationFilters(await fetchAllReportRows<SaleQuotation>(fetchQuotationsReportPage)),
+        applyQuotationFilters(
+          await fetchAllReportRows<SaleQuotation>(fetchQuotationsReportPage),
+        ),
       onRows: (rows) => {
-    const printRows = rows.map((q) => {
-      const created = formatDateTime(q.createdAt || q.date);
-      const qStages = getQuotationStages(q);
-      const isActuallyConverted = Boolean(
-        q.convertedAt ||
-        q.convertedToInvoiceNo ||
-        q.convertedToId ||
-        qStages.isFullyConverted ||
-        (q.status === "Converted" &&
-          (qStages.isInvoiceConverted ||
-            qStages.isOrderConverted ||
-            qStages.isChallanConverted ||
-            qStages.isProformaConverted)),
-      );
-      const converted = isActuallyConverted
-        ? formatDateTime(
+        const printRows = rows.map((q) => {
+          const created = formatDateTime(q.createdAt || q.date);
+          const qStages = getQuotationStages(q);
+          const isActuallyConverted = Boolean(
             q.convertedAt ||
-              (q.status === "Converted" && q.updatedAt !== q.createdAt
-                ? q.updatedAt
-                : null),
-          )
-        : null;
-      const code =
-        q.customerCode ||
-        customers.find(
-          (c) =>
-            (q.customerId && c.id === q.customerId) ||
-            (c.phone && q.customerPhone && c.phone === q.customerPhone) ||
-            (c.name &&
-              q.partyName &&
-              c.name.toLowerCase() === q.partyName.toLowerCase()),
-        )?.customerCode ||
-        "";
+            q.convertedToInvoiceNo ||
+            q.convertedToId ||
+            qStages.isFullyConverted ||
+            (q.status === "Converted" &&
+              (qStages.isInvoiceConverted ||
+                qStages.isOrderConverted ||
+                qStages.isChallanConverted ||
+                qStages.isProformaConverted)),
+          );
+          const converted = isActuallyConverted
+            ? formatDateTime(
+                q.convertedAt ||
+                  (q.status === "Converted" && q.updatedAt !== q.createdAt
+                    ? q.updatedAt
+                    : null),
+              )
+            : null;
+          const code =
+            q.customerCode ||
+            customers.find(
+              (c) =>
+                (q.customerId && c.id === q.customerId) ||
+                (c.phone && q.customerPhone && c.phone === q.customerPhone) ||
+                (c.name &&
+                  q.partyName &&
+                  c.name.toLowerCase() === q.partyName.toLowerCase()),
+            )?.customerCode ||
+            "";
 
-      return {
-        quotationNo: q.quotationNo,
-        estimateManualNo: q.estimateManualNo || "—",
-        createdDateTime: created ? created.full : isoToDdmmyyyy(q.date),
-        convertedDateTime: converted ? converted.full : "—",
-        partyName: code ? `${q.partyName} (${code})` : q.partyName,
-        customerPhone: q.customerPhone || "-",
-        amount: Number(q.amount || 0),
-        balance: Number(q.balance || 0),
-        status: q.status,
-      };
-    });
+          return {
+            quotationNo: q.quotationNo,
+            estimateManualNo: q.estimateManualNo || "—",
+            createdDateTime: created ? created.full : isoToDdmmyyyy(q.date),
+            convertedDateTime: converted ? converted.full : "—",
+            partyName: code ? `${q.partyName} (${code})` : q.partyName,
+            customerPhone: q.customerPhone || "-",
+            amount: Number(q.amount || 0),
+            balance: Number(q.balance || 0),
+            status: q.status,
+          };
+        });
 
-    printTableReport({
-      title: "ESTIMATE & QUOTATION LEDGER",
-      subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${rows.length}`,
-      columns: [
-        {
-          header: "Estimate ID",
-          key: "quotationNo",
-          align: "center",
-          width: "11%",
-        },
-        {
-          header: "Estimate No.",
-          key: "estimateManualNo",
-          align: "center",
-          width: "11%",
-        },
-        {
-          header: "Created Date & Time",
-          key: "createdDateTime",
-          align: "center",
-          width: "15%",
-        },
-        {
-          header: "Converted Date & Time",
-          key: "convertedDateTime",
-          align: "center",
-          width: "15%",
-        },
-        {
-          header: "Customer Name",
-          key: "partyName",
-          align: "left",
-          width: "22%",
-        },
-        {
-          header: "Contact",
-          key: "customerPhone",
-          align: "left",
-          width: "12%",
-        },
-        {
-          header: "Amount (₹)",
-          key: "amount",
-          align: "right",
-          type: "currency",
-          width: "12%",
-        },
-        {
-          header: "Balance (₹)",
-          key: "balance",
-          align: "right",
-          type: "currency",
-          width: "11%",
-        },
-      ],
-      data: printRows,
-      summaryRow: {
-        quotationNo: "TOTAL",
-        partyName: `${rows.length} Quotations`,
-        amount: reportTotals(rows).totalAmount,
-        balance: reportTotals(rows).openAmount,
-      },
-      metrics: [
-        { label: "Total Value", value: reportTotals(rows).totalAmount },
-        { label: "Open Amount", value: reportTotals(rows).openAmount },
-        { label: "Total Quotations", value: rows.length },
-      ],
-    });
+        printTableReport({
+          title: "ESTIMATE & QUOTATION LEDGER",
+          subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${rows.length}`,
+          columns: [
+            {
+              header: "Estimate ID",
+              key: "quotationNo",
+              align: "center",
+              width: "11%",
+            },
+            {
+              header: "Estimate No.",
+              key: "estimateManualNo",
+              align: "center",
+              width: "11%",
+            },
+            {
+              header: "Created Date & Time",
+              key: "createdDateTime",
+              align: "center",
+              width: "15%",
+            },
+            {
+              header: "Converted Date & Time",
+              key: "convertedDateTime",
+              align: "center",
+              width: "15%",
+            },
+            {
+              header: "Customer Name",
+              key: "partyName",
+              align: "left",
+              width: "22%",
+            },
+            {
+              header: "Contact",
+              key: "customerPhone",
+              align: "left",
+              width: "12%",
+            },
+            {
+              header: "Amount (₹)",
+              key: "amount",
+              align: "right",
+              type: "currency",
+              width: "12%",
+            },
+            {
+              header: "Balance (₹)",
+              key: "balance",
+              align: "right",
+              type: "currency",
+              width: "11%",
+            },
+          ],
+          data: printRows,
+          summaryRow: {
+            quotationNo: "TOTAL",
+            partyName: `${rows.length} Quotations`,
+            amount: reportTotals(rows).totalAmount,
+            balance: reportTotals(rows).openAmount,
+          },
+          metrics: [
+            { label: "Total Value", value: reportTotals(rows).totalAmount },
+            { label: "Open Amount", value: reportTotals(rows).openAmount },
+            { label: "Total Quotations", value: rows.length },
+          ],
+        });
       },
     });
 
@@ -3733,7 +3762,9 @@ export const EstimateQuotationView: React.FC = () => {
       docNo: quot.quotationNo,
       docDate: isoToDdmmyyyy(quot.date),
       dueDate: quot.validUntil ? isoToDdmmyyyy(quot.validUntil) : undefined,
-      status: /^converted$/i.test(String(quot.status || "").trim()) ? "" : quot.status,
+      status: /^converted$/i.test(String(quot.status || "").trim())
+        ? ""
+        : quot.status,
       statusColor:
         (quot.status as string) === "Accepted" || quot.status === "Converted"
           ? "emerald"
@@ -3762,7 +3793,8 @@ export const EstimateQuotationView: React.FC = () => {
         ...(quot.stateOfSupply
           ? [{ label: "State of Supply", value: quot.stateOfSupply }]
           : []),
-        ...(!/^converted$/i.test(String(quot.status || "").trim()) && quot.status
+        ...(!/^converted$/i.test(String(quot.status || "").trim()) &&
+        quot.status
           ? [{ label: "Quotation Status", value: quot.status }]
           : []),
       ],
@@ -3807,7 +3839,8 @@ export const EstimateQuotationView: React.FC = () => {
         const mapped = mapApiQuotationToSaleQuotation(res.data);
         return {
           ...mapped,
-          estimateManualNo: mapped.estimateManualNo || quot.estimateManualNo || "",
+          estimateManualNo:
+            mapped.estimateManualNo || quot.estimateManualNo || "",
         };
       }
     } catch (err) {

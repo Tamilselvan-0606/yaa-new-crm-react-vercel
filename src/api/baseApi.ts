@@ -201,7 +201,9 @@ export const buildListParams = (p: ListParamsInput = {}, defaults: ListParamsDef
   const search = typeof p.search === 'string' ? p.search.trim() : '';
   const status = p.status && p.status !== 'All' && p.status !== 'ALL' ? p.status : undefined;
   const sortBy = p.sortBy ?? defaults.sortBy;
-  const sortOrder = p.sortOrder ?? (p.sortBy ? undefined : defaults.sortOrder);
+  const sortOrder = p.sortOrder ?? defaults.sortOrder ?? 'desc';
+  const sort_by = (p as any).sort_by ?? (sortBy === 'createdAt' ? 'created_at' : sortBy);
+  const sort_order = (p as any).sort_order ?? sortOrder;
 
   return {
     page_no: page,
@@ -213,5 +215,7 @@ export const buildListParams = (p: ListParamsInput = {}, defaults: ListParamsDef
     limit,
     sortBy,
     sortOrder,
+    sort_by,
+    sort_order,
   };
 };

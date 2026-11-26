@@ -110,13 +110,6 @@ export const CategoryView: React.FC = () => {
   const { requestStatusChange, statusConfirmModal } = useStatusConfirm();
   const deleteGuard = useSubmitGuard();
 
-  // Keystroke sanitizer: disallow typing numeric characters in text-only fields
-  const handleTextOnlyKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key >= '0' && e.key <= '9') {
-      e.preventDefault();
-    }
-  };
-
   // Detail Modal State (GET /commerce/categories/:id)
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [selectedCategoryDetail, setSelectedCategoryDetail] = useState<ApiCategory | null>(null);
@@ -860,9 +853,8 @@ export const CategoryView: React.FC = () => {
                     validate: (val) =>
                       val.trim().length >= 2 || 'The category name must be at least 2 characters.',
                   })}
-                  onKeyDown={handleTextOnlyKeyDown}
                   onInput={(e) => {
-                    e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'-]/g, '');
+                    e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z0-9\s&'-]/g, '');
                   }}
                   placeholder="Enter category name"
                   className={errors.categoryName ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
