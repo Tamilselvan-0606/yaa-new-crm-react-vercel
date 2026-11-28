@@ -900,7 +900,7 @@ export const SubcategoryView: React.FC = () => {
                     >
                       {/* CODE */}
                       <td className="py-3 sm:py-4 px-2 sm:px-3 text-center border-r border-slate-200 whitespace-nowrap">
-                        <span className="font-mono text-[11px] font-semibold text-slate-600">
+                        <span className="text-xs sm:text-[13px] font-semibold text-slate-700">
                           {item.code || "—"}
                         </span>
                       </td>
@@ -1027,7 +1027,7 @@ export const SubcategoryView: React.FC = () => {
                           {item.subcategory}
                         </div>
                         {item.code && (
-                          <div className="text-[11px] font-mono font-semibold text-slate-500 mt-0.5">
+                          <div className="text-[11px] font-semibold text-slate-500 mt-0.5">
                             {item.code}
                           </div>
                         )}
@@ -1317,7 +1317,7 @@ export const SubcategoryView: React.FC = () => {
                     <span className="text-[11px] font-medium text-slate-400 block mb-0.5">
                       Subcategory Code
                     </span>
-                    <span className="font-bold font-mono text-slate-800 text-xs">
+                    <span className="font-bold text-slate-800 text-xs">
                       {selectedSubcategoryDetail.code || "N/A"}
                     </span>
                   </div>

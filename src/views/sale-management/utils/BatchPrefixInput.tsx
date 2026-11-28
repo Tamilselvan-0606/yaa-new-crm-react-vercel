@@ -26,7 +26,7 @@ export const BatchPrefixInput: React.FC<Props> = ({ value, onChange, className =
         data-uppercase="true"
         value={v}
         onChange={(e) => onChange(e.target.value.toUpperCase())}
-        className={`${className} font-mono`}
+        className={className}
       />
     );
   }
@@ -35,7 +35,7 @@ export const BatchPrefixInput: React.FC<Props> = ({ value, onChange, className =
   return (
     <div className="flex items-stretch">
       <span
-        className="inline-flex items-center px-3 rounded-l-xl border border-r-0 border-primary/30 bg-primary/10 text-primary font-mono text-sm font-extrabold tracking-wide select-none"
+        className="inline-flex items-center px-3 rounded-l-xl border border-r-0 border-primary/30 bg-primary/10 text-primary text-sm font-bold tracking-wide select-none"
         aria-hidden="true"
       >
         {BATCH_PREFIX}
@@ -48,7 +48,7 @@ export const BatchPrefixInput: React.FC<Props> = ({ value, onChange, className =
         placeholder={placeholder}
         value={suffix}
         onChange={(e) => onChange(BATCH_PREFIX + e.target.value.toUpperCase().replace(/^BAT-/, ''))}
-        className={`${className} font-mono !rounded-l-none`}
+        className={`${className} !rounded-l-none`}
       />
     </div>
   );

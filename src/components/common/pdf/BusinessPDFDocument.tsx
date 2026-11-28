@@ -359,6 +359,8 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
     partyGstin,
     extraMeta = [],
     items = [],
+    hideDiscountColumn = false,
+    hideTaxColumn = false,
     subtotal,
     discount = 0,
     tax,
@@ -388,6 +390,9 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
   );
 
   const resolvedInWords = amountInWords || numberToWordsIndian(grandTotal);
+  const showDiscountColumn = !hideDiscountColumn && items.some((i) => i.discountPercent !== undefined);
+  const showTaxColumn = !hideTaxColumn && items.some((i) => i.taxPercent !== undefined);
+  const descWidth = `${38 + (showDiscountColumn ? 0 : 10) + (showTaxColumn ? 0 : 10)}%`;
 
   const getBadgeStyle = () => {
     switch (statusColor) {
@@ -475,11 +480,15 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
           <View style={styles.tableContainer}>
             <View style={styles.tableHeader}>
               <Text style={[styles.tableHeaderCell, { width: '6%', textAlign: 'center' }]}>#</Text>
-              <Text style={[styles.tableHeaderCell, { width: '38%' }]}>Description</Text>
+              <Text style={[styles.tableHeaderCell, { width: descWidth }]}>Description</Text>
               <Text style={[styles.tableHeaderCell, { width: '10%', textAlign: 'center' }]}>Qty</Text>
               <Text style={[styles.tableHeaderCell, { width: '14%', textAlign: 'right' }]}>Rate (Rs.)</Text>
-              <Text style={[styles.tableHeaderCell, { width: '10%', textAlign: 'right' }]}>Disc %</Text>
-              <Text style={[styles.tableHeaderCell, { width: '10%', textAlign: 'right' }]}>Tax %</Text>
+              {showDiscountColumn && (
+                <Text style={[styles.tableHeaderCell, { width: '10%', textAlign: 'right' }]}>Disc %</Text>
+              )}
+              {showTaxColumn && (
+                <Text style={[styles.tableHeaderCell, { width: '10%', textAlign: 'right' }]}>Tax %</Text>
+              )}
               <Text style={[styles.tableHeaderCell, { width: '12%', textAlign: 'right' }]}>Total (Rs.)</Text>
             </View>
             {items.map((it, idx) => (
@@ -490,7 +499,7 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
                 <Text style={[styles.tableCell, { width: '6%', textAlign: 'center' }]}>
                   {idx + 1}
                 </Text>
-                <View style={{ width: '38%' }}>
+                <View style={{ width: descWidth }}>
                   <Text style={styles.tableCellBold}>{it.name}</Text>
                   {it.sku || it.batch ? (
                     <Text style={styles.tableCellSub}>
@@ -506,12 +515,16 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
                 <Text style={[styles.tableCell, { width: '14%', textAlign: 'right' }]}>
                   {pdfCurrency(Number(it.unitPrice) || 0)}
                 </Text>
-                <Text style={[styles.tableCell, { width: '10%', textAlign: 'right' }]}>
-                  {it.discountPercent ? `${it.discountPercent}%` : '-'}
-                </Text>
-                <Text style={[styles.tableCell, { width: '10%', textAlign: 'right' }]}>
-                  {it.taxPercent ? `${it.taxPercent}%` : '-'}
-                </Text>
+                {showDiscountColumn && (
+                  <Text style={[styles.tableCell, { width: '10%', textAlign: 'right' }]}>
+                    {it.discountPercent ? `${it.discountPercent}%` : '-'}
+                  </Text>
+                )}
+                {showTaxColumn && (
+                  <Text style={[styles.tableCell, { width: '10%', textAlign: 'right' }]}>
+                    {it.taxPercent ? `${it.taxPercent}%` : '-'}
+                  </Text>
+                )}
                 <Text style={[styles.tableCellBold, { width: '12%', textAlign: 'right' }]}>
                   {pdfCurrency(Number(it.total) || 0)}
                 </Text>

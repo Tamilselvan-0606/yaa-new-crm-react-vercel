@@ -4440,9 +4440,10 @@ export const CollectionsView: React.FC = () => {
         >
           <form noValidate onSubmit={handleSubmitAssignCustomer} className="space-y-4 p-2 text-xs pt-1">
             <div>
-              <FormLabel required>Customer</FormLabel>
               <div data-field="assignCustomer">
                 <CustomerSearchableSelect
+                  label="Customer"
+                  required
                   value={assignCustomerId}
                   onChange={(val) => {
                     setAssignCustomerId(val);

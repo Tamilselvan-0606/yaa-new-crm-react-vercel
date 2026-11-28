@@ -1,56 +1,32 @@
 import React from "react";
 import {
-  Check,
   CheckCircle2,
   Clock,
   Download,
   History,
   Printer,
   User,
-  UserCheck,
   X,
 } from "lucide-react";
-import { DateInput } from "../../../../components/common/DateInput";
-import { FormError } from "../../../../components/common/FormError";
-import { fieldAttr } from "../../../../utils/formValidation";
 import { formatDate } from "../../utils/dateUtils";
 import type { SaleTransaction } from "../../../../store/useSalesManagementStore";
 import { Modal } from "../../../../components/common/Modal";
-import type { AssignableSalesRep } from "./QuickAssignInvoiceModal";
 
 interface InvoiceDetailModalProps {
   sale: SaleTransaction | null;
   isOpen: boolean;
   isDownloadingPdf: boolean;
-  salesRepresentatives: AssignableSalesRep[];
-  detailRepId: string;
-  detailRepError?: string;
-  detailCollectionStatus: string;
-  detailNextFollowUp: string;
-  onDetailRepIdChange: (id: string) => void;
-  onDetailCollectionStatusChange: (status: string) => void;
-  onDetailNextFollowUpChange: (date: string) => void;
-  onSaveAssignment: () => void | Promise<void>;
   onClose: () => void;
   onNavigate: (path: string) => void;
   onPrint: (sale: SaleTransaction) => void | Promise<void>;
   onDownload: (sale: SaleTransaction) => void | Promise<void>;
 }
 
-/** Full invoice view with printable breakdown, payment summary and sales-rep assignment. */
+/** Full invoice view with printable breakdown and payment summary. */
 export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
   sale,
   isOpen,
   isDownloadingPdf,
-  salesRepresentatives,
-  detailRepId,
-  detailRepError,
-  detailCollectionStatus,
-  detailNextFollowUp,
-  onDetailRepIdChange,
-  onDetailCollectionStatusChange,
-  onDetailNextFollowUpChange,
-  onSaveAssignment,
   onClose,
   onNavigate,
   onPrint,
@@ -558,121 +534,6 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
               </div>
             </div>
           )}
-        </div>
-
-        {/* Collection Assignment Section as requested */}
-        <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-2xs space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-purple-50 border border-purple-100 flex items-center justify-center text-[#33077C] shrink-0 shadow-2xs">
-                <UserCheck className="w-4 h-4" />
-              </div>
-              <div>
-                <h4 className="text-xs sm:text-[13px] font-bold text-slate-900">
-                  Customer Sales Representative
-                </h4>
-                <p className="text-[11px] text-slate-500">
-                  Representative assigned to customer{" "}
-                  {sale.customerName} (applies across all invoices)
-                </p>
-              </div>
-            </div>
-
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-50 text-[#33077C] border border-purple-200 text-xs font-bold shadow-2xs">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#33077C]" />
-              Customer Assignment
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 text-xs">
-            {/* Sales Rep Selector */}
-            <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
-                Sales Representative
-              </label>
-              <select
-                value={detailRepId}
-                {...fieldAttr("detailRepId")}
-                onChange={(e) => {
-                  onDetailRepIdChange(e.target.value);
-                }}
-                className="w-full h-10 px-3 bg-white rounded-xl border border-slate-200 font-semibold text-slate-800 text-xs focus:ring-2 focus:ring-[#33077C]/20 focus:border-[#33077C] outline-none"
-              >
-                <option value="">-- Select Sales Rep --</option>
-                {salesRepresentatives.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name} ({r.status})
-                  </option>
-                ))}
-              </select>
-              <FormError message={detailRepError} />
-            </div>
-
-            {/* Outstanding Amount */}
-            <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
-                Outstanding Amount
-              </label>
-              <div className="h-10 px-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center font-bold text-rose-600 text-sm">
-                ₹
-                {sale.balance.toLocaleString("en-IN", {
-                  minimumFractionDigits: 2,
-                })}
-              </div>
-            </div>
-
-            {/* Due Date */}
-            <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
-                Due Date
-              </label>
-              <div className="h-10 px-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center font-semibold text-slate-700 text-xs">
-                {sale.dueDate || "Immediate"}
-              </div>
-            </div>
-
-            {/* Collection Status */}
-            <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
-                Collection Status
-              </label>
-              <select
-                value={detailCollectionStatus}
-                onChange={(e) => onDetailCollectionStatusChange(e.target.value)}
-                className="w-full h-10 px-3 bg-white rounded-xl border border-slate-200 font-semibold text-slate-800 text-xs focus:ring-2 focus:ring-[#33077C]/20 focus:border-[#33077C] outline-none"
-              >
-                <option value="Pending Follow-up">Pending Follow-up</option>
-                <option value="Customer Contacted">
-                  Customer Contacted
-                </option>
-                <option value="Promise to Pay">Promise to Pay</option>
-                <option value="Dispute Raised">Dispute Raised</option>
-                <option value="Collected">Collected</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-100">
-            <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
-                Next Follow-up
-              </label>
-              <DateInput
-                value={detailNextFollowUp}
-                onChange={(v) => onDetailNextFollowUpChange(v)}
-                heightClass="h-9"
-              />
-            </div>
-
-            <button
-              type="button"
-              onClick={onSaveAssignment}
-              className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer self-end"
-            >
-              <Check className="w-4 h-4 stroke-[2.5]" />
-              <span>Save Assignment</span>
-            </button>
-          </div>
         </div>
 
         {/* Close footer */}

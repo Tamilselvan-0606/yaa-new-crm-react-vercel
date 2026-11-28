@@ -17,6 +17,13 @@ interface PhoneFieldProps {
 
 const digitsOf = (s?: string | null) => (s || '').replace(/\D/g, '');
 
+const DEFAULT_INDIA_COUNTRY: MasterCountry = {
+  id: 'default-in',
+  name: 'India',
+  shortName: 'IN',
+  mobileCode: '+91',
+};
+
 const Flag: React.FC<{ country?: MasterCountry }> = ({ country }) => {
   const [failed, setFailed] = useState(false);
   const code = country?.shortName?.toLowerCase();
@@ -40,7 +47,9 @@ const Flag: React.FC<{ country?: MasterCountry }> = ({ country }) => {
  * The code is chosen here and is independent of the Country field of the form.
  */
 export const PhoneField: React.FC<PhoneFieldProps> = ({ label, required, value, onChange, error, placeholder, dataField }) => {
-  const [countries, setCountries] = useState<MasterCountry[]>([]);
+  const [countries, setCountries] = useState<MasterCountry[]>([DEFAULT_INDIA_COUNTRY]);
+  const [hasLoadedAll, setHasLoadedAll] = useState(false);
+  const [isLoadingCountries, setIsLoadingCountries] = useState(false);
   const [chosenId, setChosenId] = useState('');
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -48,16 +57,33 @@ export const PhoneField: React.FC<PhoneFieldProps> = ({ label, required, value, 
   const boxRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  const trimmedVal = (value || '').trim();
+  const needsInternationalLookup = trimmedVal.startsWith('+') && !trimmedVal.startsWith('+91');
+
+  // Lazy-load the full country list only when the user opens the country selector
+  // or when an existing non-India international (+...) value needs flag/code resolution.
   useEffect(() => {
+    if (hasLoadedAll || (!open && !needsInternationalLookup)) return;
     let alive = true;
+    setIsLoadingCountries(true);
     masterApi
       .getCountries()
-      .then((c) => alive && setCountries(c.filter((x) => digitsOf(x.mobileCode))))
-      .catch(() => alive && setCountries([]));
+      .then((c) => {
+        if (!alive) return;
+        const valid = c.filter((x) => digitsOf(x.mobileCode));
+        setCountries(valid.length > 0 ? valid : [DEFAULT_INDIA_COUNTRY]);
+        setHasLoadedAll(true);
+      })
+      .catch(() => {
+        if (alive) setCountries([DEFAULT_INDIA_COUNTRY]);
+      })
+      .finally(() => {
+        if (alive) setIsLoadingCountries(false);
+      });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [open, needsInternationalLookup, hasLoadedAll]);
 
   // Split the stored value into country + national number.
   const { parsedCountry, national } = useMemo(() => {
@@ -179,9 +205,11 @@ export const PhoneField: React.FC<PhoneFieldProps> = ({ label, required, value, 
               />
             </div>
             <div className="max-h-56 overflow-y-auto p-1">
-              {visible.length === 0 && (
+              {isLoadingCountries && !hasLoadedAll ? (
+                <div className="px-3 py-2.5 text-xs text-slate-400 text-center italic">Loading countries...</div>
+              ) : visible.length === 0 ? (
                 <div className="px-3 py-2.5 text-xs text-slate-400 text-center italic">No countries found</div>
-              )}
+              ) : null}
               {visible.map((c) => {
                 const selected = active?.id === c.id;
                 const cCode = c.mobileCode?.startsWith('+') ? c.mobileCode : `+${digitsOf(c.mobileCode)}`;

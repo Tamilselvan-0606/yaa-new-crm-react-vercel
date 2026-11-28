@@ -2,6 +2,10 @@ import { fetchAllReportRows, runReport } from "../../../utils/reportData";
 import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
 import { useCompanyDocumentProfile } from "../../../hooks/useCompanyDocumentProfile";
 import { CommonTableHead } from "../../../components/common/CommonTableHead";
+import {
+  PartyBalanceBadge,
+  extractCustomerOutstanding,
+} from "../../../components/common/PartyBalanceBadge";
 import React, {
   useState,
   useMemo,
@@ -186,10 +190,8 @@ export const SalesReturnView: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
-  const {
-    saveSalesReturn,
-    deleteSalesReturn: deleteStoreSalesReturn,
-  } = useSalesManagementStore();
+  const { saveSalesReturn, deleteSalesReturn: deleteStoreSalesReturn } =
+    useSalesManagementStore();
   // Customers and invoices shown in the UI come only from the Commerce API
   const [customers, setCustomers] = useState<SalesCustomer[]>([]);
   const [sales, setSalesList] = useState<SaleTransaction[]>([]);
@@ -692,7 +694,9 @@ export const SalesReturnView: React.FC = () => {
         !q ||
         tx.partyName.toLowerCase().includes(q) ||
         tx.refNo.toLowerCase().includes(q) ||
-        (tx.originalReturn?.salesReturnManualNo || "").toLowerCase().includes(q) ||
+        (tx.originalReturn?.salesReturnManualNo || "")
+          .toLowerCase()
+          .includes(q) ||
         tx.type.toLowerCase().includes(q);
 
       let matchesFirm = true;
@@ -728,115 +732,133 @@ export const SalesReturnView: React.FC = () => {
       label: "sales returns",
       load: () => fetchAllReportRows(fetchSalesReturnReportPage),
       onRows: (returns) => {
-    // Same ledger rows / search / firm filtering as the on-screen table
-    const reportTransactions = returns
-      .map<UnifiedTransactionRecord>((ret, index) => {
-        const tot = Number(ret?.returnAmount ?? 0) || 0;
-        const paid = Number(ret?.refundAmount ?? 0) || 0;
-        return {
-          id: ret?.id || `ret_${index}`,
-          date: ret?.returnDate || new Date().toISOString().split("T")[0],
-          refNo: ret?.returnNo || String(index + 1),
-          partyName: ret?.customerName || "Customer",
-          categoryName: ret?.items?.[0]?.productName || "General Goods",
-          type: "Sales Return",
-          total: tot,
-          receivedPaid: paid,
-          balance: Math.max(0, tot - paid),
-          status: ret?.returnStatus || "Approved",
-          originalReturn: ret,
-        };
-      })
-      .sort((a, b) => (b.date > a.date ? 1 : -1))
-      .filter((tx) => {
-        const q = appliedSearch.toLowerCase().trim();
-        const matchesSearch =
-          !q ||
-          tx.partyName.toLowerCase().includes(q) ||
-          tx.refNo.toLowerCase().includes(q) ||
-          (tx.originalReturn?.salesReturnManualNo || "").toLowerCase().includes(q) ||
-          tx.type.toLowerCase().includes(q);
-        let matchesFirm = true;
-        if (selectedFirm !== "ALL FIRMS") {
-          const found = customers.find((c) => c.id === selectedFirm);
-          matchesFirm =
-            !found || tx.partyName.toLowerCase() === found.name.toLowerCase();
-        }
-        return matchesSearch && matchesFirm;
-      });
-    const reportTotals = reportTransactions.reduce(
-      (acc, tx) => ({
-        totalSum: acc.totalSum + tx.total,
-        balanceSum: acc.balanceSum + tx.balance,
-      }),
-      { totalSum: 0, balanceSum: 0 },
-    );
+        // Same ledger rows / search / firm filtering as the on-screen table
+        const reportTransactions = returns
+          .map<UnifiedTransactionRecord>((ret, index) => {
+            const tot = Number(ret?.returnAmount ?? 0) || 0;
+            const paid = Number(ret?.refundAmount ?? 0) || 0;
+            return {
+              id: ret?.id || `ret_${index}`,
+              date: ret?.returnDate || new Date().toISOString().split("T")[0],
+              refNo: ret?.returnNo || String(index + 1),
+              partyName: ret?.customerName || "Customer",
+              categoryName: ret?.items?.[0]?.productName || "General Goods",
+              type: "Sales Return",
+              total: tot,
+              receivedPaid: paid,
+              balance: Math.max(0, tot - paid),
+              status: ret?.returnStatus || "Approved",
+              originalReturn: ret,
+            };
+          })
+          .sort((a, b) => (b.date > a.date ? 1 : -1))
+          .filter((tx) => {
+            const q = appliedSearch.toLowerCase().trim();
+            const matchesSearch =
+              !q ||
+              tx.partyName.toLowerCase().includes(q) ||
+              tx.refNo.toLowerCase().includes(q) ||
+              (tx.originalReturn?.salesReturnManualNo || "")
+                .toLowerCase()
+                .includes(q) ||
+              tx.type.toLowerCase().includes(q);
+            let matchesFirm = true;
+            if (selectedFirm !== "ALL FIRMS") {
+              const found = customers.find((c) => c.id === selectedFirm);
+              matchesFirm =
+                !found ||
+                tx.partyName.toLowerCase() === found.name.toLowerCase();
+            }
+            return matchesSearch && matchesFirm;
+          });
+        const reportTotals = reportTransactions.reduce(
+          (acc, tx) => ({
+            totalSum: acc.totalSum + tx.total,
+            balanceSum: acc.balanceSum + tx.balance,
+          }),
+          { totalSum: 0, balanceSum: 0 },
+        );
 
-    const excelRows = reportTransactions.map((tx, idx) => ({
-      srNo: idx + 1,
-      date: isoToDdmmyyyy(tx.date),
-      refNo: tx.refNo || "-",
-      manualNo: tx.originalReturn?.salesReturnManualNo || "—",
-      partyName: tx.partyName,
-      categoryName: tx.categoryName || "-",
-      type: tx.type,
-      total: Number(tx.total || 0),
-      receivedPaid: Number(tx.receivedPaid || 0),
-      balance: Number(tx.balance || 0),
-    }));
+        const excelRows = reportTransactions.map((tx, idx) => ({
+          srNo: idx + 1,
+          date: isoToDdmmyyyy(tx.date),
+          refNo: tx.refNo || "-",
+          manualNo: tx.originalReturn?.salesReturnManualNo || "—",
+          partyName: tx.partyName,
+          categoryName: tx.categoryName || "-",
+          type: tx.type,
+          total: Number(tx.total || 0),
+          receivedPaid: Number(tx.receivedPaid || 0),
+          balance: Number(tx.balance || 0),
+        }));
 
-    exportTableToExcel({
-      filename: `Sales_Return_Report_${new Date().toISOString().split("T")[0]}`,
-      sheetName: "Sales Return",
-      title: "YAA CREATIONS CRM - SALES RETURN & TRANSACTION REPORT",
-      subtitle: `Filter: ${selectedPeriod} | Total Records: ${reportTransactions.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
-      columns: [
-        { header: "#", key: "srNo", align: "center", width: 8 },
-        { header: "Date", key: "date", align: "center", width: 15 },
-        { header: "Sales Return ID", key: "refNo", align: "center", width: 18 },
-        { header: "Sales Return No.", key: "manualNo", align: "center", width: 18 },
-        { header: "Customer Name", key: "partyName", align: "left", width: 28 },
-        {
-          header: "Category Name",
-          key: "categoryName",
-          align: "left",
-          width: 20,
-        },
-        { header: "Type", key: "type", align: "left", width: 16 },
-        {
-          header: "Total (₹)",
-          key: "total",
-          align: "right",
-          type: "currency",
-          width: 18,
-        },
-        {
-          header: "Received/Paid (₹)",
-          key: "receivedPaid",
-          align: "right",
-          type: "currency",
-          width: 18,
-        },
-        {
-          header: "Balance (₹)",
-          key: "balance",
-          align: "right",
-          type: "currency",
-          width: 18,
-        },
-      ],
-      data: excelRows,
-      summaryRow: {
-        srNo: "TOTAL",
-        partyName: `${reportTransactions.length} Transactions`,
-        total: reportTotals.totalSum,
-        balance: reportTotals.balanceSum,
-      },
-    });
+        exportTableToExcel({
+          filename: `Sales_Return_Report_${new Date().toISOString().split("T")[0]}`,
+          sheetName: "Sales Return",
+          title: "YAA CREATIONS CRM - SALES RETURN & TRANSACTION REPORT",
+          subtitle: `Filter: ${selectedPeriod} | Total Records: ${reportTransactions.length} | Generated: ${new Date().toLocaleDateString("en-GB")}`,
+          columns: [
+            { header: "#", key: "srNo", align: "center", width: 8 },
+            { header: "Date", key: "date", align: "center", width: 15 },
+            {
+              header: "Sales Return ID",
+              key: "refNo",
+              align: "center",
+              width: 18,
+            },
+            {
+              header: "Sales Return No.",
+              key: "manualNo",
+              align: "center",
+              width: 18,
+            },
+            {
+              header: "Customer Name",
+              key: "partyName",
+              align: "left",
+              width: 28,
+            },
+            {
+              header: "Category Name",
+              key: "categoryName",
+              align: "left",
+              width: 20,
+            },
+            { header: "Type", key: "type", align: "left", width: 16 },
+            {
+              header: "Total (₹)",
+              key: "total",
+              align: "right",
+              type: "currency",
+              width: 18,
+            },
+            {
+              header: "Received/Paid (₹)",
+              key: "receivedPaid",
+              align: "right",
+              type: "currency",
+              width: 18,
+            },
+            {
+              header: "Balance (₹)",
+              key: "balance",
+              align: "right",
+              type: "currency",
+              width: 18,
+            },
+          ],
+          data: excelRows,
+          summaryRow: {
+            srNo: "TOTAL",
+            partyName: `${reportTransactions.length} Transactions`,
+            total: reportTotals.totalSum,
+            balance: reportTotals.balanceSum,
+          },
+        });
 
-    toast.success(
-      `Excel report downloaded successfully (${reportTransactions.length} records)!`,
-    );
+        toast.success(
+          `Excel report downloaded successfully (${reportTransactions.length} records)!`,
+        );
       },
     });
 
@@ -913,7 +935,9 @@ export const SalesReturnView: React.FC = () => {
         setCustomerPhone(customer.phone || "");
       }
       if (rows.length > 0) setReturnItems(rows);
-      toast.success(`Draft restored with ${rows.length} item${rows.length === 1 ? "" : "s"}.`);
+      toast.success(
+        `Draft restored with ${rows.length} item${rows.length === 1 ? "" : "s"}.`,
+      );
     } finally {
       setIsResumingDraft(false);
     }
@@ -1372,7 +1396,12 @@ export const SalesReturnView: React.FC = () => {
       extraMeta: [
         { label: "Sales Return ID", value: docNo },
         ...(origReturn?.salesReturnManualNo
-          ? [{ label: "Sales Return No", value: origReturn.salesReturnManualNo }]
+          ? [
+              {
+                label: "Sales Return No",
+                value: origReturn.salesReturnManualNo,
+              },
+            ]
           : []),
         ...(origReturn?.invoiceNo
           ? [{ label: "Original Invoice", value: origReturn.invoiceNo }]
@@ -2118,7 +2147,28 @@ export const SalesReturnView: React.FC = () => {
               </div>
 
               <div>
-                <FormLabel required>Customer Name</FormLabel>
+                <div className="flex items-center justify-between gap-2 mb-1.5 min-h-[18px]">
+                  <FormLabel required className="mb-0">
+                    Customer Name
+                  </FormLabel>
+                  {(() => {
+                    const matchedCust = customers.find(
+                      (c) =>
+                        (selectedCustomerId && c.id === selectedCustomerId) ||
+                        (partyName &&
+                          c.name.trim().toLowerCase() ===
+                            partyName.trim().toLowerCase()),
+                    );
+                    const bal = extractCustomerOutstanding(matchedCust);
+                    return (
+                      <PartyBalanceBadge
+                        label="Customer Balance"
+                        balance={bal}
+                        customerId={selectedCustomerId || matchedCust?.id}
+                      />
+                    );
+                  })()}
+                </div>
                 <input
                   type="text"
                   required
@@ -2138,10 +2188,12 @@ export const SalesReturnView: React.FC = () => {
                 <FormLabel required>Return Date</FormLabel>
                 <DateInput
                   value={returnDate}
-                  onChange={(v) => ((e) => {
-                    setReturnDate(e.target.value);
-                    retFE.clearError("returnDate");
-                  })({ target: { value: v } } as any)}
+                  onChange={(v) =>
+                    ((e) => {
+                      setReturnDate(e.target.value);
+                      retFE.clearError("returnDate");
+                    })({ target: { value: v } } as any)
+                  }
                   data-field="returnDate"
                 />
                 <FormError message={retFE.errors.returnDate} />

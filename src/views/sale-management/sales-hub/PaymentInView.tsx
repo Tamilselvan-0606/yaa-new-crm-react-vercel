@@ -2306,8 +2306,9 @@ export const PaymentInView: React.FC = () => {
                   className="sm:col-span-2 relative"
                   ref={partySelectDropdownRef}
                 >
-                  <FormLabel required>Customer Name</FormLabel>
                   <CustomerSearchableSelect
+                    label="Customer Name"
+                    required
                     value={selectedCustomerId}
                     onChange={(val, cust) => {
                       setSelectedCustomerId(val);

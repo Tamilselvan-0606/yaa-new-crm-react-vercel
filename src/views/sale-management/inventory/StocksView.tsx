@@ -1729,7 +1729,7 @@ export const StocksView: React.FC = () => {
                             {activeBatches.slice(0, 2).map((b) => (
                               <span
                                 key={b.id || b.batchNo}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-purple-50 text-[#33077C] font-mono text-[11px] font-bold border border-purple-200 shadow-2xs"
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-purple-50 text-[#33077C] text-[11px] font-bold border border-purple-200 shadow-2xs"
                                 title={`Batch: ${b.batchNo} | Qty: ${b.quantity} ${stk.unit}${b.expDate ? ` | Exp: ${b.expDate}` : ""}`}
                               >
                                 <Tag className="w-3 h-3 text-[#33077C]" />
@@ -2517,7 +2517,7 @@ export const StocksView: React.FC = () => {
                             key={batch.id || batch.batchNo}
                             className="hover:bg-slate-50 transition-colors"
                           >
-                            <td className="py-2.5 px-3 font-mono font-bold text-[#33077C]">
+                            <td className="py-2.5 px-3 font-bold text-[#33077C]">
                               {batch.batchNo}
                             </td>
                             <td className="py-2.5 px-3 text-center font-bold text-slate-900">
@@ -2738,7 +2738,7 @@ export const StocksView: React.FC = () => {
                               mv.referenceType ||
                               mv.id.slice(0, 8)}
                           </td>
-                          <td className="py-3 px-3 font-mono text-purple-700 font-semibold whitespace-nowrap">
+                          <td className="py-3 px-3 text-purple-700 font-semibold whitespace-nowrap">
                             {mv.batchNo || "General Lot"}
                           </td>
                           <td className="py-3 px-3 text-center whitespace-nowrap font-bold">

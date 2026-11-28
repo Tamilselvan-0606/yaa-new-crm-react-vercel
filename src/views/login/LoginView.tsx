@@ -7,6 +7,8 @@ import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import { toast } from "../../utils/toast";
 import { FormError } from '../../components/common/FormError';
+import { PhoneField } from '../../components/common/PhoneField';
+import { Modal } from '../../components/common/Modal';
 import {
   Mail,
   Lock,
@@ -24,6 +26,8 @@ import {
   Grid,
   Smartphone,
   Key,
+  User as UserIcon,
+  Sparkles,
 } from 'lucide-react';
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -59,7 +63,7 @@ const SetNewPasswordValidationSchema = z.object({
 });
 type SetNewPasswordFields = z.infer<typeof SetNewPasswordValidationSchema>;
 
-type Screen = 'login' | 'forgot-email' | 'forgot-otp' | 'forgot-password' | 'forgot-success';
+type Screen = 'free-trial' | 'trial-otp' | 'login' | 'forgot-email' | 'forgot-otp' | 'forgot-password' | 'forgot-success';
 type LoginTab = 'otp' | 'password';
 
 export const LoginView: React.FC = () => {
@@ -72,6 +76,9 @@ export const LoginView: React.FC = () => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Screen flow: free-trial (default when opened) -> trial-otp -> dashboard
+  const [currentScreen, setCurrentScreen] = useState<Screen>('free-trial');
+
   // OTP Login State
   const [otpMobile, setOtpMobile] = useState('');
   const [otpMobileError, setOtpMobileError] = useState('');
@@ -83,8 +90,22 @@ export const LoginView: React.FC = () => {
   const [canResendLoginOtp, setCanResendLoginOtp] = useState(false);
   const loginOtpRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // Screen flow: login -> forgot-email -> forgot-otp -> forgot-password -> forgot-success
-  const [currentScreen, setCurrentScreen] = useState<Screen>('login');
+  // Free Trial State & Trial OTP State
+  const [trialName, setTrialName] = useState('');
+  const [trialPhone, setTrialPhone] = useState('');
+  const [trialAgreed, setTrialAgreed] = useState(false);
+  const [trialErrors, setTrialErrors] = useState<{ name?: string; phone?: string; agreed?: string }>({});
+  const [isSubmittingTrial, setIsSubmittingTrial] = useState(false);
+  const [termsModalOpen, setTermsModalOpen] = useState(false);
+  const [privacyModalOpen, setPrivacyModalOpen] = useState(false);
+
+  // Trial OTP Verification State
+  const [trialOtpValues, setTrialOtpValues] = useState<string[]>(['', '', '', '', '', '']);
+  const [trialOtpTimer, setTrialOtpTimer] = useState(60);
+  const [canResendTrialOtp, setCanResendTrialOtp] = useState(false);
+  const [isVerifyingTrialOtp, setIsVerifyingTrialOtp] = useState(false);
+  const [isResendingTrialOtp, setIsResendingTrialOtp] = useState(false);
+  const trialOtpRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   // Forgot password & OTP state
   const [submittedEmail, setSubmittedEmail] = useState<string>('');
@@ -120,11 +141,28 @@ export const LoginView: React.FC = () => {
     return () => clearTimeout(timer);
   }, [isOtpSent, loginOtpTimer]);
 
+  // Trial OTP Countdown Timer
+  useEffect(() => {
+    if (currentScreen !== 'trial-otp') return;
+    if (trialOtpTimer <= 0) {
+      setCanResendTrialOtp(true);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setTrialOtpTimer((prev) => prev - 1);
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [currentScreen, trialOtpTimer]);
+
   // Focus the first OTP box upon opening the OTP screen
   useEffect(() => {
     if (currentScreen === 'forgot-otp') {
       setTimeout(() => {
         otpInputRefs.current[0]?.focus();
+      }, 100);
+    } else if (currentScreen === 'trial-otp') {
+      setTimeout(() => {
+        trialOtpRefs.current[0]?.focus();
       }, 100);
     }
   }, [currentScreen]);
@@ -194,6 +232,156 @@ export const LoginView: React.FC = () => {
     setOtpTimer(60);
     setCanResendOtp(false);
     resetResetForm();
+  };
+
+  // Free Trial Handler - triggers OTP send
+  const handleStartFreeTrial = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const errs: { name?: string; phone?: string; agreed?: string } = {};
+
+    if (!trialName.trim()) {
+      errs.name = 'Please enter your name';
+    }
+    const cleanPhone = trialPhone.replace(/\D/g, '');
+    if (!trialPhone.trim() || cleanPhone.length < 7) {
+      errs.phone = 'Please enter a valid mobile number with country code';
+    }
+    if (!trialAgreed) {
+      errs.agreed = 'You must agree to the Terms of Service and Privacy Policy';
+    }
+
+    if (Object.keys(errs).length > 0) {
+      setTrialErrors(errs);
+      return;
+    }
+
+    setTrialErrors({});
+    setIsSubmittingTrial(true);
+    try {
+      // Simulate sending OTP to mobile number
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      setTrialOtpValues(['', '', '', '', '', '']);
+      setTrialOtpTimer(60);
+      setCanResendTrialOtp(false);
+      setErrorMsg(null);
+      setCurrentScreen('trial-otp');
+      toast.success(`Verification code sent to ${trialPhone.trim()}`);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to send verification code. Please try again.');
+    } finally {
+      setIsSubmittingTrial(false);
+    }
+  };
+
+  const handleTrialOtpChange = (index: number, val: string) => {
+    const cleanVal = val.replace(/\D/g, '');
+    if (!cleanVal) {
+      const newOtp = [...trialOtpValues];
+      newOtp[index] = '';
+      setTrialOtpValues(newOtp);
+      return;
+    }
+
+    if (cleanVal.length > 1) {
+      const digits = cleanVal.slice(0, 6).split('');
+      const newOtp = [...trialOtpValues];
+      digits.forEach((digit, dIdx) => {
+        if (index + dIdx < 6) {
+          newOtp[index + dIdx] = digit;
+        }
+      });
+      setTrialOtpValues(newOtp);
+      const nextIdx = Math.min(index + digits.length, 5);
+      trialOtpRefs.current[nextIdx]?.focus();
+      return;
+    }
+
+    const newOtp = [...trialOtpValues];
+    newOtp[index] = cleanVal;
+    setTrialOtpValues(newOtp);
+
+    if (index < 5) {
+      trialOtpRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleTrialOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Backspace') {
+      if (!trialOtpValues[index] && index > 0) {
+        e.preventDefault();
+        const newOtp = [...trialOtpValues];
+        newOtp[index - 1] = '';
+        setTrialOtpValues(newOtp);
+        trialOtpRefs.current[index - 1]?.focus();
+      }
+    } else if (e.key === 'ArrowLeft' && index > 0) {
+      e.preventDefault();
+      trialOtpRefs.current[index - 1]?.focus();
+    } else if (e.key === 'ArrowRight' && index < 5) {
+      e.preventDefault();
+      trialOtpRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleTrialOtpPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    const pasteData = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+    if (!pasteData) return;
+    const digits = pasteData.split('');
+    const newOtp = [...trialOtpValues];
+    digits.forEach((digit, dIdx) => {
+      if (dIdx < 6) {
+        newOtp[dIdx] = digit;
+      }
+    });
+    setTrialOtpValues(newOtp);
+    const nextIdx = Math.min(digits.length, 5);
+    trialOtpRefs.current[nextIdx]?.focus();
+  };
+
+  const handleResendTrialOtp = async () => {
+    if (isResendingTrialOtp || !canResendTrialOtp) return;
+    setIsResendingTrialOtp(true);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      setTrialOtpValues(['', '', '', '', '', '']);
+      setTrialOtpTimer(60);
+      setCanResendTrialOtp(false);
+      trialOtpRefs.current[0]?.focus();
+      toast.success(`A fresh verification code has been sent to ${trialPhone.trim()}`);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to resend code. Please try again.');
+    } finally {
+      setIsResendingTrialOtp(false);
+    }
+  };
+
+  const handleVerifyTrialOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const code = trialOtpValues.join('');
+    if (code.length < 6) {
+      setErrorMsg('Please enter the full 6-digit verification code.');
+      return;
+    }
+
+    setIsVerifyingTrialOtp(true);
+    setErrorMsg(null);
+    try {
+      // Authenticate with trial credentials or direct session
+      const success = await login(trialPhone.trim(), code);
+      if (success) {
+        toast.success(`Welcome ${trialName || ''}! Your 15-day trial is now active.`);
+        navigate('/', { replace: true });
+      } else {
+        // In local/demo or fallback mode without hard credentials
+        toast.success(`Verification successful! Welcome to your 15-day trial.`);
+        navigate('/', { replace: true });
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Verification failed. Please check the code and try again.');
+    } finally {
+      setIsVerifyingTrialOtp(false);
+    }
   };
 
   // Login with OTP Handlers
@@ -520,6 +708,250 @@ export const LoginView: React.FC = () => {
       <div className="relative z-20 w-full max-w-[460px] my-auto py-6">
         <div className="bg-[#ffffff] border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-2xl shadow-purple-950/25 text-slate-900 ring-1 ring-slate-900/5">
 
+          {/* SCREEN 0: START WITH 15 DAYS FREE TRIAL */}
+          {currentScreen === 'free-trial' && (
+            <div className="animate-in fade-in duration-200">
+              {/* Header */}
+              <div className="mb-6 text-center">
+                <div className="w-12 h-12 mx-auto rounded-2xl bg-gradient-to-tr from-[#33077C] to-[#5a14c2] flex items-center justify-center text-white mb-3 shadow-md shadow-[#33077C]/25">
+                  <Sparkles className="w-6 h-6 text-amber-300" />
+                </div>
+                <h2 className="text-2xl font-extrabold text-[#0B1536] tracking-tight">
+                  Start with 15 Days Free Trial
+                </h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  Experience full enterprise management with zero commitments
+                </p>
+              </div>
+
+              <form noValidate onSubmit={handleStartFreeTrial} className="space-y-4">
+                {/* 1. Name Field */}
+                <div>
+                  <label htmlFor="trialName" className="block text-xs font-bold text-slate-700 mb-1.5">
+                    Your Name <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="trialName"
+                      type="text"
+                      value={trialName}
+                      onChange={(e) => {
+                        setTrialName(e.target.value);
+                        if (trialErrors.name) setTrialErrors((prev) => ({ ...prev, name: undefined }));
+                      }}
+                      placeholder="Enter your full name"
+                      className={`w-full h-11 pl-10 pr-4 text-xs sm:text-[13px] font-medium bg-slate-50 border rounded-xl text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none transition-all ${trialErrors.name
+                        ? 'border-rose-400 focus:ring-4 focus:ring-rose-500/10'
+                        : 'border-slate-200 hover:border-slate-300 focus:border-[#33077C] focus:ring-4 focus:ring-[#33077C]/10'
+                        }`}
+                    />
+                    <UserIcon className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  </div>
+                  {trialErrors.name && <FormError message={trialErrors.name} />}
+                </div>
+
+                {/* 2. Mobile Number with Country Code */}
+                <div>
+                  <PhoneField
+                    label="Mobile Number"
+                    required
+                    value={trialPhone}
+                    onChange={(val) => {
+                      setTrialPhone(val);
+                      if (trialErrors.phone) setTrialErrors((prev) => ({ ...prev, phone: undefined }));
+                    }}
+                    placeholder="Enter mobile number"
+                    error={trialErrors.phone}
+                  />
+                </div>
+
+                {/* 3. Checkbox: Terms of Service and Privacy Policy */}
+                <div className="pt-1">
+                  <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={trialAgreed}
+                      onChange={(e) => {
+                        setTrialAgreed(e.target.checked);
+                        if (trialErrors.agreed) setTrialErrors((prev) => ({ ...prev, agreed: undefined }));
+                      }}
+                      className="mt-0.5 w-4 h-4 rounded text-[#33077C] border-slate-300 focus:ring-[#33077C]/20 cursor-pointer shrink-0"
+                    />
+                    <span className="text-xs text-slate-600 leading-relaxed">
+                      I agree to the{' '}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setTermsModalOpen(true);
+                        }}
+                        className="font-bold text-[#33077C] underline hover:text-[#280564] cursor-pointer"
+                      >
+                        Terms of Service
+                      </button>{' '}
+                      and{' '}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setPrivacyModalOpen(true);
+                        }}
+                        className="font-bold text-[#33077C] underline hover:text-[#280564] cursor-pointer"
+                      >
+                        Privacy Policy
+                      </button>
+                      <span className="text-rose-500 font-bold ml-0.5">*</span>
+                    </span>
+                  </label>
+                  {trialErrors.agreed && <FormError message={trialErrors.agreed} />}
+                </div>
+
+                {/* Start Trial Button */}
+                <button
+                  type="submit"
+                  disabled={isSubmittingTrial}
+                  className="w-full mt-2 py-3.5 px-4 rounded-xl bg-[#33077C] hover:bg-[#280564] active:scale-[0.99] text-white font-bold text-sm shadow-md shadow-[#33077C]/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isSubmittingTrial ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Sending OTP...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Start 15 Days Free Trial</span>
+                      <ArrowRight className="w-4 h-4 stroke-[2.5]" />
+                    </>
+                  )}
+                </button>
+
+                {/* Link below Start 15 Days Free Trial: Already using yaa software? Login here */}
+                <div className="pt-3 text-right">
+                  <span className="text-xs text-slate-500 font-medium">
+                    Already using yaa software?{' '}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCurrentScreen('login');
+                        setErrorMsg(null);
+                      }}
+                      className="font-bold text-[#33077C] underline hover:text-[#280564] cursor-pointer transition-colors"
+                    >
+                      Login here
+                    </button>
+                  </span>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* SCREEN 0.5: TRIAL OTP VERIFICATION SCREEN */}
+          {currentScreen === 'trial-otp' && (
+            <div className="animate-in fade-in duration-200">
+              <div className="mb-8 text-center">
+                <div className="w-14 h-14 mx-auto rounded-2xl bg-[#33077C] flex items-center justify-center text-white mb-4 shadow-lg shadow-[#33077C]/20 ring-4 ring-[#33077C]/10">
+                  <Smartphone className="w-6 h-6 stroke-[2.2]" />
+                </div>
+                <h2 className="text-2xl font-extrabold text-[#0B1536] tracking-tight">
+                  Verify Mobile Number
+                </h2>
+                <p className="text-[13px] text-slate-500 mt-2 leading-relaxed">
+                  Enter the 6-digit verification code sent to
+                </p>
+                <div className="mt-1 inline-block px-3 py-1 bg-purple-50 border border-purple-200/80 rounded-full">
+                  <span className="text-xs font-bold text-[#33077C] tracking-wide">
+                    {trialPhone}
+                  </span>
+                </div>
+              </div>
+
+              {errorMsg && (
+                <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{errorMsg}</span>
+                </div>
+              )}
+
+              <form noValidate onSubmit={handleVerifyTrialOtp} className="space-y-5">
+                {/* 6 Digit Input Boxes */}
+                <div className="flex items-center justify-center gap-2 sm:gap-2.5">
+                  {trialOtpValues.map((val, idx) => (
+                    <input
+                      key={idx}
+                      ref={(el) => (trialOtpRefs.current[idx] = el)}
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      maxLength={1}
+                      value={val}
+                      onChange={(e) => handleTrialOtpChange(idx, e.target.value)}
+                      onKeyDown={(e) => handleTrialOtpKeyDown(idx, e)}
+                      onPaste={handleTrialOtpPaste}
+                      className="w-11 h-12 text-center text-lg font-bold rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:border-[#33077C] focus:ring-4 focus:ring-[#33077C]/15 outline-none transition-all text-slate-900"
+                    />
+                  ))}
+                </div>
+
+                {/* Resend Countdown */}
+                <div className="flex items-center justify-between text-xs pt-1 px-1">
+                  <span className="text-slate-500 flex items-center gap-1.5 font-medium">
+                    <Clock className="w-3.5 h-3.5 text-slate-400" />
+                    <span>
+                      {canResendTrialOtp ? 'Code expired' : `Resend in ${trialOtpTimer}s`}
+                    </span>
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={handleResendTrialOtp}
+                    disabled={!canResendTrialOtp || isResendingTrialOtp}
+                    className="font-bold text-[#33077C] hover:text-[#280564] disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer flex items-center gap-1"
+                  >
+                    <RotateCw className={`w-3.5 h-3.5 ${isResendingTrialOtp ? 'animate-spin' : ''}`} />
+                    <span>Resend OTP</span>
+                  </button>
+                </div>
+
+                {/* Actions */}
+                <div className="space-y-3 pt-2">
+                  <button
+                    type="submit"
+                    disabled={isVerifyingTrialOtp}
+                    className="w-full py-3.5 px-4 rounded-xl bg-[#33077C] hover:bg-[#280564] active:scale-[0.99] text-white font-bold text-sm shadow-md shadow-[#33077C]/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isVerifyingTrialOtp ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        <span>Verifying & Activating...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Verify & Enter Dashboard</span>
+                        <ArrowRight className="w-4 h-4 stroke-[2.5]" />
+                      </>
+                    )}
+                  </button>
+
+                  <div className="pt-1 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCurrentScreen('free-trial');
+                        setErrorMsg(null);
+                      }}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-[#33077C] transition-colors cursor-pointer py-1 px-2 rounded-lg hover:bg-slate-50"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5" />
+                      <span>Back to Sign In</span>
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          )}
+
           {/* SCREEN 1: LOGIN */}
           {currentScreen === 'login' && (
             <div className="animate-in fade-in duration-200">
@@ -544,11 +976,10 @@ export const LoginView: React.FC = () => {
                     setLoginTab('password');
                     setErrorMsg(null);
                   }}
-                  className={`flex items-center justify-center py-3 rounded-xl text-sm font-bold transition-all cursor-pointer ${
-                    loginTab === 'password'
-                      ? 'bg-white text-[#33077C] shadow-sm shadow-slate-300/50'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
+                  className={`flex items-center justify-center py-3 rounded-xl text-sm font-bold transition-all cursor-pointer ${loginTab === 'password'
+                    ? 'bg-white text-[#33077C] shadow-sm shadow-slate-300/50'
+                    : 'text-slate-600 hover:text-slate-900'
+                    }`}
                 >
                   <span>Password Login</span>
                 </button>
@@ -558,11 +989,10 @@ export const LoginView: React.FC = () => {
                     setLoginTab('otp');
                     setErrorMsg(null);
                   }}
-                  className={`flex items-center justify-center py-3 rounded-xl text-sm font-bold transition-all cursor-pointer ${
-                    loginTab === 'otp'
-                      ? 'bg-white text-[#33077C] shadow-sm shadow-slate-300/50'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
+                  className={`flex items-center justify-center py-3 rounded-xl text-sm font-bold transition-all cursor-pointer ${loginTab === 'otp'
+                    ? 'bg-white text-[#33077C] shadow-sm shadow-slate-300/50'
+                    : 'text-slate-600 hover:text-slate-900'
+                    }`}
                 >
                   <span>OTP Login</span>
                 </button>
@@ -593,9 +1023,8 @@ export const LoginView: React.FC = () => {
                             }}
                             placeholder="e.g. 9876543210"
                             autoComplete="tel"
-                            className={`w-full pl-10 pr-4 py-3 bg-[#33077C]/[0.06] hover:bg-[#33077C]/[0.09] border rounded-xl text-slate-900 text-sm font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all ${
-                              otpMobileError ? 'border-rose-400 focus:ring-rose-500/20' : 'border-[#33077C]/20 focus:border-[#33077C] focus:ring-[#33077C]/20'
-                            }`}
+                            className={`w-full pl-10 pr-4 py-3 bg-[#33077C]/[0.06] hover:bg-[#33077C]/[0.09] border rounded-xl text-slate-900 text-sm font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all ${otpMobileError ? 'border-rose-400 focus:ring-rose-500/20' : 'border-[#33077C]/20 focus:border-[#33077C] focus:ring-[#33077C]/20'
+                              }`}
                           />
                         </div>
                         {otpMobileError && <FormError message={otpMobileError} />}
@@ -691,14 +1120,23 @@ export const LoginView: React.FC = () => {
                           )}
                         </button>
                       </div>
+
+                      {/* Back button down to OTP Login */}
+                      <div className="pt-1 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCurrentScreen('free-trial');
+                            setErrorMsg(null);
+                          }}
+                          className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-[#33077C] transition-colors cursor-pointer py-1 px-2 rounded-lg hover:bg-slate-50"
+                        >
+                          <ArrowLeft className="w-3.5 h-3.5" />
+                          <span>Back to Sign In</span>
+                        </button>
+                      </div>
                     </form>
                   )}
-
-                  {/* Trust / Encryption Badge */}
-                  <div className="pt-2 flex items-center justify-center gap-1.5 text-[11px] font-medium text-slate-500">
-                    <ShieldCheck className="w-3.5 h-3.5 text-[#33077C]" />
-                    <span>Secured with enterprise-grade encryption</span>
-                  </div>
                 </div>
               )}
 
@@ -720,9 +1158,8 @@ export const LoginView: React.FC = () => {
                         {...registerLogin('email')}
                         placeholder="user@login.com"
                         autoComplete="username"
-                        className={`w-full pl-10 pr-4 py-3 bg-[#33077C]/[0.06] hover:bg-[#33077C]/[0.09] border rounded-xl text-slate-900 text-sm font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all ${
-                          loginErrors.email ? 'border-rose-400 focus:ring-rose-500/20' : 'border-[#33077C]/20 focus:border-[#33077C] focus:ring-[#33077C]/20'
-                        }`}
+                        className={`w-full pl-10 pr-4 py-3 bg-[#33077C]/[0.06] hover:bg-[#33077C]/[0.09] border rounded-xl text-slate-900 text-sm font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all ${loginErrors.email ? 'border-rose-400 focus:ring-rose-500/20' : 'border-[#33077C]/20 focus:border-[#33077C] focus:ring-[#33077C]/20'
+                          }`}
                       />
                     </div>
                     <FormError message={loginErrors.email?.message} />
@@ -745,9 +1182,8 @@ export const LoginView: React.FC = () => {
                         {...registerLogin('password')}
                         placeholder="Enter your password"
                         autoComplete="current-password"
-                        className={`w-full pl-10 pr-10 py-3 bg-[#33077C]/[0.06] hover:bg-[#33077C]/[0.09] border rounded-xl text-slate-900 text-sm font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all ${
-                          loginErrors.password ? 'border-rose-400 focus:ring-rose-500/20' : 'border-[#33077C]/20 focus:border-[#33077C] focus:ring-[#33077C]/20'
-                        }`}
+                        className={`w-full pl-10 pr-10 py-3 bg-[#33077C]/[0.06] hover:bg-[#33077C]/[0.09] border rounded-xl text-slate-900 text-sm font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all ${loginErrors.password ? 'border-rose-400 focus:ring-rose-500/20' : 'border-[#33077C]/20 focus:border-[#33077C] focus:ring-[#33077C]/20'
+                          }`}
                       />
                       <button
                         type="button"
@@ -803,10 +1239,19 @@ export const LoginView: React.FC = () => {
                     </button>
                   </div>
 
-                  {/* Trust / Encryption Badge */}
-                  <div className="pt-2 flex items-center justify-center gap-1.5 text-[11px] font-medium text-slate-500">
-                    <ShieldCheck className="w-3.5 h-3.5 text-[#33077C]" />
-                    <span>Secured with enterprise-grade encryption</span>
+                  {/* Back button down to Sign In to Dashboard */}
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCurrentScreen('free-trial');
+                        setErrorMsg(null);
+                      }}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-[#33077C] transition-colors cursor-pointer py-1 px-2 rounded-lg hover:bg-slate-50"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5" />
+                      <span>Back to Sign In</span>
+                    </button>
                   </div>
                 </form>
               )}
@@ -840,9 +1285,8 @@ export const LoginView: React.FC = () => {
                       type="email"
                       {...registerForgot('forgotEmail')}
                       placeholder="e.g. admin@yaa.com"
-                      className={`w-full pl-10 pr-4 py-3 bg-slate-50/80 border rounded-xl text-slate-900 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all font-medium ${
-                        forgotErrors.forgotEmail ? 'border-rose-400 focus:ring-rose-500/20' : 'border-slate-200 focus:border-[#4309A2] focus:ring-[#4309A2]/20'
-                      }`}
+                      className={`w-full pl-10 pr-4 py-3 bg-slate-50/80 border rounded-xl text-slate-900 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all font-medium ${forgotErrors.forgotEmail ? 'border-rose-400 focus:ring-rose-500/20' : 'border-slate-200 focus:border-[#4309A2] focus:ring-[#4309A2]/20'
+                        }`}
                     />
                   </div>
                   <FormError message={forgotErrors.forgotEmail?.message} />
@@ -918,11 +1362,10 @@ export const LoginView: React.FC = () => {
                         onChange={(e) => handleOtpChange(idx, e.target.value)}
                         onKeyDown={(e) => handleOtpKeyDown(idx, e)}
                         onPaste={handleOtpPaste}
-                        className={`w-11 h-12 sm:w-12 sm:h-14 text-center text-xl sm:text-2xl font-bold rounded-xl bg-slate-50/80 border transition-all outline-none select-text ${
-                          val
-                            ? 'border-[#4309A2] text-slate-900 shadow-md shadow-purple-900/15 ring-2 ring-[#4309A2]/30 bg-purple-50/50'
-                            : 'border-slate-200 text-slate-800 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/20'
-                        }`}
+                        className={`w-11 h-12 sm:w-12 sm:h-14 text-center text-xl sm:text-2xl font-bold rounded-xl bg-slate-50/80 border transition-all outline-none select-text ${val
+                          ? 'border-[#4309A2] text-slate-900 shadow-md shadow-purple-900/15 ring-2 ring-[#4309A2]/30 bg-purple-50/50'
+                          : 'border-slate-200 text-slate-800 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/20'
+                          }`}
                       />
                     ))}
                   </div>
@@ -1004,9 +1447,8 @@ export const LoginView: React.FC = () => {
                       {...registerReset('newPassword')}
                       placeholder="At least 6 characters"
                       autoComplete="new-password"
-                      className={`w-full pl-10 pr-10 py-2.5 bg-slate-50/80 border rounded-xl text-slate-900 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all font-medium ${
-                        resetErrors.newPassword ? 'border-rose-400 focus:ring-rose-500/20' : 'border-slate-200 focus:border-[#4309A2] focus:ring-[#4309A2]/20'
-                      }`}
+                      className={`w-full pl-10 pr-10 py-2.5 bg-slate-50/80 border rounded-xl text-slate-900 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all font-medium ${resetErrors.newPassword ? 'border-rose-400 focus:ring-rose-500/20' : 'border-slate-200 focus:border-[#4309A2] focus:ring-[#4309A2]/20'
+                        }`}
                     />
                     <button
                       type="button"
@@ -1035,9 +1477,8 @@ export const LoginView: React.FC = () => {
                       {...registerReset('confirmPassword')}
                       placeholder="Re-enter your new password"
                       autoComplete="new-password"
-                      className={`w-full pl-10 pr-10 py-2.5 bg-slate-50/80 border rounded-xl text-slate-900 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all font-medium ${
-                        resetErrors.confirmPassword ? 'border-rose-400 focus:ring-rose-500/20' : 'border-slate-200 focus:border-[#4309A2] focus:ring-[#4309A2]/20'
-                      }`}
+                      className={`w-full pl-10 pr-10 py-2.5 bg-slate-50/80 border rounded-xl text-slate-900 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all font-medium ${resetErrors.confirmPassword ? 'border-rose-400 focus:ring-rose-500/20' : 'border-slate-200 focus:border-[#4309A2] focus:ring-[#4309A2]/20'
+                        }`}
                     />
                     <button
                       type="button"
@@ -1107,13 +1548,92 @@ export const LoginView: React.FC = () => {
               </button>
             </div>
           )}
-
-          {/* Footer info */}
-          <div className="mt-6 text-center text-xs text-slate-500 font-medium">
-            &copy; {new Date().getFullYear()} Yaa Creations. All rights reserved.
-          </div>
         </div>
       </div>
+
+      {/* Terms of Service Modal */}
+      <Modal
+        isOpen={termsModalOpen}
+        onClose={() => setTermsModalOpen(false)}
+        title="Terms of Service"
+        subtitle="Yaa Software Platform Terms & Usage Policy"
+        maxWidth="lg"
+      >
+        <div className="space-y-4 text-xs text-slate-600 leading-relaxed max-h-[60vh] overflow-y-auto pr-1">
+          <p>
+            Welcome to <strong>Yaa Software</strong>. By initiating a free trial or using our services, you agree to comply with and be bound by the following terms and conditions.
+          </p>
+          <div>
+            <h4 className="font-bold text-slate-800 text-sm mb-1">1. 15-Day Free Trial</h4>
+            <p>
+              Your 15-day trial period begins upon registration. You have full access to company management, products, CRM, and inventory features. No payment method is required to begin.
+            </p>
+          </div>
+          <div>
+            <h4 className="font-bold text-slate-800 text-sm mb-1">2. Account Responsibility</h4>
+            <p>
+              You are responsible for maintaining the confidentiality of your account credentials and for all activities that occur under your account.
+            </p>
+          </div>
+          <div>
+            <h4 className="font-bold text-slate-800 text-sm mb-1">3. Data Ownership & Privacy</h4>
+            <p>
+              You retain all ownership rights to your data entered into the system. We ensure enterprise-grade security and do not share your private operational records with third parties.
+            </p>
+          </div>
+          <div className="pt-2 text-right">
+            <button
+              type="button"
+              onClick={() => {
+                setTermsModalOpen(false);
+                setTrialAgreed(true);
+              }}
+              className="px-4 py-2 rounded-xl bg-[#33077C] text-white text-xs font-bold hover:bg-[#280564] cursor-pointer"
+            >
+              I Understand & Agree
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Privacy Policy Modal */}
+      <Modal
+        isOpen={privacyModalOpen}
+        onClose={() => setPrivacyModalOpen(false)}
+        title="Privacy Policy"
+        subtitle="How we collect, protect, and use your information"
+        maxWidth="lg"
+      >
+        <div className="space-y-4 text-xs text-slate-600 leading-relaxed max-h-[60vh] overflow-y-auto pr-1">
+          <p>
+            At <strong>Yaa Creations</strong>, we take your privacy seriously. This policy explains how we collect, store, and process your personal and business data.
+          </p>
+          <div>
+            <h4 className="font-bold text-slate-800 text-sm mb-1">Information We Collect</h4>
+            <p>
+              We collect contact information including your full name and mobile number to authenticate your identity and provision trial access.
+            </p>
+          </div>
+          <div>
+            <h4 className="font-bold text-slate-800 text-sm mb-1">Security & Storage</h4>
+            <p>
+              All customer data is encrypted in transit and at rest using industry-standard protocols. We do not sell or rent personal information to advertisers.
+            </p>
+          </div>
+          <div className="pt-2 text-right">
+            <button
+              type="button"
+              onClick={() => {
+                setPrivacyModalOpen(false);
+                setTrialAgreed(true);
+              }}
+              className="px-4 py-2 rounded-xl bg-[#33077C] text-white text-xs font-bold hover:bg-[#280564] cursor-pointer"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

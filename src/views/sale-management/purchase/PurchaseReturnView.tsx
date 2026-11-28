@@ -1,5 +1,6 @@
 import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
+import { PartyBalanceBadge } from '../../../components/common/PartyBalanceBadge';
 import { SupplierSearchableSelect, ProductSearchableSelect } from '../../../components/common/paginated-select';
 import { getNextPurchaseReturnNumber } from '../../../utils/documentNumbering';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
@@ -2189,17 +2190,24 @@ export const PurchaseReturnView: React.FC = () => {
 
             {/* Supplier Name */}
             <div>
-              <FormLabel required>Supplier</FormLabel>
               {chosenPurchase ? (
-                <input
-                  type="text"
-                  readOnly
-                  value={chosenPurchase.supplierName}
-                  className={FORM_INPUT_DISABLED_CLS}
-                />
+                <>
+                  <div className="flex items-center justify-between gap-2 mb-1.5 min-h-[18px]">
+                    <FormLabel required className="mb-0">Supplier</FormLabel>
+                    <PartyBalanceBadge supplierId={chosenPurchase.supplierId} />
+                  </div>
+                  <input
+                    type="text"
+                    readOnly
+                    value={chosenPurchase.supplierName}
+                    className={FORM_INPUT_DISABLED_CLS}
+                  />
+                </>
               ) : (
                 <div {...fieldAttr('supplierId')}>
                   <SupplierSearchableSelect
+                    label="Supplier"
+                    required
                     value={selectedSupplierId}
                     onChange={(val, sup) => {
                       retErr.clearError('supplierId');

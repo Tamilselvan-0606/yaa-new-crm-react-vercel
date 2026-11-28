@@ -1694,12 +1694,13 @@ export const PaymentOutView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
             {/* Field 1: Supplier / Vendor */}
             <div>
-              <FormLabel required>Supplier / Vendor</FormLabel>
               <Controller
                 control={control}
                 name="supplierId"
                 render={({ field }) => (
                   <SupplierSearchableSelect
+                    label="Supplier / Vendor"
+                    required
                     value={field.value}
                     onChange={(val, sup) => {
                       field.onChange(val);

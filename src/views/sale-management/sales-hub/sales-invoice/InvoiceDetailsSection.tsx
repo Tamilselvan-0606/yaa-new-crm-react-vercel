@@ -46,11 +46,10 @@ export const InvoiceDetailsSection: React.FC<InvoiceDetailsSectionProps> = ({
     <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
       {/* Row 1, Col 1: Customer Selection & Quick Add */}
       <div>
-        <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-          Customer / Client <span className="text-slate-500">*</span>
-        </label>
         <div {...fieldAttr("customer")}>
           <CustomerSearchableSelect
+            label="Customer / Client"
+            required
             value={formData.customerId}
             onChange={(val, cust) => {
               clearFormError("customer");
@@ -74,6 +73,7 @@ export const InvoiceDetailsSection: React.FC<InvoiceDetailsSectionProps> = ({
                     name: formData.customerName,
                     company: formData.customerCompany,
                     phone: formData.customerPhone,
+                    outstandingBalance: selectedCustomerFinancials?.outstandingAmount,
                   }
                 : null
             }

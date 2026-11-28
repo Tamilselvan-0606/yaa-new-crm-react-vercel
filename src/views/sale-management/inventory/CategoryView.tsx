@@ -647,7 +647,7 @@ export const CategoryView: React.FC = () => {
                     >
                       {/* CODE */}
                       <td className="py-3.5 sm:py-4 px-2 sm:px-3 border border-slate-200 text-center whitespace-nowrap">
-                        <span className="font-mono text-[11px] font-semibold text-slate-600">{item.code || "—"}</span>
+                        <span className="text-xs sm:text-[13px] font-semibold text-slate-700">{item.code || "—"}</span>
                       </td>
 
                       {/* CATEGORY NAME */}
@@ -734,7 +734,7 @@ export const CategoryView: React.FC = () => {
                           {item.categoryName}
                         </div>
                         {item.code && (
-                          <span className="font-mono text-[10px] text-slate-500">
+                          <span className="text-[11px] font-medium text-slate-500">
                             {item.code}
                           </span>
                         )}
@@ -940,7 +940,7 @@ export const CategoryView: React.FC = () => {
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200/80">
                   <div>
                     <span className="text-[11px] font-medium text-slate-400 block mb-0.5">Code</span>
-                    <span className="font-mono font-bold text-[#33077C] text-xs">
+                    <span className="font-bold text-[#33077C] text-xs">
                       {selectedCategoryDetail.code || 'N/A'}
                     </span>
                   </div>

@@ -1,6 +1,9 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { SearchableSelect, SearchableOption } from '../SearchableSelect';
+import { PartyBalanceBadge, extractSupplierOutstanding } from '../PartyBalanceBadge';
 import { supplierApi, ApiSupplier } from '../../../api/commerce/supplierApi';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface SupplierSearchableSelectProps {
   value: string;
@@ -10,7 +13,13 @@ export interface SupplierSearchableSelectProps {
     name: string;
     supplierCode?: string;
     phone?: string;
+    outstandingBalance?: number;
   } | null;
+  label?: string;
+  required?: boolean;
+  labelClassName?: string;
+  showPartyBalance?: boolean;
+  rightSlot?: React.ReactNode;
   onAddNewSupplier?: () => void;
   allowNone?: boolean;
   noneLabel?: string;
@@ -26,6 +35,11 @@ export const SupplierSearchableSelect: React.FC<SupplierSearchableSelectProps> =
   value,
   onChange,
   selectedSupplier,
+  label,
+  required = false,
+  labelClassName = 'text-xs sm:text-[13px] font-medium text-slate-500',
+  showPartyBalance = true,
+  rightSlot,
   onAddNewSupplier,
   allowNone = false,
   noneLabel = 'Select',
@@ -40,6 +54,7 @@ export const SupplierSearchableSelect: React.FC<SupplierSearchableSelectProps> =
   // screen and never calls the API again.
   const [items, setItems] = useState<ApiSupplier[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [fetchedBalance, setFetchedBalance] = useState<{ id: string; balance: number } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,7 +106,42 @@ export const SupplierSearchableSelect: React.FC<SupplierSearchableSelectProps> =
     return [{ value: '', label: noneLabel }];
   }, [allowNone, noneLabel]);
 
-  return (
+  const loadedMatch = useMemo(
+    () => (value ? items.find((s) => s.id === value) : undefined),
+    [items, value],
+  );
+  const directBalance = useMemo(() => {
+    if (!value) return null;
+    const fromLoaded = extractSupplierOutstanding(loadedMatch);
+    if (fromLoaded !== null) return fromLoaded;
+    const fromProp =
+      selectedSupplier && selectedSupplier.id === value
+        ? extractSupplierOutstanding(selectedSupplier)
+        : null;
+    if (fromProp !== null) return fromProp;
+    if (fetchedBalance && fetchedBalance.id === value) return fetchedBalance.balance;
+    return null;
+  }, [value, loadedMatch, selectedSupplier, fetchedBalance]);
+
+  useEffect(() => {
+    if (!showPartyBalance || !value || !UUID_RE.test(value) || isLoading || directBalance !== null) {
+      return;
+    }
+    let alive = true;
+    supplierApi
+      .getSupplierById(value)
+      .then((res) => {
+        if (!alive || !res?.data) return;
+        const bal = extractSupplierOutstanding(res.data);
+        if (bal !== null) setFetchedBalance({ id: value, balance: bal });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [showPartyBalance, value, isLoading, directBalance]);
+
+  const selectEl = (
     <SearchableSelect
       value={value}
       onChange={(val, opt) => onChange(val, opt?.data)}
@@ -109,6 +159,29 @@ export const SupplierSearchableSelect: React.FC<SupplierSearchableSelectProps> =
       size={size}
       allowClear={allowClear}
     />
+  );
+
+  if (!label && !rightSlot && (!showPartyBalance || directBalance === null)) {
+    return selectEl;
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-2 mb-1.5 min-h-[18px]">
+        {label ? (
+          <label className={labelClassName}>
+            {label} {required && <span className="text-rose-500 font-bold">*</span>}
+          </label>
+        ) : (
+          <span />
+        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {rightSlot}
+          {showPartyBalance && <PartyBalanceBadge balance={directBalance} />}
+        </div>
+      </div>
+      {selectEl}
+    </div>
   );
 };
 

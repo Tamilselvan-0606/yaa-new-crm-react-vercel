@@ -3054,11 +3054,11 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                 className="lg:col-span-6 xl:col-span-5"
                 ref={partyDropdownRef}
               >
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Customer <span className="text-rose-500">*</span>
-                </label>
                 <div {...fieldAttr("customerId")}>
                   <CustomerSearchableSelect
+                    label="Customer"
+                    required
+                    labelClassName="text-xs font-semibold text-slate-700"
                     value={activeTab.formData.customerId}
                     allowNone
                     size="lg"

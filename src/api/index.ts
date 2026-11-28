@@ -34,6 +34,16 @@ export * from './platform/clientApi';
 export * from './platform/clientTypes';
 export * from './platform/paymentApi';
 export * from './platform/paymentTypes';
+export * from './platform/generalSettingsApi';
+export * from './platform/generalSettingsTypes';
+export * from './platform/taxSettingsApi';
+export * from './platform/taxSettingsTypes';
+export * from './platform/numberingApi';
+export * from './platform/numberingTypes';
+export * from './platform/accountSettingsApi';
+export * from './platform/accountSettingsTypes';
+export * from './platform/activityLogApi';
+export * from './platform/activityLogTypes';
 
 export * from './commerce/customerTypes';
 export * from './commerce/customerApi';

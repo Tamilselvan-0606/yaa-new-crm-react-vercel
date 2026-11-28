@@ -13,12 +13,14 @@ import {
   Tag,
   Image as ImageIcon,
   ChevronDown,
+  Settings,
 } from "lucide-react";
 import {
   FormLabel,
   FORM_INPUT_CLS,
   FORM_INPUT_ERROR_CLS,
   FORM_SELECT_CLS,
+  FORM_TEXTAREA_CLS,
 } from "../utils/formUtils";
 import {
   PRODUCT_ITEM_IMAGE_ACCEPT,
@@ -60,6 +62,7 @@ import { store } from "../../../store/store";
 import { baseApi } from "../../../api/baseApi";
 import { AddCategoryModal } from "./AddCategoryModal";
 import { AddSubcategoryModal } from "./AddSubcategoryModal";
+import { ItemSettingsModal, useItemSettings } from "./ItemSettingsModal";
 import { DateInput } from "../../../components/common/DateInput";
 
 interface AddItemModalProps {
@@ -71,6 +74,7 @@ interface AddItemModalProps {
 export interface ItemModalFormData {
   itemType: "Product" | "Service";
   productName: string;
+  description?: string;
   category: string;
   subcategory?: string;
   hsnCode?: string;
@@ -137,6 +141,8 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
   const [isAddCategoryModalOpen, setIsAddCategoryModalOpen] = useState(false);
   const [isAddSubcategoryModalOpen, setIsAddSubcategoryModalOpen] =
     useState(false);
+  const [itemSettings, setItemSettings] = useItemSettings();
+  const [isItemSettingsOpen, setIsItemSettingsOpen] = useState(false);
 
   // Units
   const [allAvailableUnits, setAllAvailableUnits] = useState<ApiUnit[]>([]);
@@ -176,6 +182,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
     defaultValues: {
       itemType: "Product",
       productName: "",
+      description: "",
       category: "",
       subcategory: "",
       hsnCode: "",
@@ -377,15 +384,23 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
     if (!isOpen) reset();
     if (isOpen) {
       setItemImageState("");
-      setSelectedBaseUnit("");
+      const defaultUnitObj =
+        itemSettings.defaultUnitEnabled && itemSettings.defaultUnitId
+          ? allAvailableUnits.find((u) => u.id === itemSettings.defaultUnitId)
+          : undefined;
+      setSelectedBaseUnit(defaultUnitObj ? formatUnitOption(defaultUnitObj) : "");
       setSelectedSecondaryUnit("None");
       reset({
         itemType: "Product",
         productName: "",
+        description: "",
         category: "",
         subcategory: "",
         hsnCode: "",
-        unit: "",
+        unit: defaultUnitObj
+          ? defaultUnitObj.shortCode || defaultUnitObj.name
+          : "",
+        baseUnitId: defaultUnitObj?.id,
         salePrice: "",
         salePriceTaxType: "Excluded",
         discountValue: "",
@@ -543,10 +558,28 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
       (!!d.hasWholesale && d.wholesaleTaxType === "Included");
     const taxMissing = !d.taxRate || !d.taxRate.trim() || d.taxRate === "None";
     const checks: Array<[string, string | null]> = [
-      ["taxRate", anyTaxIncluded && taxMissing ? "Select a tax rate: a price is marked as With Tax." : null],
-      ["category", checkRequiredSelection(d.category, "category")],
-      ["subcategory", checkRequiredSelection(d.subcategory, "subcategory")],
-      ["unit", checkRequiredSelection(d.unit, "unit")],
+      [
+        "taxRate",
+        itemSettings.itemWiseTax && anyTaxIncluded && taxMissing
+          ? "Select a tax rate: a price is marked as With Tax."
+          : null,
+      ],
+      [
+        "category",
+        itemSettings.itemCategory
+          ? checkRequiredSelection(d.category, "category")
+          : null,
+      ],
+      [
+        "subcategory",
+        itemSettings.itemCategory
+          ? checkRequiredSelection(d.subcategory, "subcategory")
+          : null,
+      ],
+      [
+        "unit",
+        itemSettings.itemUnits ? checkRequiredSelection(d.unit, "unit") : null,
+      ],
       ["salePrice", checkMoney(d.salePrice, "sale price", { allowZero: true, optional: true })],
       ["discountValue", discountErr],
       [
@@ -628,6 +661,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
       };
 
       if (data.itemType) payload.itemType = data.itemType;
+      if (data.description && data.description.trim()) payload.description = data.description.trim();
       if (data.category && data.category.trim()) payload.category = data.category.trim();
       if (data.subcategory && data.subcategory.trim()) payload.subcategory = data.subcategory.trim();
       if (data.hsnCode && data.hsnCode.trim()) payload.hsnCode = data.hsnCode.trim();
@@ -765,15 +799,16 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
               </div>
             </div>
 
-            {/* Right Action: Close */}
+            {/* Right Action: Item Settings (replaces Close in top-right corner) */}
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={onClose}
-                className="p-1.5 rounded-xl text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
-                title="Close"
+                onClick={() => setIsItemSettingsOpen(true)}
+                className="p-1.5 rounded-xl text-white/85 hover:text-white hover:bg-white/15 transition-colors cursor-pointer"
+                title="Item Settings"
+                aria-label="Item Settings"
               >
-                <X className="w-5 h-5" />
+                <Settings className="w-5 h-5" />
               </button>
             </div>
           </div>
@@ -783,45 +818,49 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
             {/* Row 1: Category, Subcategory, Item Name */}
             <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-start">
               {/* Category */}
-              <div className="md:col-span-3" {...fieldAttr("category")}>
-                <SearchableDropdown
-                  label="Category"
-                  required
-                  error={fe.errors.category}
-                  value={formData.category}
-                  onChange={(val) => {
-                    setValue("category", val, { shouldValidate: isSubmitted });
-                    setValue("subcategory", "");
-                  }}
-                  options={categoryOptions}
-                  placeholder="Select Category"
-                  searchPlaceholder="Search Category by name..."
-                  addNewButtonLabel="+ Add New Category"
-                  onAddNew={() => setIsAddCategoryModalOpen(true)}
-                />
-                <FormError message={fe.errors.category} showIcon />
-              </div>
+              {itemSettings.itemCategory && (
+                <div className="md:col-span-3" {...fieldAttr("category")}>
+                  <SearchableDropdown
+                    label="Category"
+                    required
+                    error={fe.errors.category}
+                    value={formData.category}
+                    onChange={(val) => {
+                      setValue("category", val, { shouldValidate: isSubmitted });
+                      setValue("subcategory", "");
+                    }}
+                    options={categoryOptions}
+                    placeholder="Select Category"
+                    searchPlaceholder="Search Category by name..."
+                    addNewButtonLabel="+ Add New Category"
+                    onAddNew={() => setIsAddCategoryModalOpen(true)}
+                  />
+                  <FormError message={fe.errors.category} showIcon />
+                </div>
+              )}
 
               {/* Subcategory */}
-              <div className="md:col-span-3" {...fieldAttr("subcategory")}>
-                <SearchableDropdown
-                  label="Subcategory"
-                  required
-                  error={fe.errors.subcategory}
-                  value={formData.subcategory || ""}
-                  onChange={(val) => setValue("subcategory", val)}
-                  options={subcategoryOptions}
-                  placeholder="Select Subcategory"
-                  searchPlaceholder="Search Subcategory..."
-                  addNewButtonLabel="+ Add New Subcategory"
-                  onAddNew={() => setIsAddSubcategoryModalOpen(true)}
-                  disabled={!formData.category}
-                />
-                <FormError message={fe.errors.subcategory} showIcon />
-              </div>
+              {itemSettings.itemCategory && (
+                <div className="md:col-span-3" {...fieldAttr("subcategory")}>
+                  <SearchableDropdown
+                    label="Subcategory"
+                    required
+                    error={fe.errors.subcategory}
+                    value={formData.subcategory || ""}
+                    onChange={(val) => setValue("subcategory", val)}
+                    options={subcategoryOptions}
+                    placeholder="Select Subcategory"
+                    searchPlaceholder="Search Subcategory..."
+                    addNewButtonLabel="+ Add New Subcategory"
+                    onAddNew={() => setIsAddSubcategoryModalOpen(true)}
+                    disabled={!formData.category}
+                  />
+                  <FormError message={fe.errors.subcategory} showIcon />
+                </div>
+              )}
 
               {/* Item Name */}
-              <div className="md:col-span-6">
+              <div className={itemSettings.itemCategory ? "md:col-span-6" : "md:col-span-12"}>
                 <FormLabel required>Item Name</FormLabel>
                 <input
                   type="text"
@@ -853,50 +892,68 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
             </div>
 
             {/* Row 2: Item HSN, Select Unit, Add Item Image */}
+            {(() => {
+              const row2Count =
+                (itemSettings.hsnSacCode ? 1 : 0) +
+                (itemSettings.itemUnits ? 1 : 0) +
+                1;
+              const row2ColCls =
+                row2Count === 3
+                  ? "md:col-span-4"
+                  : row2Count === 2
+                    ? "md:col-span-6"
+                    : "md:col-span-4";
+              return (
             <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-start">
               {/* Item HSN */}
-              <div className="md:col-span-4">
-                <FormLabel>Item HSN</FormLabel>
-                <div className="relative">
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="Enter Item HSN"
-                    value={formData.hsnCode || ""}
-                    onChange={(e) => {
-                      setValue("hsnCode", sanitizeHsnCodeInput(e.target.value));
-                    }}
-                    className={`${FORM_INPUT_CLS} font-mono`}
-                  />
+              {itemSettings.hsnSacCode && (
+                <div className={row2ColCls}>
+                  <FormLabel>Item HSN</FormLabel>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="Enter Item HSN"
+                      value={formData.hsnCode || ""}
+                      onChange={(e) => {
+                        setValue("hsnCode", sanitizeHsnCodeInput(e.target.value));
+                      }}
+                      className={`${FORM_INPUT_CLS} font-mono`}
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Select Unit Searchable Dropdown */}
-              <div className="md:col-span-4">
-                <SearchableDropdown
-                  label="Unit"
-                  required
-                  value={formData.unit || ""}
-                  onChange={handleUnitChange}
-                  options={unitOptions}
-                  placeholder="Select Unit"
-                  searchPlaceholder="Search Unit by name or code..."
-                  addNewButtonLabel="+ Add Custom Unit"
-                  onAddNew={() => setIsUnitModalOpen(true)}
-                  footerAction={{
-                    label: "Configure Base & Secondary Units...",
-                    onClick: () => setIsUnitModalOpen(true),
-                  }}
-                />
-                <FormError message={fe.errors.unit} showIcon />
-              </div>
+              {itemSettings.itemUnits && (
+                <div className={row2ColCls}>
+                  <SearchableDropdown
+                    label="Unit"
+                    required
+                    value={formData.unit || ""}
+                    onChange={handleUnitChange}
+                    options={unitOptions}
+                    placeholder="Select Unit"
+                    searchPlaceholder="Search Unit by name or code..."
+                    addNewButtonLabel="+ Add Custom Unit"
+                    onAddNew={() => setIsUnitModalOpen(true)}
+                    footerAction={{
+                      label: "Configure Base & Secondary Units...",
+                      onClick: () => setIsUnitModalOpen(true),
+                    }}
+                  />
+                  <FormError message={fe.errors.unit} showIcon />
+                </div>
+              )}
 
               {/* Add Item Image */}
-              <div className="md:col-span-4">
+              <div className={row2ColCls}>
                 {/* Invisible label keeps the button level with the HSN and Unit inputs, whatever errors show below them */}
-                <FormLabel className="hidden md:block invisible" aria-hidden="true">
-                  Item Image
-                </FormLabel>
+                {(itemSettings.hsnSacCode || itemSettings.itemUnits) && (
+                  <FormLabel className="hidden md:block invisible" aria-hidden="true">
+                    Item Image
+                  </FormLabel>
+                )}
                 <input
                   type="file"
                   ref={fileInputRef}
@@ -910,7 +967,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                     <span>Processing image...</span>
                   </div>
                 ) : itemImageState || formData.itemImage ? (
-                  <div className="flex items-center gap-2">
+                  <div className="min-h-11 flex items-center gap-2">
                     <img
                       src={itemImageState || formData.itemImage}
                       alt="Preview"
@@ -952,13 +1009,19 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                 <span className="hidden" {...fieldAttr("itemImage")} />
               </div>
             </div>
+              );
+            })()}
 
             {/* PRICING */}
             {(
               <div className="space-y-4 animate-in fade-in duration-100">
                 {/* Card 1: Sale Price & Wholesale Price */}
                 <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-xs space-y-5">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div
+                    className={`grid grid-cols-1 ${
+                      itemSettings.itemWiseDiscount ? "sm:grid-cols-2" : ""
+                    } gap-4`}
+                  >
                     {/* Sale Price + Tax Type */}
                     <div className="flex flex-col">
                       <FormLabel>Sale Price</FormLabel>
@@ -980,165 +1043,177 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                           {...fieldAttr("salePrice")}
                           className="flex-1 min-w-0 h-full px-3 sm:px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
                         />
-                        <select
-                          value={formData.salePriceTaxType}
-                          onChange={(e) =>
-                            setValue(
-                              "salePriceTaxType",
-                              e.target.value as "Excluded" | "Included",
-                            )
-                          }
-                          className="shrink-0 h-full px-2.5 sm:px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
-                        >
-                          <option value="Excluded">Without Tax</option>
-                          <option value="Included">With Tax</option>
-                        </select>
+                        {itemSettings.itemWiseTax && (
+                          <select
+                            value={formData.salePriceTaxType}
+                            onChange={(e) =>
+                              setValue(
+                                "salePriceTaxType",
+                                e.target.value as "Excluded" | "Included",
+                              )
+                            }
+                            className="shrink-0 h-full px-2.5 sm:px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
+                          >
+                            <option value="Excluded">Without Tax</option>
+                            <option value="Included">With Tax</option>
+                          </select>
+                        )}
                       </div>
                       <FormError message={fe.errors.salePrice} showIcon />
                     </div>
 
                     {/* Disc. On Sale Price + Disc Type */}
-                    <div className="flex flex-col">
-                      <FormLabel>Disc. On Sale Price</FormLabel>
-                      <div className="relative flex items-center h-11 bg-white rounded-xl border border-slate-200 hover:border-slate-300 focus-within:border-[#4309A2] focus-within:ring-4 focus-within:ring-[#4309A2]/10 transition-all">
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          placeholder="0.00"
-                          value={formData.discountValue ?? ""}
-                          onChange={(e) => {
-                            const val = e.target.value
-                              .replace(/[^0-9.]/g, "")
-                              .replace(/(\..*?)\..*/g, "$1");
-                            setValue("discountValue", val);
-                            fe.clearError("discountValue");
-                          }}
-                          {...fieldAttr("discountValue")}
-                          className="flex-1 min-w-0 h-full px-3 sm:px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                        />
-                        <select
-                          value={formData.discountType}
-                          onChange={(e) =>
-                            setValue(
-                              "discountType",
-                              e.target.value as "Percentage" | "Amount",
-                            )
-                          }
-                          className="shrink-0 h-full px-2.5 sm:px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
-                        >
-                          <option value="Percentage">Percentage</option>
-                          <option value="Amount">Amount (₹)</option>
-                        </select>
-                      </div>
-                      <FormError message={fe.errors.discountValue} showIcon />
-                    </div>
-                  </div>
-
-                  {/* Wholesale Price Section */}
-                  <div className="pt-2 border-t border-slate-100">
-                    <div className="flex items-center gap-3 mb-2">
-                      <span className="text-xs font-bold text-slate-700">
-                        Wholesale Price
-                      </span>
-                      {formData.hasWholesale ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setValue("hasWholesale", false);
-                            setValue("wholesalePrice", "");
-                            setValue("minWholesaleQty", "");
-                          }}
-                          className="text-xs font-semibold text-slate-500 hover:text-rose-600 flex items-center gap-1 transition-colors cursor-pointer"
-                        >
-                          <MinusCircle className="w-3.5 h-3.5 text-slate-400" />
-                          <span>Remove</span>
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setValue("hasWholesale", true)}
-                          className="text-xs font-bold text-[#33077C] hover:text-[#4309A2] flex items-center gap-1 transition-colors cursor-pointer"
-                        >
-                          <Plus className="w-3.5 h-3.5 text-[#33077C]" />
-                          <span>Add Wholesale Price</span>
-                        </button>
-                      )}
-                    </div>
-
-                    {formData.hasWholesale && (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-3 animate-in fade-in duration-100">
-                        {/* Wholesale Price */}
-                        <div className="flex flex-col">
-                          <FormLabel>Wholesale Price</FormLabel>
-                          <div className="relative flex items-center h-11 bg-white rounded-xl border border-slate-200 hover:border-slate-300 focus-within:border-[#4309A2] focus-within:ring-4 focus-within:ring-[#4309A2]/10 transition-all">
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              placeholder="0.00"
-                              value={formData.wholesalePrice ?? ""}
-                              onChange={(e) => {
-                                const val = e.target.value
-                                  .replace(/[^0-9.]/g, "")
-                                  .replace(/(\..*?)\..*/g, "$1");
-                                setValue("wholesalePrice", val);
-                                fe.clearError("wholesalePrice");
-                              }}
-                              {...fieldAttr("wholesalePrice")}
-                              className="flex-1 min-w-0 h-full px-3 sm:px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                            />
-                            <select
-                              value={formData.wholesaleTaxType}
-                              onChange={(e) =>
-                                setValue(
-                                  "wholesaleTaxType",
-                                  e.target.value as "Excluded" | "Included",
-                                )
-                              }
-                              className="shrink-0 h-full px-2.5 sm:px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
-                            >
-                              <option value="Excluded">Without Tax</option>
-                              <option value="Included">With Tax</option>
-                            </select>
-                          </div>
-                          <FormError message={fe.errors.wholesalePrice} showIcon />
+                    {itemSettings.itemWiseDiscount && (
+                      <div className="flex flex-col">
+                        <FormLabel>Disc. On Sale Price</FormLabel>
+                        <div className="relative flex items-center h-11 bg-white rounded-xl border border-slate-200 hover:border-slate-300 focus-within:border-[#4309A2] focus-within:ring-4 focus-within:ring-[#4309A2]/10 transition-all">
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            placeholder="0.00"
+                            value={formData.discountValue ?? ""}
+                            onChange={(e) => {
+                              const val = e.target.value
+                                .replace(/[^0-9.]/g, "")
+                                .replace(/(\..*?)\..*/g, "$1");
+                              setValue("discountValue", val);
+                              fe.clearError("discountValue");
+                            }}
+                            {...fieldAttr("discountValue")}
+                            className="flex-1 min-w-0 h-full px-3 sm:px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                          />
+                          <select
+                            value={formData.discountType}
+                            onChange={(e) =>
+                              setValue(
+                                "discountType",
+                                e.target.value as "Percentage" | "Amount",
+                              )
+                            }
+                            className="shrink-0 h-full px-2.5 sm:px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
+                          >
+                            <option value="Percentage">Percentage</option>
+                            <option value="Amount">Amount (₹)</option>
+                          </select>
                         </div>
-
-                        {/* Minimum Wholesale Qty */}
-                        <div className="flex flex-col">
-                          <FormLabel>Min Wholesale Qty</FormLabel>
-                          <div className="relative flex items-center h-11 bg-white rounded-xl pr-3 border border-slate-200 hover:border-slate-300 focus-within:border-[#4309A2] focus-within:ring-4 focus-within:ring-[#4309A2]/10 transition-all">
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              placeholder="0"
-                              value={formData.minWholesaleQty ?? ""}
-                              onChange={(e) => {
-                                const val = e.target.value.replace(
-                                  /[^0-9]/g,
-                                  "",
-                                );
-                                setValue("minWholesaleQty", val);
-                                fe.clearError("minWholesaleQty");
-                              }}
-                              {...fieldAttr("minWholesaleQty")}
-                              className="flex-1 min-w-0 h-full px-3 sm:px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                            />
-                            <div
-                              title="Minimum order quantity for wholesale pricing to apply"
-                              className="text-slate-400 hover:text-[#33077C] cursor-help"
-                            >
-                              <Info className="w-4 h-4" />
-                            </div>
-                          </div>
-                          <FormError message={fe.errors.minWholesaleQty} showIcon />
-                        </div>
+                        <FormError message={fe.errors.discountValue} showIcon />
                       </div>
                     )}
                   </div>
+
+                  {/* Wholesale Price Section */}
+                  {formData.itemType === "Product" && itemSettings.wholesalePrice && (
+                    <div className="pt-2 border-t border-slate-100">
+                      <div className="flex items-center gap-3 mb-2">
+                        <span className="text-xs font-bold text-slate-700">
+                          Wholesale Price
+                        </span>
+                        {formData.hasWholesale ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setValue("hasWholesale", false);
+                              setValue("wholesalePrice", "");
+                              setValue("minWholesaleQty", "");
+                            }}
+                            className="text-xs font-semibold text-slate-500 hover:text-rose-600 flex items-center gap-1 transition-colors cursor-pointer"
+                          >
+                            <MinusCircle className="w-3.5 h-3.5 text-slate-400" />
+                            <span>Remove</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setValue("hasWholesale", true)}
+                            className="text-xs font-bold text-[#33077C] hover:text-[#4309A2] flex items-center gap-1 transition-colors cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5 text-[#33077C]" />
+                            <span>Add Wholesale Price</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {formData.hasWholesale && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-3 animate-in fade-in duration-100">
+                          {/* Wholesale Price */}
+                          <div className="flex flex-col">
+                            <FormLabel>Wholesale Price</FormLabel>
+                            <div className="relative flex items-center h-11 bg-white rounded-xl border border-slate-200 hover:border-slate-300 focus-within:border-[#4309A2] focus-within:ring-4 focus-within:ring-[#4309A2]/10 transition-all">
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                placeholder="0.00"
+                                value={formData.wholesalePrice ?? ""}
+                                onChange={(e) => {
+                                  const val = e.target.value
+                                    .replace(/[^0-9.]/g, "")
+                                    .replace(/(\..*?)\..*/g, "$1");
+                                  setValue("wholesalePrice", val);
+                                  fe.clearError("wholesalePrice");
+                                }}
+                                {...fieldAttr("wholesalePrice")}
+                                className="flex-1 min-w-0 h-full px-3 sm:px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                              />
+                              {itemSettings.itemWiseTax && (
+                                <select
+                                  value={formData.wholesaleTaxType}
+                                  onChange={(e) =>
+                                    setValue(
+                                      "wholesaleTaxType",
+                                      e.target.value as "Excluded" | "Included",
+                                    )
+                                  }
+                                  className="shrink-0 h-full px-2.5 sm:px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
+                                >
+                                  <option value="Excluded">Without Tax</option>
+                                  <option value="Included">With Tax</option>
+                                </select>
+                              )}
+                            </div>
+                            <FormError message={fe.errors.wholesalePrice} showIcon />
+                          </div>
+
+                          {/* Minimum Wholesale Qty */}
+                          <div className="flex flex-col">
+                            <FormLabel>Min Wholesale Qty</FormLabel>
+                            <div className="relative flex items-center h-11 bg-white rounded-xl pr-3 border border-slate-200 hover:border-slate-300 focus-within:border-[#4309A2] focus-within:ring-4 focus-within:ring-[#4309A2]/10 transition-all">
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                placeholder="0"
+                                value={formData.minWholesaleQty ?? ""}
+                                onChange={(e) => {
+                                  const val = e.target.value.replace(
+                                    /[^0-9]/g,
+                                    "",
+                                  );
+                                  setValue("minWholesaleQty", val);
+                                  fe.clearError("minWholesaleQty");
+                                }}
+                                {...fieldAttr("minWholesaleQty")}
+                                className="flex-1 min-w-0 h-full px-3 sm:px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                              />
+                              <div
+                                title="Minimum order quantity for wholesale pricing to apply"
+                                className="text-slate-400 hover:text-[#33077C] cursor-help"
+                              >
+                                <Info className="w-4 h-4" />
+                              </div>
+                            </div>
+                            <FormError message={fe.errors.minWholesaleQty} showIcon />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Card 2 & 3: Purchase Price & Taxes */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div
+                  className={`grid grid-cols-1 ${
+                    itemSettings.itemWiseTax ? "sm:grid-cols-2" : ""
+                  } gap-4`}
+                >
                   {/* Purchase Price Card */}
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
                     <div className="flex flex-col">
@@ -1159,49 +1234,66 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                           {...fieldAttr("purchasePrice")}
                           className="flex-1 min-w-0 h-full px-3 sm:px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
                         />
-                        <select
-                          value={formData.purchasePriceTaxType}
-                          onChange={(e) =>
-                            setValue(
-                              "purchasePriceTaxType",
-                              e.target.value as "Excluded" | "Included",
-                            )
-                          }
-                          className="shrink-0 h-full px-2.5 sm:px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
-                        >
-                          <option value="Excluded">Without Tax</option>
-                          <option value="Included">With Tax</option>
-                        </select>
+                        {itemSettings.itemWiseTax && (
+                          <select
+                            value={formData.purchasePriceTaxType}
+                            onChange={(e) =>
+                              setValue(
+                                "purchasePriceTaxType",
+                                e.target.value as "Excluded" | "Included",
+                              )
+                            }
+                            className="shrink-0 h-full px-2.5 sm:px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
+                          >
+                            <option value="Excluded">Without Tax</option>
+                            <option value="Included">With Tax</option>
+                          </select>
+                        )}
                       </div>
                       <FormError message={fe.errors.purchasePrice} showIcon />
                     </div>
                   </div>
 
                   {/* Taxes Card */}
-                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
-                    <div>
-                      <SearchableDropdown
-                        label="Taxes"
-                        required={
-                          formData.salePriceTaxType === "Included" ||
-                          formData.purchasePriceTaxType === "Included" ||
-                          (!!formData.hasWholesale && formData.wholesaleTaxType === "Included")
-                        }
-                        error={fe.errors.taxRate}
-                        value={formData.taxRate}
-                        onChange={(val) => setValue("taxRate", val)}
-                        options={taxRateOptions}
-                        placeholder="Select Tax Rate"
-                        searchPlaceholder="Search Tax Rate (e.g. 18%, Exempted)..."
-                      />
+                  {itemSettings.itemWiseTax && (
+                    <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
+                      <div>
+                        <SearchableDropdown
+                          label="Taxes"
+                          required={
+                            formData.salePriceTaxType === "Included" ||
+                            formData.purchasePriceTaxType === "Included" ||
+                            (!!formData.hasWholesale && formData.wholesaleTaxType === "Included")
+                          }
+                          error={fe.errors.taxRate}
+                          value={formData.taxRate}
+                          onChange={(val) => setValue("taxRate", val)}
+                          options={taxRateOptions}
+                          placeholder="Select Tax Rate"
+                          searchPlaceholder="Search Tax Rate (e.g. 18%, Exempted)..."
+                        />
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
             )}
 
-            {/* STOCK (always shown below pricing) */}
-            {(
+            {/* DESCRIPTION (controlled by Item Settings -> Description) */}
+            {itemSettings.description && (
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
+                <FormLabel>Description</FormLabel>
+                <textarea
+                  rows={2}
+                  placeholder="Enter item description..."
+                  {...register("description")}
+                  className={FORM_TEXTAREA_CLS}
+                />
+              </div>
+            )}
+
+            {/* STOCK (always shown below pricing when Stock maintenance is enabled) */}
+            {formData.itemType === "Product" && itemSettings.stockMaintenance && (
               <div className="space-y-4 pt-1 animate-in fade-in duration-100">
                 {/* Min Stock To Maintain | Location */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1534,6 +1626,16 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
           }}
         />
       )}
+      <ItemSettingsModal
+        isOpen={isItemSettingsOpen}
+        onClose={() => setIsItemSettingsOpen(false)}
+        settings={itemSettings}
+        onChange={setItemSettings}
+        unitOptions={allAvailableUnits.map((u) => ({
+          id: u.id,
+          label: formatUnitOption(u),
+        }))}
+      />
     </>
   );
 };

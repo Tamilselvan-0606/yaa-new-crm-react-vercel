@@ -44,6 +44,7 @@ import {
   History,
   Download,
   Receipt,
+  Settings,
 } from "lucide-react";
 import {
   PurchaseOrder,
@@ -4000,14 +4001,24 @@ export const PurchaseOrderView: React.FC = () => {
                   : "Configure supplier procurement, product items, and payment breakdown"}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => setIsFormModalOpen(false)}
-              className="inline-flex items-center justify-center gap-2 h-10 px-4.5 bg-white text-[#33077C] hover:bg-slate-100 rounded-xl text-sm font-bold transition-all cursor-pointer shadow-sm hover:shadow-md hover:scale-[1.02] active:scale-[0.98] shrink-0"
-            >
-              <ArrowLeft className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
-              <span>Back</span>
-            </button>
+            <div className="flex items-center gap-2.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => navigate('/settings?tab=transaction')}
+                className="inline-flex items-center justify-center w-10 h-10 bg-white/10 hover:bg-white/20 text-white rounded-xl text-sm font-bold transition-all cursor-pointer shadow-sm hover:scale-[1.05] active:scale-[0.98]"
+                title="Transaction Settings"
+              >
+                <Settings className="w-5 h-5 text-white stroke-[2]" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsFormModalOpen(false)}
+                className="inline-flex items-center justify-center gap-2 h-10 px-4.5 bg-white text-[#33077C] hover:bg-slate-100 rounded-xl text-sm font-bold transition-all cursor-pointer shadow-sm hover:shadow-md hover:scale-[1.02] active:scale-[0.98] shrink-0"
+              >
+                <ArrowLeft className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
+                <span>Back</span>
+              </button>
+            </div>
           </div>
 
           {/* Saved draft: resume prompt + autosave status */}
@@ -4190,9 +4201,10 @@ export const PurchaseOrderView: React.FC = () => {
               {/* Supplier & Header Config in 3-column rows */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                 <div>
-                  <FormLabel required>Select Supplier</FormLabel>
                   <div {...fieldAttr("supplierId")}>
                     <SupplierSearchableSelect
+                      label="Select Supplier"
+                      required
                       value={formData.supplierId}
                       onChange={(val, sup) => {
                         handleSupplierChange(val);

@@ -3539,9 +3539,10 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pb-6 border-b border-slate-100">
               {/* Left Column: Party (CRM Theme) */}
               <div className="lg:col-span-6 xl:col-span-5" ref={partySelectRef}>
-                <FormLabel required>Customer</FormLabel>
                 <div {...fieldAttr("customerId")}>
                   <CustomerSearchableSelect
+                    label="Customer"
+                    required
                     value={formData.customerId}
                     allowNone
                     size="lg"

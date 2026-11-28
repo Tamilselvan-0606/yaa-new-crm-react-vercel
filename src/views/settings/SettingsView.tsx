@@ -123,6 +123,8 @@ export const SettingsView: React.FC = () => {
   type SettingsTabId =
     | 'general'
     | 'account'
+    | 'transaction'
+    | 'item_settings'
     | 'permission'
     | 'staff'
     | 'taxes_gst'
@@ -136,6 +138,8 @@ export const SettingsView: React.FC = () => {
     const validTabs: SettingsTabId[] = [
       'general',
       'account',
+      'transaction',
+      'item_settings',
       'permission',
       'staff',
       'taxes_gst',
@@ -350,9 +354,85 @@ export const SettingsView: React.FC = () => {
   const [dueDatesAndPaymentTerms, setDueDatesAndPaymentTerms] = useState(false);
   const [showProfitWhileMakingSale, setShowProfitWhileMakingSale] = useState(false);
   const [termsAndConditionsEnabled, setTermsAndConditionsEnabled] = useState(true);
+  const [termsAndConditionsText, setTermsAndConditionsText] = useState(
+    '1. Goods once sold will not be taken back or exchanged.\n2. All disputes are subject to local jurisdiction only.\n3. Payment is due within the stipulated credit period.'
+  );
+  const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
+  const [isAdditionalFieldsModalOpen, setIsAdditionalFieldsModalOpen] = useState(false);
+  const [isTransportModalOpen, setIsTransportModalOpen] = useState(false);
+  const [isCountTextModalOpen, setIsCountTextModalOpen] = useState(false);
+  const [customCountText, setCustomCountText] = useState('Count');
+  const [additionalFieldsList, setAdditionalFieldsList] = useState<string[]>([
+    'Purchase Order No.',
+    'Challan No.',
+    'Vehicle No.',
+  ]);
+  const [newFieldName, setNewFieldName] = useState('');
+  const [transportDetails, setTransportDetails] = useState({
+    transportName: '',
+    vehicleNumber: '',
+    deliveryLocation: '',
+    lrNumber: '',
+  });
 
   // 5. Billing Type
   const [billingType, setBillingType] = useState<'Lite Sale' | 'Full Sale'>('Full Sale');
+
+  // ==========================================
+  // ITEM SETTINGS STATE (Matching Vyapar Item Screen)
+  // ==========================================
+  // Column 1: Item Settings
+  const [itemEnableItem, setItemEnableItem] = useState(true);
+  const [whatDoYouSell, setWhatDoYouSell] = useState<'Product/Service' | 'Product' | 'Service'>('Product/Service');
+  const [itemBarcodeScan, setItemBarcodeScan] = useState(false);
+  const [itemStockMaintenance, setItemStockMaintenance] = useState(true);
+  const [itemManufacturing, setItemManufacturing] = useState(false);
+  const [itemShowLowStockDialog, setItemShowLowStockDialog] = useState(true);
+  const [itemItemsUnit, setItemItemsUnit] = useState(true);
+  const [itemDefaultUnit, setItemDefaultUnit] = useState(false);
+  const [itemItemCategory, setItemItemCategory] = useState(true);
+  const [itemPartyWiseItemRate, setItemPartyWiseItemRate] = useState(false);
+  const [itemDescription, setItemDescription] = useState(false);
+  const [itemDescriptionText, setItemDescriptionText] = useState('Description');
+  const [isItemDescModalOpen, setIsItemDescModalOpen] = useState(false);
+  const [itemItemWiseTax, setItemItemWiseTax] = useState(true);
+  const [itemItemWiseDiscount, setItemItemWiseDiscount] = useState(true);
+  const [itemUpdateSalePriceFromTransaction, setItemUpdateSalePriceFromTransaction] = useState(false);
+  const [itemQuantityDecimals, setItemQuantityDecimals] = useState<number>(2);
+  const [itemWholesalePrice, setItemWholesalePrice] = useState(false);
+
+  // Column 2: Additional Item Fields
+  // MRP / Price
+  const [itemMrpEnabled, setItemMrpEnabled] = useState(false);
+  const [itemMrpLabel, setItemMrpLabel] = useState('MRP');
+  const [itemCalculateTaxBasedOnMrp, setItemCalculateTaxBasedOnMrp] = useState(false);
+
+  // Serial No. Tracking
+  const [itemSerialNoTracking, setItemSerialNoTracking] = useState(false);
+  const [itemSerialNoLabel, setItemSerialNoLabel] = useState('Serial No.');
+
+  // Batch Tracking
+  const [itemBatchNoEnabled, setItemBatchNoEnabled] = useState(false);
+  const [itemBatchNoLabel, setItemBatchNoLabel] = useState('Batch No.');
+  const [itemExpDateEnabled, setItemExpDateEnabled] = useState(false);
+  const [itemExpDateFormat, setItemExpDateFormat] = useState<'mm/yy' | 'dd/mm/yy' | 'dd/mm/yyyy'>('mm/yy');
+  const [itemExpDateLabel, setItemExpDateLabel] = useState('Exp. Date');
+  const [itemMfgDateEnabled, setItemMfgDateEnabled] = useState(false);
+  const [itemMfgDateFormat, setItemMfgDateFormat] = useState<'dd/mm/yy' | 'mm/yy' | 'dd/mm/yyyy'>('dd/mm/yy');
+  const [itemMfgDateLabel, setItemMfgDateLabel] = useState('Mfg. Date');
+  const [itemModelNoEnabled, setItemModelNoEnabled] = useState(false);
+  const [itemModelNoLabel, setItemModelNoLabel] = useState('Model No.');
+  const [itemSizeEnabled, setItemSizeEnabled] = useState(false);
+  const [itemSizeLabel, setItemSizeLabel] = useState('Size');
+
+  // Column 3: Item Custom Fields
+  const [isItemCustomFieldsModalOpen, setIsItemCustomFieldsModalOpen] = useState(false);
+  const [itemCustomFieldsList, setItemCustomFieldsList] = useState<string[]>([
+    'Color',
+    'Brand',
+    'HSN/SAC Code',
+  ]);
+  const [newCustomFieldName, setNewCustomFieldName] = useState('');
 
   // Documents & Billing Settings State
   const [defaultTaxRate, setDefaultTaxRate] = useState('18');
@@ -1023,6 +1103,8 @@ export const SettingsView: React.FC = () => {
       {
         groupTitle: 'DOCUMENTS & BILLING',
         items: [
+          { id: 'transaction', label: 'Transaction', icon: Receipt },
+          { id: 'item_settings', label: 'Item', icon: Package },
           { id: 'taxes_gst', label: 'Taxes & GST', icon: Percent },
           { id: 'numbering_prefix', label: 'Numbering & Prefix', icon: Hash },
         ],
@@ -1452,15 +1534,13 @@ export const SettingsView: React.FC = () => {
                             role="switch"
                             aria-checked={item.checked}
                             onClick={() => item.onChange(!item.checked)}
-                            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                              item.checked ? 'bg-[#33077C]' : 'bg-slate-300'
-                            }`}
+                            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${item.checked ? 'bg-[#33077C]' : 'bg-slate-300'
+                              }`}
                           >
                             <span
                               aria-hidden="true"
-                              className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
-                                item.checked ? 'translate-x-4' : 'translate-x-0'
-                              }`}
+                              className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${item.checked ? 'translate-x-4' : 'translate-x-0'
+                                }`}
                             />
                           </button>
                         </div>
@@ -1721,19 +1801,1561 @@ export const SettingsView: React.FC = () => {
                         role="switch"
                         aria-checked={twoFactorAuth}
                         onClick={() => setTwoFactorAuth(!twoFactorAuth)}
-                        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                          twoFactorAuth ? 'bg-[#33077C]' : 'bg-slate-300'
-                        }`}
+                        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${twoFactorAuth ? 'bg-[#33077C]' : 'bg-slate-300'
+                          }`}
                       >
                         <span
                           aria-hidden="true"
-                          className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
-                            twoFactorAuth ? 'translate-x-4' : 'translate-x-0'
-                          }`}
+                          className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${twoFactorAuth ? 'translate-x-4' : 'translate-x-0'
+                            }`}
                         />
                       </button>
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* 3. TRANSACTION SETTINGS TAB */}
+              {superAdminTab === 'transaction' && (
+                <div className="space-y-6">
+                  {/* Tab Header Card */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                        <Receipt className="w-5 h-5 text-[#33077C]" />
+                        Transaction Settings
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Configure headers, items table behaviors, tax/discount calculations, and billing workflows.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Top 3-Column Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 items-start">
+                    {/* Column 1: Transaction Header */}
+                    <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
+                      <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2">
+                        Transaction Header
+                      </h4>
+
+                      <div className="space-y-3.5 pt-0.5">
+                        {[
+                          {
+                            label: 'Invoice/Bill No.',
+                            checked: invoiceBillNo,
+                            onChange: setInvoiceBillNo,
+                            tooltip: 'Enable serial invoice or bill number field',
+                          },
+                          {
+                            label: 'Add Time on Transactions',
+                            checked: addTimeOnTransactions,
+                            onChange: setAddTimeOnTransactions,
+                            tooltip: 'Timestamp transaction creation alongside date',
+                          },
+                          {
+                            label: 'Cash Sale by default',
+                            checked: cashSaleByDefault,
+                            onChange: setCashSaleByDefault,
+                            tooltip: 'Default payment mode to Cash for quick counter checkout',
+                          },
+                          {
+                            label: 'Billing Name of Parties',
+                            checked: billingNameOfParties,
+                            onChange: setBillingNameOfParties,
+                            tooltip: 'Show registered billing name separately from trade name',
+                          },
+                          {
+                            label: "Customers P.O. Details on Transactions",
+                            checked: poDetailsOnTransactions,
+                            onChange: setPoDetailsOnTransactions,
+                            tooltip: 'Include Purchase Order reference numbers on invoices',
+                          },
+                        ].map((item, idx) => (
+                          <label
+                            key={idx}
+                            className="flex items-center gap-3 cursor-pointer py-0.5 select-none group"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={item.checked}
+                              onChange={(e) => item.onChange(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                              {item.label}
+                              <span
+                                title={item.tooltip}
+                                className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                              >
+                                <Info className="w-3.5 h-3.5 text-slate-400" />
+                              </span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Column 2: Items Table */}
+                    <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
+                      <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2">
+                        Items Table
+                      </h4>
+
+                      <div className="space-y-3.5 pt-0.5">
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={inclusiveExclusiveTaxRate}
+                            onChange={(e) => setInclusiveExclusiveTaxRate(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Inclusive/Exclusive Tax on Rate(Price/Unit)
+                            <span
+                              title="Toggle between tax inclusive and exclusive unit rates"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={displayPurchasePrice}
+                            onChange={(e) => setDisplayPurchasePrice(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Display Purchase Price of Items
+                            <span
+                              title="Show item purchase price on entry screen for reference"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={showLast5SalePrice}
+                            onChange={(e) => setShowLast5SalePrice(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Show last 5 Sale Price of Items
+                            <span
+                              title="Show history popup with last 5 sales prices for selected party"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={showLast5PurchasePrice}
+                            onChange={(e) => setShowLast5PurchasePrice(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Show last 5 Purchase Price of Items
+                            <span
+                              title="Show history popup with last 5 purchase costs for selected supplier"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={freeItemQuantity}
+                            onChange={(e) => setFreeItemQuantity(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Free Item Quantity
+                            <span
+                              title="Allow zero-value promotional units or free goods column"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        <div className="flex items-center gap-3 py-0.5 text-slate-700">
+                          <input
+                            type="checkbox"
+                            id="enableItemCount"
+                            checked={enableItemCount}
+                            onChange={(e) => setEnableItemCount(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <div className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            <label htmlFor="enableItemCount" className="cursor-pointer">
+                              {customCountText}
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => setIsCountTextModalOpen(true)}
+                              className="text-[11px] font-semibold text-[#33077C] hover:underline cursor-pointer"
+                            >
+                              Change Text
+                            </button>
+                            <span
+                              title="Display item piece count or batch count column"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Column 3: Taxes, Discount & Totals */}
+                    <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
+                      <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2">
+                        Taxes, Discount & Totals
+                      </h4>
+
+                      <div className="space-y-3.5 pt-0.5">
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={transactionWiseTax}
+                            onChange={(e) => setTransactionWiseTax(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Transaction wise Tax
+                            <span
+                              title="Apply single tax rate across the entire invoice subtotal"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={transactionWiseDiscount}
+                            onChange={(e) => setTransactionWiseDiscount(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Transaction wise Discount
+                            <span
+                              title="Apply overall discount percentage or amount on total bill"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        {/* Round Off Total with dropdowns */}
+                        <div className="space-y-2.5 pt-0.5">
+                          <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                            <input
+                              type="checkbox"
+                              checked={roundOffTotal}
+                              onChange={(e) => setRoundOffTotal(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                              Round Off Total
+                              <span
+                                title="Automatically adjust fractional decimals on invoice grand total"
+                                className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                              >
+                                <Info className="w-3.5 h-3.5 text-slate-400" />
+                              </span>
+                            </span>
+                          </label>
+
+                          {roundOffTotal && (
+                            <div className="grid grid-cols-2 gap-3 pl-7 pt-1">
+                              <div>
+                                <label className="text-[11px] font-semibold text-slate-500 block mb-1">
+                                  Type
+                                </label>
+                                <select
+                                  value={roundOffType}
+                                  onChange={(e) => setRoundOffType(e.target.value)}
+                                  className="w-full text-xs font-medium border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white text-slate-800 focus:ring-1 focus:ring-[#33077C] focus:border-[#33077C] transition-all cursor-pointer"
+                                >
+                                  <option value="Nearest">Nearest</option>
+                                  <option value="Upward">Upward</option>
+                                  <option value="Downward">Downward</option>
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="text-[11px] font-semibold text-slate-500 block mb-1">
+                                  To
+                                </label>
+                                <select
+                                  value={roundOffTo}
+                                  onChange={(e) => setRoundOffTo(e.target.value)}
+                                  className="w-full text-xs font-medium border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white text-slate-800 focus:ring-1 focus:ring-[#33077C] focus:border-[#33077C] transition-all cursor-pointer"
+                                >
+                                  <option value="1">1</option>
+                                  <option value="0.5">0.5</option>
+                                  <option value="10">10</option>
+                                </select>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Bottom Grid: More Features + Billing Type */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-start">
+                    {/* More Transaction Features (spans 2 columns on larger screens) */}
+                    <div className="md:col-span-2 bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
+                      <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2">
+                        More Transaction Features
+                      </h4>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 pt-0.5">
+                        {[
+                          {
+                            label: 'E way bill no',
+                            checked: ewayBillNo,
+                            onChange: setEwayBillNo,
+                            tooltip: 'Enable statutory e-way bill number field for cargo dispatch',
+                          },
+                          {
+                            label: 'Quick Entry',
+                            checked: quickEntry,
+                            onChange: setQuickEntry,
+                            tooltip: 'Fast keyboard-driven barcode and item entry mode',
+                          },
+                          {
+                            label: 'Do not Show Invoice Preview',
+                            checked: doNotShowInvoicePreview,
+                            onChange: setDoNotShowInvoicePreview,
+                            tooltip: 'Save and print transactions directly without intermediate preview',
+                          },
+                          {
+                            label: 'Repeat Invoices',
+                            checked: repeatInvoices,
+                            onChange: setRepeatInvoices,
+                            tooltip: 'Schedule recurring automated monthly invoices',
+                          },
+                          {
+                            label: 'Enable Passcode for transaction edit/delete',
+                            checked: enablePasscodeForEditDelete,
+                            onChange: setEnablePasscodeForEditDelete,
+                            tooltip: 'Require security PIN or admin passcode to modify approved vouchers',
+                          },
+                          {
+                            label: 'Discount During Payments',
+                            checked: discountDuringPayments,
+                            onChange: setDiscountDuringPayments,
+                            tooltip: 'Apply cash discounts or rebates directly while recording payment receipts',
+                          },
+                          {
+                            label: 'Link Payments to Invoices',
+                            checked: linkPaymentsToInvoices,
+                            onChange: setLinkPaymentsToInvoices,
+                            tooltip: 'Map payments directly against outstanding invoice line balances',
+                          },
+                          {
+                            label: 'Due Dates and Payment Terms',
+                            checked: dueDatesAndPaymentTerms,
+                            onChange: setDueDatesAndPaymentTerms,
+                            tooltip: 'Display Net credit days and payment due dates on invoices',
+                          },
+                          {
+                            label: 'Show Profit while making Sale Invoice',
+                            checked: showProfitWhileMakingSale,
+                            onChange: setShowProfitWhileMakingSale,
+                            tooltip: 'Display real-time gross margin and estimated profit during invoicing',
+                          },
+                        ].map((item, idx) => (
+                          <label
+                            key={idx}
+                            className="flex items-center gap-3 cursor-pointer py-0.5 select-none group"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={item.checked}
+                              onChange={(e) => item.onChange(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                              {item.label}
+                              <span
+                                title={item.tooltip}
+                                className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                              >
+                                <Info className="w-3.5 h-3.5 text-slate-400" />
+                              </span>
+                            </span>
+                          </label>
+                        ))}
+
+                        {/* Terms and Conditions with link */}
+                        <div className="sm:col-span-2 pt-2 border-t border-slate-100">
+                          <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                            <input
+                              type="checkbox"
+                              checked={termsAndConditionsEnabled}
+                              onChange={(e) => setTermsAndConditionsEnabled(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                            />
+                            <div className="flex-1 flex items-center gap-2">
+                              <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5">
+                                Terms and Conditions
+                                <span
+                                  title="Append legal terms and clauses to bottom of printable invoices"
+                                  className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                                >
+                                  <Info className="w-3.5 h-3.5 text-slate-400" />
+                                </span>
+                              </span>
+                              {termsAndConditionsEnabled && (
+                                <button
+                                  type="button"
+                                  onClick={() => setIsTermsModalOpen(true)}
+                                  className="text-xs font-semibold text-[#33077C] hover:underline cursor-pointer ml-1"
+                                >
+                                  Set Terms and Conditions
+                                </button>
+                              )}
+                            </div>
+                          </label>
+                        </div>
+
+                        {/* Custom Navigation Links styled like Tax List > */}
+                        <div className="sm:col-span-2 pt-2 flex flex-wrap items-center gap-5">
+                          <button
+                            type="button"
+                            onClick={() => setIsAdditionalFieldsModalOpen(true)}
+                            className="text-xs sm:text-[13px] font-semibold text-[#33077C] hover:underline flex items-center gap-1 cursor-pointer"
+                          >
+                            Additional Fields &gt;
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsTransportModalOpen(true)}
+                            className="text-xs sm:text-[13px] font-semibold text-[#33077C] hover:underline flex items-center gap-1 cursor-pointer"
+                          >
+                            Transportation Details &gt;
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Billing Type Card */}
+                    <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
+                      <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2">
+                        Billing Type
+                      </h4>
+
+                      <div className="space-y-4 pt-1">
+                        <label className="flex items-start gap-3 cursor-pointer select-none group py-0.5">
+                          <input
+                            type="radio"
+                            name="billingType"
+                            value="Lite Sale"
+                            checked={billingType === 'Lite Sale'}
+                            onChange={() => setBillingType('Lite Sale')}
+                            className="mt-0.5 w-4 h-4 text-[#33077C] border-slate-300 focus:ring-[#33077C] cursor-pointer accent-[#33077C]"
+                          />
+                          <div>
+                            <span className="text-xs sm:text-[13px] font-semibold text-slate-800 block">
+                              Lite Sale
+                            </span>
+                            <span className="text-[11px] text-slate-400">
+                              Simplified quick invoicing with minimal fields
+                            </span>
+                          </div>
+                        </label>
+
+                        <label className="flex items-start gap-3 cursor-pointer select-none group py-0.5">
+                          <input
+                            type="radio"
+                            name="billingType"
+                            value="Full Sale"
+                            checked={billingType === 'Full Sale'}
+                            onChange={() => setBillingType('Full Sale')}
+                            className="mt-0.5 w-4 h-4 text-[#33077C] border-slate-300 focus:ring-[#33077C] cursor-pointer accent-[#33077C]"
+                          />
+                          <div>
+                            <span className="text-xs sm:text-[13px] font-semibold text-slate-800 block">
+                              Full Sale
+                            </span>
+                            <span className="text-[11px] text-slate-400">
+                              Complete ERP sale invoice with taxes, shipping, batches & terms
+                            </span>
+                          </div>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Modal: Set Terms and Conditions */}
+                  {isTermsModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+                      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xl max-w-lg w-full p-6 space-y-4 animate-in fade-in zoom-in-95">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                          <h3 className="text-base font-bold text-slate-900">
+                            Terms and Conditions
+                          </h3>
+                          <button
+                            type="button"
+                            onClick={() => setIsTermsModalOpen(false)}
+                            className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                          >
+                            <X className="w-5 h-5" />
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-500">
+                          Configure standard terms, warranty clauses, and payment conditions displayed on sale invoices.
+                        </p>
+                        <textarea
+                          rows={6}
+                          value={termsAndConditionsText}
+                          onChange={(e) => setTermsAndConditionsText(e.target.value)}
+                          placeholder="Enter terms and conditions..."
+                          className="w-full text-xs font-medium text-slate-800 p-3 border border-slate-200 rounded-xl focus:ring-1 focus:ring-[#33077C] focus:border-[#33077C] transition-all"
+                        />
+                        <div className="flex items-center justify-end gap-3 pt-2">
+                          <button
+                            type="button"
+                            onClick={() => setIsTermsModalOpen(false)}
+                            className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsTermsModalOpen(false);
+                              showToast('Terms and Conditions updated', 'success');
+                            }}
+                            className="px-5 py-2 text-xs font-bold text-white bg-[#33077C] hover:bg-[#432eb5] rounded-xl shadow-sm cursor-pointer"
+                          >
+                            Save Terms
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Modal: Additional Fields */}
+                  {isAdditionalFieldsModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+                      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xl max-w-md w-full p-6 space-y-4 animate-in fade-in zoom-in-95">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                          <h3 className="text-base font-bold text-slate-900">
+                            Additional Fields
+                          </h3>
+                          <button
+                            type="button"
+                            onClick={() => setIsAdditionalFieldsModalOpen(false)}
+                            className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                          >
+                            <X className="w-5 h-5" />
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-500">
+                          Manage custom invoice header or footer fields (e.g. PO No, Dispatch No).
+                        </p>
+                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                          {additionalFieldsList.map((field, idx) => (
+                            <div
+                              key={idx}
+                              className="flex items-center justify-between px-3 py-2 bg-slate-50 rounded-lg text-xs font-medium text-slate-700 border border-slate-100"
+                            >
+                              <span>{field}</span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setAdditionalFieldsList(additionalFieldsList.filter((_, i) => i !== idx))
+                                }
+                                className="text-rose-500 hover:text-rose-700 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-2 pt-2">
+                          <input
+                            type="text"
+                            value={newFieldName}
+                            onChange={(e) => setNewFieldName(e.target.value)}
+                            placeholder="Add new custom field..."
+                            className="flex-1 text-xs font-medium px-3 py-2 border border-slate-200 rounded-xl focus:ring-1 focus:ring-[#33077C]"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (newFieldName.trim()) {
+                                setAdditionalFieldsList([...additionalFieldsList, newFieldName.trim()]);
+                                setNewFieldName('');
+                              }
+                            }}
+                            className="px-3 py-2 bg-[#33077C] hover:bg-[#432eb5] text-white text-xs font-bold rounded-xl cursor-pointer"
+                          >
+                            Add
+                          </button>
+                        </div>
+                        <div className="flex justify-end pt-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsAdditionalFieldsModalOpen(false);
+                              showToast('Custom fields saved', 'success');
+                            }}
+                            className="px-5 py-2 text-xs font-bold text-white bg-[#33077C] hover:bg-[#432eb5] rounded-xl shadow-sm cursor-pointer"
+                          >
+                            Done
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Modal: Transportation Details */}
+                  {isTransportModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+                      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xl max-w-md w-full p-6 space-y-4 animate-in fade-in zoom-in-95">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                          <h3 className="text-base font-bold text-slate-900">
+                            Transportation Details
+                          </h3>
+                          <button
+                            type="button"
+                            onClick={() => setIsTransportModalOpen(false)}
+                            className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                          >
+                            <X className="w-5 h-5" />
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-500">
+                          Set default logistics and transporter attributes for delivery challans and invoices.
+                        </p>
+                        <div className="space-y-3">
+                          <div>
+                            <label className="text-xs font-semibold text-slate-700 block mb-1">
+                              Transporter Name
+                            </label>
+                            <input
+                              type="text"
+                              value={transportDetails.transportName}
+                              onChange={(e) =>
+                                setTransportDetails({ ...transportDetails, transportName: e.target.value })
+                              }
+                              placeholder="e.g. VRL Logistics"
+                              className="w-full text-xs font-medium px-3 py-2 border border-slate-200 rounded-xl focus:ring-1 focus:ring-[#33077C]"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs font-semibold text-slate-700 block mb-1">
+                              Default Vehicle No.
+                            </label>
+                            <input
+                              type="text"
+                              value={transportDetails.vehicleNumber}
+                              onChange={(e) =>
+                                setTransportDetails({ ...transportDetails, vehicleNumber: e.target.value })
+                              }
+                              placeholder="e.g. TN 01 AB 1234"
+                              className="w-full text-xs font-medium px-3 py-2 border border-slate-200 rounded-xl focus:ring-1 focus:ring-[#33077C]"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs font-semibold text-slate-700 block mb-1">
+                              LR / RR Number
+                            </label>
+                            <input
+                              type="text"
+                              value={transportDetails.lrNumber}
+                              onChange={(e) =>
+                                setTransportDetails({ ...transportDetails, lrNumber: e.target.value })
+                              }
+                              placeholder="e.g. LR-9842"
+                              className="w-full text-xs font-medium px-3 py-2 border border-slate-200 rounded-xl focus:ring-1 focus:ring-[#33077C]"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex justify-end gap-3 pt-3">
+                          <button
+                            type="button"
+                            onClick={() => setIsTransportModalOpen(false)}
+                            className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsTransportModalOpen(false);
+                              showToast('Transportation details saved', 'success');
+                            }}
+                            className="px-5 py-2 text-xs font-bold text-white bg-[#33077C] hover:bg-[#432eb5] rounded-xl shadow-sm cursor-pointer"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Modal: Change Count Text */}
+                  {isCountTextModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+                      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xl max-w-xs w-full p-5 space-y-4 animate-in fade-in zoom-in-95">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                          <h3 className="text-sm font-bold text-slate-900">
+                            Custom Column Text
+                          </h3>
+                          <button
+                            type="button"
+                            onClick={() => setIsCountTextModalOpen(false)}
+                            className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <div>
+                          <label className="text-xs font-semibold text-slate-700 block mb-1">
+                            Label for Count Column
+                          </label>
+                          <input
+                            type="text"
+                            value={customCountText}
+                            onChange={(e) => setCustomCountText(e.target.value)}
+                            placeholder="e.g. Count, Pieces, Units"
+                            className="w-full text-xs font-medium px-3 py-2 border border-slate-200 rounded-xl focus:ring-1 focus:ring-[#33077C]"
+                          />
+                        </div>
+                        <div className="flex justify-end gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => setIsCountTextModalOpen(false)}
+                            className="px-4 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsCountTextModalOpen(false);
+                              showToast('Count text updated', 'success');
+                            }}
+                            className="px-4 py-1.5 text-xs font-bold text-white bg-[#33077C] hover:bg-[#432eb5] rounded-xl shadow-sm cursor-pointer"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 3B. ITEM SETTINGS TAB */}
+              {superAdminTab === 'item_settings' && (
+                <div className="space-y-6">
+                  {/* Tab Header Card */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                        <Package className="w-5 h-5 text-[#33077C]" />
+                        Item Settings
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Configure inventory parameters, units, categories, pricing, batch/serial tracking, and custom item attributes.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* 3 Columns Grid matching Taxes & GST Layout */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-start">
+                    {/* Column 1: Item Settings */}
+                    <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
+                      <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2">
+                        Item Settings
+                      </h4>
+
+                      <div className="space-y-3.5 pt-0.5">
+                        {/* Enable Item */}
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={itemEnableItem}
+                            onChange={(e) => setItemEnableItem(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Enable Item
+                            <span
+                              title="Turn on inventory and item features across vouchers"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        {/* What do you sell? dropdown */}
+                        <div className="pl-7 py-0.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700">
+                              What do you sell?
+                            </span>
+                            <div className="relative">
+                              <select
+                                value={whatDoYouSell}
+                                onChange={(e) => setWhatDoYouSell(e.target.value as any)}
+                                className="text-xs font-semibold text-[#33077C] bg-white border border-slate-200 rounded-lg px-2.5 py-1 pr-6 appearance-none focus:outline-none focus:ring-1 focus:ring-[#33077C] cursor-pointer shadow-2xs"
+                              >
+                                <option value="Product/Service">Product/Service</option>
+                                <option value="Product">Product only</option>
+                                <option value="Service">Service only</option>
+                              </select>
+                              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-1.5 top-2 pointer-events-none" />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Barcode Scan */}
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={itemBarcodeScan}
+                            onChange={(e) => setItemBarcodeScan(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Barcode Scan
+                            <span
+                              title="Support barcode readers for auto-populating line items"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        {/* Stock Maintenance */}
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={itemStockMaintenance}
+                            onChange={(e) => setItemStockMaintenance(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Stock Maintenance
+                            <span
+                              title="Track real-time inventory quantity on hand, in & out"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        {/* Manufacturing */}
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={itemManufacturing}
+                            onChange={(e) => setItemManufacturing(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Manufacturing
+                            <span
+                              title="Enable raw material consumption and finished goods assembly (BOM)"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        {/* Show Low Stock Dialog */}
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={itemShowLowStockDialog}
+                            onChange={(e) => setItemShowLowStockDialog(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Show Low Stock Dialog
+                            <span
+                              title="Alert user when item stock falls below min reorder point"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        {/* Items Unit */}
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={itemItemsUnit}
+                            onChange={(e) => setItemItemsUnit(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Items Unit
+                            <span
+                              title="Enable units of measurement (PCS, KGS, BOX, etc.)"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        {/* Default Unit */}
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={itemDefaultUnit}
+                            onChange={(e) => setItemDefaultUnit(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Default Unit
+                            <span
+                              title="Automatically assign primary unit when creating items"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        {/* Item Category */}
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={itemItemCategory}
+                            onChange={(e) => setItemItemCategory(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Item Category
+                            <span
+                              title="Organize items into hierarchical categories & subcategories"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        {/* Party Wise Item Rate */}
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={itemPartyWiseItemRate}
+                            onChange={(e) => setItemPartyWiseItemRate(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Party Wise Item Rate
+                            <span
+                              title="Remember last agreed selling price specific to each customer"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        {/* Description with Change Text */}
+                        <div className="flex items-center gap-3 py-0.5 text-slate-700">
+                          <input
+                            type="checkbox"
+                            id="itemDescriptionCheck"
+                            checked={itemDescription}
+                            onChange={(e) => setItemDescription(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <div className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            <label htmlFor="itemDescriptionCheck" className="cursor-pointer">
+                              {itemDescriptionText}
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => setIsItemDescModalOpen(true)}
+                              className="text-[11px] font-semibold text-[#33077C] hover:underline cursor-pointer"
+                            >
+                              Change Text
+                            </button>
+                            <span
+                              title="Include multi-line product notes or specifications column"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Item wise Tax */}
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={itemItemWiseTax}
+                            onChange={(e) => setItemItemWiseTax(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Item wise Tax
+                            <span
+                              title="Specify individual GST rate per product line item"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        {/* Item wise Discount */}
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={itemItemWiseDiscount}
+                            onChange={(e) => setItemItemWiseDiscount(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Item wise Discount
+                            <span
+                              title="Allow item percentage or flat amount discounts"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        {/* Update Sale Price from Transaction */}
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={itemUpdateSalePriceFromTransaction}
+                            onChange={(e) => setItemUpdateSalePriceFromTransaction(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Update Sale Price from Transaction
+                            <span
+                              title="Auto-update master item selling price when modified in bill"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+
+                        {/* Quantity (upto Decimal Places) */}
+                        <div className="pt-2 flex items-center justify-between gap-2 border-t border-slate-100">
+                          <div>
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5">
+                              Quantity
+                              <span
+                                title="Number of fractional decimal places allowed for product units"
+                                className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                              >
+                                <Info className="w-3.5 h-3.5 text-slate-400" />
+                              </span>
+                            </span>
+                            <span className="text-[10px] text-slate-400 block">
+                              (upto Decimal Places)
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min={0}
+                              max={4}
+                              value={itemQuantityDecimals}
+                              onChange={(e) => setItemQuantityDecimals(Math.max(0, Math.min(4, Number(e.target.value) || 0)))}
+                              className="w-14 text-center text-xs font-semibold py-1 px-1.5 border border-slate-200 rounded-lg text-slate-800 focus:ring-1 focus:ring-[#33077C]"
+                            />
+                            <span className="text-[11px] text-slate-400">
+                              e.g. {itemQuantityDecimals === 0 ? '0' : `0.${'0'.repeat(itemQuantityDecimals)}`}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Wholesale Price */}
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group pt-1">
+                          <input
+                            type="checkbox"
+                            checked={itemWholesalePrice}
+                            onChange={(e) => setItemWholesalePrice(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Wholesale Price
+                            <span
+                              title="Enable wholesale pricing tier with minimum wholesale quantity thresholds"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Column 2: Additional Item Fields */}
+                    <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
+                      <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2">
+                        Additional Item Fields
+                      </h4>
+
+                      {/* SECTION 1: MRP/Price */}
+                      <div className="space-y-3 pt-0.5">
+                        <h5 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                          MRP/Price
+                        </h5>
+
+                        <div className="flex items-center justify-between gap-3 py-0.5">
+                          <label className="flex items-center gap-3 cursor-pointer select-none text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={itemMrpEnabled}
+                              onChange={(e) => setItemMrpEnabled(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5">
+                              MRP
+                              <span
+                                title="Maximum Retail Price field"
+                                className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                              >
+                                <Info className="w-3.5 h-3.5 text-slate-400" />
+                              </span>
+                            </span>
+                          </label>
+
+                          <input
+                            type="text"
+                            value={itemMrpLabel}
+                            onChange={(e) => setItemMrpLabel(e.target.value)}
+                            disabled={!itemMrpEnabled}
+                            placeholder="MRP"
+                            className="w-24 text-xs font-medium px-2.5 py-1 border border-slate-200 rounded-lg text-slate-800 disabled:bg-slate-50 disabled:text-slate-400 focus:ring-1 focus:ring-[#33077C]"
+                          />
+                        </div>
+
+                        <label className="flex items-center gap-3 cursor-pointer py-0.5 select-none group">
+                          <input
+                            type="checkbox"
+                            checked={itemCalculateTaxBasedOnMrp}
+                            onChange={(e) => setItemCalculateTaxBasedOnMrp(e.target.checked)}
+                            disabled={!itemMrpEnabled}
+                            className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] disabled:opacity-50"
+                          />
+                          <span className="text-xs sm:text-[13px] font-medium text-slate-700 flex items-center gap-1.5 flex-1">
+                            Calculate Tax based on MRP
+                            <span
+                              title="Compute GST on MRP valuation instead of discounted unit selling price"
+                              className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                            >
+                              <Info className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          </span>
+                        </label>
+                      </div>
+
+                      {/* SECTION 2: Serial No. Tracking */}
+                      <div className="space-y-3 pt-3 border-t border-slate-100">
+                        <div className="flex items-center gap-1.5">
+                          <h5 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                            Serial No. Tracking
+                          </h5>
+                          <span
+                            title="Trace unique serialized inventory items like electronics, IMEI, or chassis"
+                            className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                          >
+                            <Info className="w-3.5 h-3.5 text-slate-400" />
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-3 py-0.5">
+                          <label className="flex items-center gap-3 cursor-pointer select-none text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={itemSerialNoTracking}
+                              onChange={(e) => setItemSerialNoTracking(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700">
+                              Serial No./ IMEI No. etc
+                            </span>
+                          </label>
+
+                          <input
+                            type="text"
+                            value={itemSerialNoLabel}
+                            onChange={(e) => setItemSerialNoLabel(e.target.value)}
+                            disabled={!itemSerialNoTracking}
+                            placeholder="Serial No."
+                            className="w-24 text-xs font-medium px-2.5 py-1 border border-slate-200 rounded-lg text-slate-800 disabled:bg-slate-50 disabled:text-slate-400 focus:ring-1 focus:ring-[#33077C]"
+                          />
+                        </div>
+                      </div>
+
+                      {/* SECTION 3: Batch Tracking */}
+                      <div className="space-y-3 pt-3 border-t border-slate-100">
+                        <div className="flex items-center gap-1.5">
+                          <h5 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                            Batch Tracking
+                          </h5>
+                          <span
+                            title="Manage pharmaceutical or perishable lots with lot numbers, expiry & manufacturing dates"
+                            className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                          >
+                            <Info className="w-3.5 h-3.5 text-slate-400" />
+                          </span>
+                        </div>
+
+                        {/* Batch No. */}
+                        <div className="flex items-center justify-between gap-3 py-0.5">
+                          <label className="flex items-center gap-3 cursor-pointer select-none text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={itemBatchNoEnabled}
+                              onChange={(e) => setItemBatchNoEnabled(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700">
+                              Batch No.
+                            </span>
+                          </label>
+
+                          <input
+                            type="text"
+                            value={itemBatchNoLabel}
+                            onChange={(e) => setItemBatchNoLabel(e.target.value)}
+                            disabled={!itemBatchNoEnabled}
+                            placeholder="Batch No."
+                            className="w-24 text-xs font-medium px-2.5 py-1 border border-slate-200 rounded-lg text-slate-800 disabled:bg-slate-50 disabled:text-slate-400 focus:ring-1 focus:ring-[#33077C]"
+                          />
+                        </div>
+
+                        {/* Exp Date */}
+                        <div className="flex items-center justify-between gap-2 py-0.5">
+                          <label className="flex items-center gap-3 cursor-pointer select-none text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={itemExpDateEnabled}
+                              onChange={(e) => setItemExpDateEnabled(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700">
+                              Exp Date
+                            </span>
+                          </label>
+
+                          <div className="flex items-center gap-2">
+                            <select
+                              value={itemExpDateFormat}
+                              onChange={(e) => setItemExpDateFormat(e.target.value as any)}
+                              disabled={!itemExpDateEnabled}
+                              className="text-xs font-medium px-2 py-1 border border-slate-200 rounded-lg bg-white text-slate-700 disabled:bg-slate-50 disabled:text-slate-400 cursor-pointer"
+                            >
+                              <option value="mm/yy">mm/yy</option>
+                              <option value="dd/mm/yy">dd/mm/yy</option>
+                              <option value="dd/mm/yyyy">dd/mm/yyyy</option>
+                            </select>
+
+                            <input
+                              type="text"
+                              value={itemExpDateLabel}
+                              onChange={(e) => setItemExpDateLabel(e.target.value)}
+                              disabled={!itemExpDateEnabled}
+                              placeholder="Exp. Date"
+                              className="w-20 text-xs font-medium px-2.5 py-1 border border-slate-200 rounded-lg text-slate-800 disabled:bg-slate-50 disabled:text-slate-400 focus:ring-1 focus:ring-[#33077C]"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Mfg Date */}
+                        <div className="flex items-center justify-between gap-2 py-0.5">
+                          <label className="flex items-center gap-3 cursor-pointer select-none text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={itemMfgDateEnabled}
+                              onChange={(e) => setItemMfgDateEnabled(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700">
+                              Mfg Date
+                            </span>
+                          </label>
+
+                          <div className="flex items-center gap-2">
+                            <select
+                              value={itemMfgDateFormat}
+                              onChange={(e) => setItemMfgDateFormat(e.target.value as any)}
+                              disabled={!itemMfgDateEnabled}
+                              className="text-xs font-medium px-2 py-1 border border-slate-200 rounded-lg bg-white text-slate-700 disabled:bg-slate-50 disabled:text-slate-400 cursor-pointer"
+                            >
+                              <option value="dd/mm/yy">dd/mm/yy</option>
+                              <option value="mm/yy">mm/yy</option>
+                              <option value="dd/mm/yyyy">dd/mm/yyyy</option>
+                            </select>
+
+                            <input
+                              type="text"
+                              value={itemMfgDateLabel}
+                              onChange={(e) => setItemMfgDateLabel(e.target.value)}
+                              disabled={!itemMfgDateEnabled}
+                              placeholder="Mfg. Date"
+                              className="w-20 text-xs font-medium px-2.5 py-1 border border-slate-200 rounded-lg text-slate-800 disabled:bg-slate-50 disabled:text-slate-400 focus:ring-1 focus:ring-[#33077C]"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Model No. */}
+                        <div className="flex items-center justify-between gap-3 py-0.5">
+                          <label className="flex items-center gap-3 cursor-pointer select-none text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={itemModelNoEnabled}
+                              onChange={(e) => setItemModelNoEnabled(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700">
+                              Model No.
+                            </span>
+                          </label>
+
+                          <input
+                            type="text"
+                            value={itemModelNoLabel}
+                            onChange={(e) => setItemModelNoLabel(e.target.value)}
+                            disabled={!itemModelNoEnabled}
+                            placeholder="Model No."
+                            className="w-24 text-xs font-medium px-2.5 py-1 border border-slate-200 rounded-lg text-slate-800 disabled:bg-slate-50 disabled:text-slate-400 focus:ring-1 focus:ring-[#33077C]"
+                          />
+                        </div>
+
+                        {/* Size */}
+                        <div className="flex items-center justify-between gap-3 py-0.5">
+                          <label className="flex items-center gap-3 cursor-pointer select-none text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={itemSizeEnabled}
+                              onChange={(e) => setItemSizeEnabled(e.target.checked)}
+                              className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C]"
+                            />
+                            <span className="text-xs sm:text-[13px] font-medium text-slate-700">
+                              Size
+                            </span>
+                          </label>
+
+                          <input
+                            type="text"
+                            value={itemSizeLabel}
+                            onChange={(e) => setItemSizeLabel(e.target.value)}
+                            disabled={!itemSizeEnabled}
+                            placeholder="Size"
+                            className="w-24 text-xs font-medium px-2.5 py-1 border border-slate-200 rounded-lg text-slate-800 disabled:bg-slate-50 disabled:text-slate-400 focus:ring-1 focus:ring-[#33077C]"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Column 3: Item Custom Fields */}
+                    <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
+                      <h4 className="text-xs sm:text-[13px] font-bold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2 flex items-center justify-between">
+                        <span>Item Custom Fields</span>
+                        <span
+                          title="Create user-defined attributes like Color, Brand, Fabric, etc."
+                          className="inline-flex text-slate-400 hover:text-slate-600 transition-colors cursor-help"
+                        >
+                          <Info className="w-3.5 h-3.5 text-slate-400" />
+                        </span>
+                      </h4>
+
+                      <div className="pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setIsItemCustomFieldsModalOpen(true)}
+                          className="text-xs sm:text-[13px] font-semibold text-[#33077C] hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          Add Custom Fields &gt;
+                        </button>
+                      </div>
+
+                      {/* Summary list of active custom fields */}
+                      <div className="space-y-2.5 pt-2 border-t border-slate-100">
+                        <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                          Configured Fields ({itemCustomFieldsList.length})
+                        </span>
+                        {itemCustomFieldsList.map((field, idx) => (
+                          <div
+                            key={idx}
+                            className="flex items-center justify-between px-3 py-2 bg-slate-50/80 rounded-xl text-xs font-medium text-slate-700 border border-slate-100"
+                          >
+                            <span>{field}</span>
+                            <span className="text-[10px] text-slate-400 font-normal">Active</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Modal: Change Item Description Text */}
+                  {isItemDescModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+                      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xl max-w-xs w-full p-5 space-y-4 animate-in fade-in zoom-in-95">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                          <h3 className="text-sm font-bold text-slate-900">
+                            Custom Column Text
+                          </h3>
+                          <button
+                            type="button"
+                            onClick={() => setIsItemDescModalOpen(false)}
+                            className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <div>
+                          <label className="text-xs font-semibold text-slate-700 block mb-1">
+                            Label for Description Column
+                          </label>
+                          <input
+                            type="text"
+                            value={itemDescriptionText}
+                            onChange={(e) => setItemDescriptionText(e.target.value)}
+                            placeholder="e.g. Description, Specs, Notes"
+                            className="w-full text-xs font-medium px-3 py-2 border border-slate-200 rounded-xl focus:ring-1 focus:ring-[#33077C]"
+                          />
+                        </div>
+                        <div className="flex justify-end gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => setIsItemDescModalOpen(false)}
+                            className="px-4 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsItemDescModalOpen(false);
+                              showToast('Description text updated', 'success');
+                            }}
+                            className="px-4 py-1.5 text-xs font-bold text-white bg-[#33077C] hover:bg-[#432eb5] rounded-xl shadow-sm cursor-pointer"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Modal: Item Custom Fields */}
+                  {isItemCustomFieldsModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+                      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xl max-w-md w-full p-6 space-y-4 animate-in fade-in zoom-in-95">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                          <h3 className="text-base font-bold text-slate-900">
+                            Item Custom Fields
+                          </h3>
+                          <button
+                            type="button"
+                            onClick={() => setIsItemCustomFieldsModalOpen(false)}
+                            className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                          >
+                            <X className="w-5 h-5" />
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-500">
+                          Create custom product fields to capture item specifications on items, quotations, and bills.
+                        </p>
+                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                          {itemCustomFieldsList.map((field, idx) => (
+                            <div
+                              key={idx}
+                              className="flex items-center justify-between px-3 py-2 bg-slate-50 rounded-lg text-xs font-medium text-slate-700 border border-slate-100"
+                            >
+                              <span>{field}</span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setItemCustomFieldsList(itemCustomFieldsList.filter((_, i) => i !== idx))
+                                }
+                                className="text-rose-500 hover:text-rose-700 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-2 pt-2">
+                          <input
+                            type="text"
+                            value={newCustomFieldName}
+                            onChange={(e) => setNewCustomFieldName(e.target.value)}
+                            placeholder="e.g. Fabric, Grade, Warranty..."
+                            className="flex-1 text-xs font-medium px-3 py-2 border border-slate-200 rounded-xl focus:ring-1 focus:ring-[#33077C]"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (newCustomFieldName.trim()) {
+                                setItemCustomFieldsList([...itemCustomFieldsList, newCustomFieldName.trim()]);
+                                setNewCustomFieldName('');
+                              }
+                            }}
+                            className="px-3 py-2 bg-[#33077C] hover:bg-[#432eb5] text-white text-xs font-bold rounded-xl cursor-pointer"
+                          >
+                            Add
+                          </button>
+                        </div>
+                        <div className="flex justify-end pt-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsItemCustomFieldsModalOpen(false);
+                              showToast('Item custom fields updated', 'success');
+                            }}
+                            className="px-5 py-2 text-xs font-bold text-white bg-[#33077C] hover:bg-[#432eb5] rounded-xl shadow-sm cursor-pointer"
+                          >
+                            Done
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -3238,7 +4860,7 @@ export const SettingsView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
-          
+
 
           <button
             onClick={handleSaveSettings}
@@ -3254,7 +4876,7 @@ export const SettingsView: React.FC = () => {
       <div className="bg-slate-100/80 border border-slate-200/70 rounded-2xl p-1.5 flex items-center gap-1 overflow-x-auto">
         {[
           { id: 'account', label: 'My Account', icon: User },
-          
+
           { id: 'company', label: 'Company Profile', icon: Building2 },
           { id: 'reminders', label: 'Automated Reminders & SLA', icon: Bell },
           { id: 'backup', label: 'Data Management & Export', icon: Database },

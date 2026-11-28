@@ -48,6 +48,8 @@ const fetchAll = async <T>(url: string, params: Record<string, string> = {}): Pr
   return out;
 };
 
+const SESSION_COUNTRIES_KEY = 'crm_master_countries_v1';
+
 // Master data rarely changes: keep each list for the session so the form never refetches it.
 const memo = new Map<string, Promise<any>>();
 const once = <T>(key: string, load: () => Promise<T>): Promise<T> => {
@@ -62,6 +64,27 @@ const once = <T>(key: string, load: () => Promise<T>): Promise<T> => {
   return p;
 };
 
+const loadCountriesWithSessionCache = async (): Promise<MasterCountry[]> => {
+  try {
+    const cached = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(SESSION_COUNTRIES_KEY) : null;
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {
+    // Ignore storage read errors
+  }
+  const rows = await fetchAll<MasterCountry>('/master/countries');
+  try {
+    if (typeof sessionStorage !== 'undefined' && rows.length > 0) {
+      sessionStorage.setItem(SESSION_COUNTRIES_KEY, JSON.stringify(rows));
+    }
+  } catch {
+    // Ignore storage quota/security errors
+  }
+  return rows;
+};
+
 export const masterApi = {
   getCities: (districtId: string, stateId?: string, countryId?: string) =>
     once(`cities:${districtId}`, () =>
@@ -71,7 +94,7 @@ export const masterApi = {
         ...(countryId ? { countryId } : {}),
       })
     ),
-  getCountries: () => once('countries', () => fetchAll<MasterCountry>('/master/countries')),
+  getCountries: () => once('countries', loadCountriesWithSessionCache),
   getStates: (countryId: string) =>
     once(`states:${countryId}`, () => fetchAll<MasterState>('/master/states', { countryId })),
   getDistricts: (stateId: string, countryId?: string) =>

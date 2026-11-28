@@ -195,7 +195,7 @@ export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
               onChange={(val) => setValue("category", val, { shouldValidate: isSubmitted })}
               placeholder="Select Category"
               searchPlaceholder="Search Category..."
-              addNewButtonLabel="+ Add New Category"
+              addNewButtonLabel="Add New Category"
               onAddNew={() => setIsAddCategoryOpen(true)}
               error={errors.category?.message}
               disabled={isSubmitting}

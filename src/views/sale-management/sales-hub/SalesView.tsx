@@ -922,22 +922,6 @@ export const SalesView: React.FC = () => {
   const [assignStatus, setAssignStatus] = useState("Pending Follow-up");
   const [assignNextFollowUp, setAssignNextFollowUp] = useState("");
 
-  // Invoice Details Modal Assignment Card State
-  const [detailRepId, setDetailRepId] = useState("");
-  const [detailCollectionStatus, setDetailCollectionStatus] =
-    useState("Pending Follow-up");
-  const [detailNextFollowUp, setDetailNextFollowUp] = useState("");
-
-  useEffect(() => {
-    if (selectedSale) {
-      setDetailRepId(selectedSale.salesRepresentativeId || "");
-      setDetailCollectionStatus(
-        selectedSale.collectionStatus || "Pending Follow-up",
-      );
-      setDetailNextFollowUp(selectedSale.nextFollowUpDate || "");
-    }
-  }, [selectedSale]);
-
   // Payment Recording Modal State
   const [paymentModalSplits, setPaymentModalSplits] = useState<
     PaymentSplitItem[]
@@ -1032,9 +1016,7 @@ export const SalesView: React.FC = () => {
   const paymentFormErrors = paymentFe.errors;
   const setPaymentFormErrors = paymentFe.setErrors;
   const assignFe = useFieldErrors();
-  const detailFe = useFieldErrors();
   const assignRepError = assignFe.errors.assignRepId;
-  const detailRepError = detailFe.errors.detailRepId;
 
   // Close action & share dropdown on click outside or scroll
   useEffect(() => {
@@ -3560,7 +3542,7 @@ export const SalesView: React.FC = () => {
     };
   };
 
-  // Submit-first validation for the two assign-rep forms.
+  // Submit-first validation for the assign-rep form.
   const validateAssignRep = (repId: string, key: string): FieldErrors =>
     repId
       ? {}
@@ -3570,19 +3552,10 @@ export const SalesView: React.FC = () => {
     () => validateAssignRep(assignRepId, "assignRepId"),
     [assignRepId],
   );
-  useRevalidateAfterSubmit(
-    detailFe,
-    () => validateAssignRep(detailRepId, "detailRepId"),
-    [detailRepId],
-  );
   useEffect(() => {
     assignFe.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAssignInvoiceModalOpen]);
-  useEffect(() => {
-    detailFe.reset();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isInvoiceModalOpen, selectedSale?.id]);
 
   // Open Quick Assign Modal from Table Row Action
   const handleOpenAssignInvoiceModal = (sale: SaleTransaction) => {
@@ -3654,31 +3627,6 @@ export const SalesView: React.FC = () => {
     );
     setIsAssignInvoiceModalOpen(false);
     setAssignInvoiceTarget(null);
-  };
-
-  // Save Assignment from Invoice Details Modal Card
-  const handleSaveDetailAssignment = async () => {
-    if (!selectedSale) return;
-    if (!detailFe.validateAll(validateAssignRep(detailRepId, "detailRepId")))
-      return;
-    const cust = customers.find((c) => c.id === selectedSale.customerId);
-    if (!(await assignRepViaApi(selectedSale.customerId, detailRepId))) return;
-    const rep = salesRepresentatives.find((r) => r.id === detailRepId);
-
-    setSelectedSale({
-      ...selectedSale,
-      salesRepresentativeId: detailRepId,
-      salesRepresentativeName: rep?.name || "Unassigned",
-      collectionStatus: detailCollectionStatus,
-      nextFollowUpDate: detailNextFollowUp,
-    });
-
-    toast.success(
-      `Sales Rep assigned to customer ${cust?.name || selectedSale.customerName}!`,
-      {
-        description: `Assigned ${rep?.name || "Representative"} across all customer invoices.`,
-      },
-    );
   };
 
   // Export Sales to Excel Report
@@ -4145,15 +4093,6 @@ export const SalesView: React.FC = () => {
         sale={selectedSale}
         isOpen={isInvoiceModalOpen}
         isDownloadingPdf={isDownloadingPdf}
-        salesRepresentatives={salesRepresentatives}
-        detailRepId={detailRepId}
-        detailRepError={detailRepError}
-        detailCollectionStatus={detailCollectionStatus}
-        detailNextFollowUp={detailNextFollowUp}
-        onDetailRepIdChange={setDetailRepId}
-        onDetailCollectionStatusChange={setDetailCollectionStatus}
-        onDetailNextFollowUpChange={setDetailNextFollowUp}
-        onSaveAssignment={handleSaveDetailAssignment}
         onClose={() => setIsInvoiceModalOpen(false)}
         onNavigate={navigate}
         onPrint={handlePrintSaleInvoice}

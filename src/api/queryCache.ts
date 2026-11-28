@@ -99,6 +99,10 @@ const POLICIES: PolicyRule[] = [
   // (The organization inbox and the recipient count are live: see BYPASS_PREFIXES.)
   { prefix: '/platform/announcements', ttl: 60, tags: ['Announcement'] },
   { prefix: '/platform/announcement-templates', ttl: 300, tags: ['AnnouncementTemplate'] },
+  { prefix: '/master/countries', ttl: 3600, tags: [] },
+  { prefix: '/master/states', ttl: 3600, tags: [] },
+  { prefix: '/master/districts', ttl: 3600, tags: [] },
+  { prefix: '/master/cities', ttl: 3600, tags: [] },
 ];
 
 /** Never cached: must always be live (stock availability, money owed, files, notifications, auth). */

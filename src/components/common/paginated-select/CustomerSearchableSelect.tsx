@@ -1,7 +1,10 @@
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo, useCallback, useState, useEffect } from 'react';
 import { SearchableSelect, SearchableOption } from '../SearchableSelect';
+import { PartyBalanceBadge, extractCustomerOutstanding } from '../PartyBalanceBadge';
 import { usePaginatedDropdown } from '../../../hooks/usePaginatedDropdown';
 import { customerApi, ApiCustomer } from '../../../api/commerce/customerApi';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface CustomerSearchableSelectProps {
   value: string;
@@ -12,7 +15,12 @@ export interface CustomerSearchableSelectProps {
     company?: string;
     customerCode?: string;
     phone?: string;
+    outstandingBalance?: number;
   } | null;
+  label?: string;
+  required?: boolean;
+  labelClassName?: string;
+  showPartyBalance?: boolean;
   onAddNewCustomer?: () => void;
   allowNone?: boolean;
   noneLabel?: string;
@@ -28,6 +36,10 @@ export const CustomerSearchableSelect: React.FC<CustomerSearchableSelectProps> =
   value,
   onChange,
   selectedCustomer,
+  label,
+  required = false,
+  labelClassName = 'text-xs sm:text-[13px] font-medium text-slate-500',
+  showPartyBalance = true,
   onAddNewCustomer,
   allowNone = false,
   noneLabel = 'Select',
@@ -38,6 +50,7 @@ export const CustomerSearchableSelect: React.FC<CustomerSearchableSelectProps> =
   size = 'md',
   allowClear = true,
 }) => {
+  const [fetchedBalance, setFetchedBalance] = useState<{ id: string; balance: number } | null>(null);
   const fetchPage = useCallback(
     async ({ page, limit, search }: { page: number; limit: number; search: string }) => {
       try {
@@ -121,7 +134,41 @@ export const CustomerSearchableSelect: React.FC<CustomerSearchableSelectProps> =
     return [{ value: '', label: noneLabel }];
   }, [allowNone, noneLabel]);
 
-  return (
+  const loadedMatch = useMemo(
+    () => (value ? items.find((c) => c.id === value) : undefined),
+    [items, value],
+  );
+  const directBalance = useMemo(() => {
+    if (!value) return null;
+    const fromLoaded = extractCustomerOutstanding(loadedMatch);
+    if (fromLoaded !== null) return fromLoaded;
+    const fromProp =
+      selectedCustomer && selectedCustomer.id === value
+        ? extractCustomerOutstanding(selectedCustomer)
+        : null;
+    if (fromProp !== null) return fromProp;
+    if (fetchedBalance && fetchedBalance.id === value) return fetchedBalance.balance;
+    return null;
+  }, [value, loadedMatch, selectedCustomer, fetchedBalance]);
+
+  // If a customer id is pre-selected before the dropdown list loads (e.g. edit/convert), fetch its balance once.
+  useEffect(() => {
+    if (!showPartyBalance || !value || !UUID_RE.test(value) || directBalance !== null) return;
+    let alive = true;
+    customerApi
+      .getCustomerById(value)
+      .then((res) => {
+        if (!alive || !res?.data) return;
+        const bal = extractCustomerOutstanding(res.data);
+        if (bal !== null) setFetchedBalance({ id: value, balance: bal });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [showPartyBalance, value, directBalance]);
+
+  const selectEl = (
     <SearchableSelect
       value={value}
       onChange={(val, opt) => onChange(val, opt?.data)}
@@ -144,6 +191,28 @@ export const CustomerSearchableSelect: React.FC<CustomerSearchableSelectProps> =
       size={size}
       allowClear={allowClear}
     />
+  );
+
+  if (!label && (!showPartyBalance || directBalance === null)) {
+    return selectEl;
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-2 mb-1.5 min-h-[18px]">
+        {label ? (
+          <label className={labelClassName}>
+            {label} {required && <span className="text-rose-500 font-bold">*</span>}
+          </label>
+        ) : (
+          <span />
+        )}
+        {showPartyBalance && (
+          <PartyBalanceBadge label="Customer Balance" balance={directBalance} />
+        )}
+      </div>
+      {selectEl}
+    </div>
   );
 };
 
